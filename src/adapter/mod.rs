@@ -5,3 +5,4 @@
 //! allowlist has exactly one place to live.
 
 pub mod http_adapter;
+pub mod rate_limit_adapter;
