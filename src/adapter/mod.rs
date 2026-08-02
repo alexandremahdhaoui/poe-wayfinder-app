@@ -6,3 +6,4 @@
 
 pub mod http_adapter;
 pub mod rate_limit_adapter;
+pub mod trade_api_adapter;
