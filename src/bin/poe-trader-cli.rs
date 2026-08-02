@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use poe_trader_app::adapter::http_adapter::NetworkPolicy;
 use poe_trader_app::config::PoeTraderCliConfig;
 use poe_trader_app::logging::{Logger, Value};
-use poe_trader_core::controller::parse::text_to_sections;
+use poe_trader_core::controller::parse::parse_clipboard;
 use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
@@ -69,17 +69,59 @@ fn main() -> ExitCode {
         }
     };
 
-    let sections = text_to_sections(&text);
+    let item = match parse_clipboard(&text, game) {
+        Ok(item) => item,
+        Err(err) => {
+            log.error(
+                "parsing item text",
+                &[
+                    ("path", Value::Str(cfg.item_file.clone())),
+                    ("error", Value::Str(err.to_string())),
+                ],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
 
     log.info(
-        "parsed item text",
+        "parsed item",
         &[
             ("game", Value::Str(game.as_str().to_string())),
-            ("sections", Value::Int(sections.len() as i64)),
+            (
+                "rarity",
+                Value::Str(
+                    item.rarity
+                        .map(|r| r.as_str().to_string())
+                        .unwrap_or_default(),
+                ),
+            ),
+            (
+                "category",
+                Value::Str(
+                    item.category
+                        .map(|c| c.as_str().to_string())
+                        .unwrap_or_default(),
+                ),
+            ),
+            (
+                "item_level",
+                Value::Int(item.item_level.unwrap_or(0) as i64),
+            ),
+            ("quality", Value::Int(item.quality.unwrap_or(0) as i64)),
+            ("corrupted", Value::Bool(item.is_corrupted)),
+            ("unidentified", Value::Bool(item.is_unidentified)),
+            (
+                "unknown_modifiers",
+                Value::Int(item.unknown_modifiers.len() as i64),
+            ),
         ],
     );
 
-    log.warn("the parser pipeline is not implemented yet", &[]);
+    log.warn(
+        "stat matching and the trade query are not implemented yet",
+        &[],
+    );
 
     ExitCode::SUCCESS
 }
