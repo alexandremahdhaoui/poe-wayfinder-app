@@ -1,0 +1,17 @@
+[package]
+name = "poe-trader-app"
+version = "0.1.0"
+edition = "2021"
+description = "Overlay, adapters and drivers for poe-trader."
+
+[dependencies]
+poe-trader-core = { path = "../poe-trader-core" }
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+mockall.workspace = true

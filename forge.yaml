@@ -1,0 +1,85 @@
+name: poe-trader-app
+
+artifactStorePath: .forge/artifact-store.yaml
+
+# forge v0.42.0 ships no native Rust engines, so every stage wraps cargo
+# through generic-builder and generic-test-runner.
+build:
+  # Pull the config spec from the workspace, or from a pinned tag when this
+  # repo is built alone.
+  - name: resolve-spec
+    src: .
+    engine: go://generic-builder
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          sh hack/resolve-spec.sh
+          github.com/alexandremahdhaoui/poe-trader-spec
+          spec/poe-trader.v1.yaml .forge/spec-cache
+
+  # Emit config, logging, telemetry and resilience for all three binaries.
+  # golden-configgen is pinned by tag so it cannot move under us.
+  - name: generate-config
+    src: .
+    engine: go://generic-builder
+    spec:
+      command: go
+      args:
+        - run
+        - github.com/alexandremahdhaoui/golden-configgen/cmd/golden-configgen@v0.1.0
+        - --spec
+        - .forge/spec-cache/poe-trader.v1.yaml
+        - --root
+        - .
+
+  - name: format-code
+    src: .
+    engine: go://generic-builder
+    spec:
+      command: cargo
+      args: ["fmt", "-p", "poe-trader-app"]
+
+  - name: poe-trader-app
+    src: ./src
+    engine: go://generic-builder
+    spec:
+      command: cargo
+      args: ["build", "-p", "poe-trader-app", "--release"]
+
+  # The overlay only makes sense on Windows. cargo has no --out-dir on stable,
+  # so the binary is copied out of the shared workspace target dir.
+  - name: poe-trader-windows
+    src: ./src
+    engine: go://generic-builder
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          cargo build --release --target x86_64-pc-windows-gnu
+          -p poe-trader-app --bin poe-trader &&
+          cp ../target/x86_64-pc-windows-gnu/release/poe-trader.exe
+          /mnt/c/Users/alexa/Desktop/testbin/poe-trader.exe
+
+test:
+  # Generated modules are excluded from lint standards, so clippy is scoped to
+  # this package and the generated files carry their own allow attributes.
+  - name: lint
+    runner: go://generic-test-runner
+    spec:
+      command: cargo
+      args: ["clippy", "-p", "poe-trader-app", "--all-targets", "--", "-D", "warnings"]
+
+  - name: format-check
+    runner: go://generic-test-runner
+    spec:
+      command: cargo
+      args: ["fmt", "-p", "poe-trader-app", "--", "--check"]
+
+  - name: unit
+    runner: go://generic-test-runner
+    spec:
+      command: cargo
+      args: ["test", "-p", "poe-trader-app"]
