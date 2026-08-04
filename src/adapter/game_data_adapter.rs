@@ -214,6 +214,9 @@ impl GameTables {
                 craftable: w.craftable.is_some(),
                 map_tier: w.map.and_then(|m| m.tier),
                 category,
+                // Roll ranges come from the game bundles and not from the
+                // trade API, so they stay absent until those are vendored.
+                armour_bounds: poe_trader_core::types::item::ArmourBounds::default(),
             };
 
             out.by_name
