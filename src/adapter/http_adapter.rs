@@ -237,6 +237,14 @@ pub enum HttpAdapterError {
     },
 }
 
+/// The User-Agent sent when config supplies none.
+///
+/// GGG answers 403 to a request with no User-Agent, and their API policy asks
+/// for a descriptive one carrying contact details. The default names the tool
+/// and its version. A user who wants to add contact details sets the config
+/// key, and doing so is good manners rather than a requirement.
+pub const DEFAULT_USER_AGENT: &str = concat!("poe-trader/", env!("CARGO_PKG_VERSION"));
+
 /// The real client.
 pub struct HttpAdapter {
     policy: NetworkPolicy,
@@ -249,9 +257,28 @@ impl HttpAdapter {
     /// The cookie store is on because the trade API needs POESESSID. The
     /// timeout is here and not per call so no caller can forget it.
     pub fn new(policy: NetworkPolicy, timeout: Duration) -> Result<Self, reqwest::Error> {
+        Self::with_user_agent(policy, timeout, DEFAULT_USER_AGENT)
+    }
+
+    /// Build the client with a specific User-Agent.
+    ///
+    /// GGG answers 403 to a request that carries none, and reqwest sends none
+    /// by default. This is not optional.
+    pub fn with_user_agent(
+        policy: NetworkPolicy,
+        timeout: Duration,
+        user_agent: &str,
+    ) -> Result<Self, reqwest::Error> {
+        let agent = if user_agent.trim().is_empty() {
+            DEFAULT_USER_AGENT
+        } else {
+            user_agent
+        };
+
         let client = reqwest::Client::builder()
             .cookie_store(true)
             .timeout(timeout)
+            .user_agent(agent)
             .build()?;
 
         Ok(Self { policy, client })
@@ -538,6 +565,26 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("not allowed"));
+    }
+
+    #[test]
+    fn the_default_user_agent_names_the_tool_and_its_version() {
+        // GGG answers 403 to a request with no User-Agent, and reqwest sends
+        // none by default. An empty one is the same as none.
+        assert!(DEFAULT_USER_AGENT.starts_with("poe-trader/"));
+        assert!(DEFAULT_USER_AGENT.len() > "poe-trader/".len());
+    }
+
+    #[test]
+    fn a_blank_configured_user_agent_falls_back_to_the_default() {
+        // An empty header is the same as no header, which is a 403.
+        let adapter =
+            HttpAdapter::with_user_agent(default_policy(), Duration::from_secs(5), "   ").unwrap();
+
+        assert_eq!(
+            adapter.policy().allowed_hosts(),
+            vec!["www.pathofexile.com"]
+        );
     }
 
     #[test]

@@ -142,6 +142,8 @@ pub struct PoeTraderConfig {
     pub allowed_hosts: String,
     /// Base URL for the official trade API. Every trade path is built from this. English realm only.
     pub trade_base_url: String,
+    /// The User-Agent header sent on every request. GGG answers 403 to a request that carries none. Their API policy asks for a descriptive one with contact details. Empty uses a default naming the tool and its version.
+    pub user_agent: String,
     /// Padding added to every rate limit window. GGG bans for violations, so the limiter assumes the server clock runs ahead of ours by this much. Raise it if you see 429 responses.
     pub api_latency_seconds: i64,
     /// The POESESSID cookie. Needed for search and fetch. Never log it and never write it to disk in plain text.
@@ -172,6 +174,7 @@ impl PoeTraderConfig {
         known.insert("block-unlisted-hosts", true);
         known.insert("allowed-hosts", false);
         known.insert("trade-base-url", false);
+        known.insert("user-agent", false);
         known.insert("api-latency-seconds", false);
         known.insert("poesessid", false);
         known.insert("game", false);
@@ -212,6 +215,13 @@ impl PoeTraderConfig {
         let raw_trade_base_url = match raw_trade_base_url {
             Some(v) => v,
             None => "https://www.pathofexile.com".to_string(),
+        };
+        let raw_user_agent: Option<String> = None
+            .or_else(|| flags.get("user-agent").cloned())
+            .or_else(|| env::var("POE_USER_AGENT").ok());
+        let raw_user_agent = match raw_user_agent {
+            Some(v) => v,
+            None => "".to_string(),
         };
         let raw_api_latency_seconds: Option<String> = None
             .or_else(|| flags.get("api-latency-seconds").cloned())
@@ -289,6 +299,7 @@ impl PoeTraderConfig {
             block_unlisted_hosts: parse_bool(&raw_block_unlisted_hosts)?,
             allowed_hosts: raw_allowed_hosts,
             trade_base_url: raw_trade_base_url,
+            user_agent: raw_user_agent,
             api_latency_seconds: raw_api_latency_seconds.trim().parse().map_err(|_| {
                 ConfigError::Parse(format!(
                     "parsing api_latency_seconds {:?} as int",
@@ -327,6 +338,11 @@ impl PoeTraderConfig {
             "{}:\"{}\"",
             "\"trade_base_url\"",
             json_escape(&self.trade_base_url)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"user_agent\"",
+            json_escape(&self.user_agent)
         ));
         pairs.push(format!(
             "{}:{}",
@@ -395,6 +411,8 @@ pub struct PoeTraderCliConfig {
     pub allowed_hosts: String,
     /// Base URL for the official trade API.
     pub trade_base_url: String,
+    /// The User-Agent header sent on every request. GGG answers 403 to a request that carries none. Their API policy asks for a descriptive one with contact details. Empty uses a default naming the tool and its version.
+    pub user_agent: String,
     /// Padding added to every rate limit window.
     pub api_latency_seconds: i64,
     /// The POESESSID cookie.
@@ -417,6 +435,7 @@ impl PoeTraderCliConfig {
         known.insert("block-unlisted-hosts", true);
         known.insert("allowed-hosts", false);
         known.insert("trade-base-url", false);
+        known.insert("user-agent", false);
         known.insert("api-latency-seconds", false);
         known.insert("poesessid", false);
         known.insert("game", false);
@@ -453,6 +472,13 @@ impl PoeTraderCliConfig {
         let raw_trade_base_url = match raw_trade_base_url {
             Some(v) => v,
             None => "https://www.pathofexile.com".to_string(),
+        };
+        let raw_user_agent: Option<String> = None
+            .or_else(|| flags.get("user-agent").cloned())
+            .or_else(|| env::var("POE_USER_AGENT").ok());
+        let raw_user_agent = match raw_user_agent {
+            Some(v) => v,
+            None => "".to_string(),
         };
         let raw_api_latency_seconds: Option<String> = None
             .or_else(|| flags.get("api-latency-seconds").cloned())
@@ -502,6 +528,7 @@ impl PoeTraderCliConfig {
             block_unlisted_hosts: parse_bool(&raw_block_unlisted_hosts)?,
             allowed_hosts: raw_allowed_hosts,
             trade_base_url: raw_trade_base_url,
+            user_agent: raw_user_agent,
             api_latency_seconds: raw_api_latency_seconds.trim().parse().map_err(|_| {
                 ConfigError::Parse(format!(
                     "parsing api_latency_seconds {:?} as int",
@@ -536,6 +563,11 @@ impl PoeTraderCliConfig {
             "{}:\"{}\"",
             "\"trade_base_url\"",
             json_escape(&self.trade_base_url)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"user_agent\"",
+            json_escape(&self.user_agent)
         ));
         pairs.push(format!(
             "{}:{}",
@@ -585,6 +617,8 @@ pub struct PoeTraderDatagenConfig {
     pub allowed_hosts: String,
     /// Base URL used to pull the trade stat and item tables.
     pub trade_base_url: String,
+    /// The User-Agent header sent on every request. GGG answers 403 to a request that carries none. Their API policy asks for a descriptive one with contact details. Empty uses a default naming the tool and its version.
+    pub user_agent: String,
     /// Padding added to every rate limit window.
     pub api_latency_seconds: i64,
     /// Directory holding the extracted game tables.
@@ -605,6 +639,7 @@ impl PoeTraderDatagenConfig {
         known.insert("block-unlisted-hosts", true);
         known.insert("allowed-hosts", false);
         known.insert("trade-base-url", false);
+        known.insert("user-agent", false);
         known.insert("api-latency-seconds", false);
         known.insert("tables-dir", false);
         known.insert("out-dir", false);
@@ -640,6 +675,13 @@ impl PoeTraderDatagenConfig {
         let raw_trade_base_url = match raw_trade_base_url {
             Some(v) => v,
             None => "https://www.pathofexile.com".to_string(),
+        };
+        let raw_user_agent: Option<String> = None
+            .or_else(|| flags.get("user-agent").cloned())
+            .or_else(|| env::var("POE_USER_AGENT").ok());
+        let raw_user_agent = match raw_user_agent {
+            Some(v) => v,
+            None => "".to_string(),
         };
         let raw_api_latency_seconds: Option<String> = None
             .or_else(|| flags.get("api-latency-seconds").cloned())
@@ -682,6 +724,7 @@ impl PoeTraderDatagenConfig {
             block_unlisted_hosts: parse_bool(&raw_block_unlisted_hosts)?,
             allowed_hosts: raw_allowed_hosts,
             trade_base_url: raw_trade_base_url,
+            user_agent: raw_user_agent,
             api_latency_seconds: raw_api_latency_seconds.trim().parse().map_err(|_| {
                 ConfigError::Parse(format!(
                     "parsing api_latency_seconds {:?} as int",
@@ -715,6 +758,11 @@ impl PoeTraderDatagenConfig {
             "{}:\"{}\"",
             "\"trade_base_url\"",
             json_escape(&self.trade_base_url)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"user_agent\"",
+            json_escape(&self.user_agent)
         ));
         pairs.push(format!(
             "{}:{}",
