@@ -4,6 +4,7 @@
 //! it orchestrates adapters.
 
 pub mod datagen_controller;
+pub mod overlay_controller;
 pub mod price_check_controller;
 
 pub use price_check_controller::{PriceCheckController, PriceCheckError, SearchResult};

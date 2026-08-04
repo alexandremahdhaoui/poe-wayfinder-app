@@ -17,6 +17,8 @@ tokio.workspace = true
 # where every test runs, never pulls them in.
 [target.'cfg(windows)'.dependencies]
 arboard = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
 windows = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",

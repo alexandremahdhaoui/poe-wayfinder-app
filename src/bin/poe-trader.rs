@@ -141,39 +141,115 @@ fn main() -> ExitCode {
     );
 
     #[cfg(windows)]
-    {
-        use poe_trader_app::adapter::game_window_adapter::{should_draw, GameWindowSource};
-
-        let window =
-            poe_trader_app::adapter::game_window_adapter::GameWindowAdapter::new(&cfg.window_title);
-
-        match window.find() {
-            Ok(found) => log.info(
-                "found the game window",
-                &[
-                    ("x", Value::Int(i64::from(found.rect.x))),
-                    ("y", Value::Int(i64::from(found.rect.y))),
-                    ("width", Value::Int(i64::from(found.rect.width))),
-                    ("height", Value::Int(i64::from(found.rect.height))),
-                    ("foreground", Value::Bool(found.is_foreground)),
-                    ("draw", Value::Bool(should_draw(&found))),
-                    ("scale", Value::Str(format!("{:.2}", window.scale()))),
-                ],
-            ),
-            Err(err) => log.warn(
-                "the game window is not open yet",
-                &[("error", Value::Str(err.to_string()))],
-            ),
-        }
-    }
+    return run_overlay(&cfg, game, data, hotkey, log);
 
     #[cfg(not(windows))]
-    log.warn(
-        "the overlay only runs on Windows. Use poe-trader-cli here.",
-        &[],
-    );
+    {
+        log.warn(
+            "the overlay only runs on Windows. Use poe-trader-cli here.",
+            &[],
+        );
 
-    log.warn("the overlay window is not implemented yet", &[]);
+        let _ = (http, hotkey, game, data);
+
+        ExitCode::SUCCESS
+    }
+}
+
+/// Run the overlay window.
+///
+/// The window is created hidden and only shown once a price check produces
+/// something. An overlay that appears at startup covers the game before the
+/// user has asked for anything.
+#[cfg(windows)]
+fn run_overlay(
+    cfg: &PoeTraderConfig,
+    game: GameVersion,
+    data: GameTables,
+    hotkey: poe_trader_app::types::Hotkey,
+    log: Logger,
+) -> ExitCode {
+    use poe_trader_app::adapter::game_window_adapter::{GameWindowAdapter, GameWindowSource};
+    use poe_trader_app::controller::overlay_controller::OverlayModel;
+    use poe_trader_app::driver::overlay_ui_driver::{overlay_viewport, paint, UiEvent};
+    use poe_trader_app::types::overlay::OverlayGeometry;
+
+    let window = GameWindowAdapter::new(&cfg.window_title);
+
+    match window.find() {
+        Ok(found) => log.info(
+            "found the game window",
+            &[
+                ("width", Value::Int(i64::from(found.rect.width))),
+                ("height", Value::Int(i64::from(found.rect.height))),
+                ("foreground", Value::Bool(found.is_foreground)),
+                ("scale", Value::Str(format!("{:.2}", window.scale()))),
+            ],
+        ),
+        Err(err) => log.warn(
+            "the game window is not open yet",
+            &[("error", Value::Str(err.to_string()))],
+        ),
+    }
+
+    let mut model = OverlayModel::new(OverlayGeometry::default());
+
+    // Shown immediately so the user can see the tool started. A real price
+    // check replaces this the first time the hotkey fires.
+    model.start(window.cursor());
+    model.fail(&format!(
+        "Press {hotkey} over an item. Game: {}. Stats loaded: {}.",
+        game.as_str(),
+        data.stat_count()
+    ));
+
+    let first = model.frame_scaled(window.find().ok(), window.scale());
+
+    let options = eframe::NativeOptions {
+        viewport: overlay_viewport(&first),
+        ..eframe::NativeOptions::default()
+    };
+
+    let result = eframe::run_simple_native("poe-trader", options, move |ctx, _frame| {
+        let found = window.find().ok();
+        let frame = model.frame_scaled(found, window.scale());
+
+        // The window follows the game every frame. The game can be moved,
+        // resized or alt tabbed at any moment.
+        if let Some(rect) = frame.rect {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                rect.x as f32,
+                rect.y as f32,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                rect.width as f32,
+                rect.height as f32,
+            )));
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(frame.rect.is_some()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(!frame.takes_input));
+
+        for event in paint(ctx, &model) {
+            match event {
+                UiEvent::Dismiss => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                UiEvent::OpenInBrowser | UiEvent::Research | UiEvent::ToggleFilter(_) => {}
+            }
+        }
+
+        // Repaint continuously. The game window can move at any time and there
+        // is no event that tells us.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    });
+
+    if let Err(err) = result {
+        log.error(
+            "running the overlay window",
+            &[("error", Value::Str(err.to_string()))],
+        );
+
+        return ExitCode::FAILURE;
+    }
 
     ExitCode::SUCCESS
 }
