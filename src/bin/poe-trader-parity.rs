@@ -133,6 +133,16 @@ const ALIASES: &[(&str, &str)] = &[
     ("applyAnointmentRules", "anointment"),
     ("decodeOils", "anointment"),
     ("applyRules", "valuable_rooms"),
+    // Slot counting and the per category rules.
+    ("explicitModifierCount", "explicit_modifier_count"),
+    ("itemBaseMaxModifiersOfType", "max_modifiers_of_type"),
+    ("itemMaxModifiersBySlot", "max_modifiers_of_type"),
+    ("showHasEmptyModifier", "empty_slot"),
+    ("likelyFinishedItem", "likely_finished"),
+    ("applyClusterJewelRules", "passive_bound"),
+    ("applyFlaskRules", "flask_enchant_is_useful"),
+    ("hideAllAugments", "is_hidden_by_default"),
+    ("hasCraftingValue", "empty_slot"),
 ];
 
 fn main() -> ExitCode {
