@@ -143,6 +143,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("applyFlaskRules", "flask_enchant_is_useful"),
     ("hideAllAugments", "is_hidden_by_default"),
     ("hasCraftingValue", "empty_slot"),
+    ("isItemMissingItemClass", "is_missing_item_class"),
 ];
 
 fn main() -> ExitCode {
