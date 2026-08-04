@@ -119,6 +119,14 @@ const ALIASES: &[(&str, &str)] = &[
     ("armourProps", "armour_filters"),
     ("weaponProps", "weapon_filters"),
     ("filterItemProp", "build_stat_group_for"),
+    // Presets say which handful of filters a kind of item needs.
+    ("createPresets", "preset_for"),
+    ("createGemFilters", "gem_level_filter"),
+    ("createTrialsFilters", "trials_filter"),
+    ("createUncutGemFilters", "apply_gem_filters"),
+    // The fetch endpoint.
+    ("requestResults", "read_listings"),
+    ("parseFetchResult", "read_listing"),
 ];
 
 fn main() -> ExitCode {

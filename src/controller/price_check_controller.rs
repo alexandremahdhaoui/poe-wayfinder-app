@@ -229,6 +229,121 @@ pub fn read_search_result(response: &HttpResponse) -> Result<SearchResult, Price
     })
 }
 
+/// One listing, as the fetch endpoint returned it.
+///
+/// Only the fields a price needs. The API returns far more and carrying all of
+/// it would tie the UI to the API's shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listing {
+    /// What the seller is asking.
+    pub amount: f64,
+    /// The currency they want, such as `divine`.
+    pub currency: String,
+    /// Who is selling.
+    pub account: String,
+    /// Whether they are online now.
+    pub online: bool,
+}
+
+/// Read a fetch response into listings.
+///
+/// Ported from the result handling in `requestResults`.
+///
+/// A null entry is skipped rather than failing the batch. The API returns one
+/// for a listing that vanished between the search and the fetch, which happens
+/// constantly on a busy league.
+pub fn read_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheckError> {
+    if let Some(error) = error_in_body(&response.body) {
+        return Err(PriceCheckError::Api(error));
+    }
+
+    if !(200..300).contains(&response.status) {
+        return Err(PriceCheckError::Status {
+            status: response.status,
+            body: response.body.clone(),
+        });
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(PriceCheckError::Decode)?;
+
+    let Some(results) = value.get("result").and_then(serde_json::Value::as_array) else {
+        // No result array at all is an empty page, not a failure.
+        return Ok(Vec::new());
+    };
+
+    Ok(results.iter().filter_map(read_listing).collect())
+}
+
+/// Read one listing, or nothing when it is unpriced or gone.
+fn read_listing(entry: &serde_json::Value) -> Option<Listing> {
+    let listing = entry.get("listing")?;
+    let price = listing.get("price")?;
+
+    // A listing with no price is not for sale at a number. Showing it as free
+    // would be worse than not showing it.
+    let amount = price.get("amount").and_then(serde_json::Value::as_f64)?;
+    let currency = price.get("currency").and_then(serde_json::Value::as_str)?;
+
+    let account = listing
+        .get("account")
+        .and_then(|a| a.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    // The API marks online by the presence of an object, not by a boolean.
+    let online = listing
+        .get("account")
+        .and_then(|a| a.get("online"))
+        .is_some_and(|o| !o.is_null());
+
+    Some(Listing {
+        amount,
+        currency: currency.to_string(),
+        account: account.to_string(),
+        online,
+    })
+}
+
+/// The price a set of listings suggests.
+///
+/// The median and not the mean. One listing at a thousand divine drags a mean
+/// far above what anyone will pay, and those listings are common because
+/// people post them to bait.
+pub fn suggested_price(listings: &[Listing]) -> Option<(f64, String)> {
+    if listings.is_empty() {
+        return None;
+    }
+
+    // Only the most common currency. Mixing divine and chaos into one median
+    // produces a number in no currency at all.
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+
+    for listing in listings {
+        *counts.entry(listing.currency.as_str()).or_default() += 1;
+    }
+
+    let currency = counts.into_iter().max_by_key(|(_, n)| *n).map(|(c, _)| c)?;
+
+    let mut amounts: Vec<f64> = listings
+        .iter()
+        .filter(|l| l.currency == currency)
+        .map(|l| l.amount)
+        .collect();
+
+    amounts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let median = if amounts.len() % 2 == 1 {
+        amounts[amounts.len() / 2]
+    } else {
+        let mid = amounts.len() / 2;
+
+        (amounts[mid - 1] + amounts[mid]) / 2.0
+    };
+
+    Some((median, currency.to_string()))
+}
+
 /// Which limiter set an endpoint belongs to.
 ///
 /// Only search is wired today. Fetch and exchange get their own sets when
@@ -623,6 +738,154 @@ mod tests {
         // One per five seconds. Three requests take two windows of waiting.
         assert_eq!(c.estimate_burst(1), Duration::from_secs(0));
         assert_eq!(c.estimate_burst(3), Duration::from_secs(10));
+    }
+
+    fn fetch_body(entries: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: format!("{{\"result\":[{entries}]}}"),
+        }
+    }
+
+    fn listing(amount: f64, currency: &str, online: bool) -> String {
+        let account = if online {
+            "{\"name\":\"Kaom\",\"online\":{\"status\":\"online\"}}"
+        } else {
+            "{\"name\":\"Kaom\"}"
+        };
+
+        format!(
+            "{{\"listing\":{{\"price\":{{\"amount\":{amount},\"currency\":\"{currency}\"}},\"account\":{account}}}}}"
+        )
+    }
+
+    #[test]
+    fn a_listing_is_read() {
+        let got = read_listings(&fetch_body(&listing(5.0, "divine", true))).unwrap();
+
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].amount, 5.0);
+        assert_eq!(got[0].currency, "divine");
+        assert_eq!(got[0].account, "Kaom");
+        assert!(got[0].online);
+    }
+
+    #[test]
+    fn an_offline_seller_is_marked_as_such() {
+        // The API marks online by the presence of an object, not a boolean.
+        let got = read_listings(&fetch_body(&listing(5.0, "divine", false))).unwrap();
+
+        assert!(!got[0].online);
+    }
+
+    #[test]
+    fn a_null_entry_is_skipped_rather_than_failing_the_batch() {
+        // The API returns one for a listing that vanished between the search
+        // and the fetch, which happens constantly on a busy league.
+        let entries = format!("null,{}", listing(5.0, "divine", true));
+
+        assert_eq!(read_listings(&fetch_body(&entries)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_unpriced_listing_is_skipped() {
+        // Showing it as free would be worse than not showing it.
+        let entries = "{\"listing\":{\"account\":{\"name\":\"Kaom\"}}}";
+
+        assert!(read_listings(&fetch_body(entries)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_empty_fetch_page_is_not_an_error() {
+        assert!(read_listings(&fetch_body("")).unwrap().is_empty());
+        assert!(read_listings(&HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: "{}".to_string()
+        })
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn an_error_body_beats_a_two_hundred_on_a_fetch_too() {
+        let response = HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: r#"{"error":{"code":2,"message":"bad"}}"#.to_string(),
+        };
+
+        assert!(matches!(
+            read_listings(&response).unwrap_err(),
+            PriceCheckError::Api(_)
+        ));
+    }
+
+    fn priced(amount: f64, currency: &str) -> Listing {
+        Listing {
+            amount,
+            currency: currency.to_string(),
+            account: "Kaom".to_string(),
+            online: true,
+        }
+    }
+
+    #[test]
+    fn the_suggested_price_is_the_median() {
+        // One listing at a thousand drags a mean far above what anyone pays,
+        // and those listings are common because people post them to bait.
+        let listings = [
+            priced(5.0, "divine"),
+            priced(6.0, "divine"),
+            priced(1000.0, "divine"),
+        ];
+
+        let (price, currency) = suggested_price(&listings).unwrap();
+
+        assert_eq!(price, 6.0);
+        assert_eq!(currency, "divine");
+    }
+
+    #[test]
+    fn an_even_count_averages_the_middle_pair() {
+        let listings = [
+            priced(4.0, "divine"),
+            priced(6.0, "divine"),
+            priced(8.0, "divine"),
+            priced(10.0, "divine"),
+        ];
+
+        assert_eq!(suggested_price(&listings).unwrap().0, 7.0);
+    }
+
+    #[test]
+    fn only_the_most_common_currency_is_used() {
+        // Mixing divine and chaos into one median produces a number in no
+        // currency at all.
+        let listings = [
+            priced(5.0, "divine"),
+            priced(6.0, "divine"),
+            priced(3000.0, "chaos"),
+        ];
+
+        let (price, currency) = suggested_price(&listings).unwrap();
+
+        assert_eq!(currency, "divine");
+        assert_eq!(price, 5.5);
+    }
+
+    #[test]
+    fn no_listings_suggests_no_price() {
+        assert_eq!(suggested_price(&[]), None);
+    }
+
+    #[test]
+    fn one_listing_suggests_its_own_price() {
+        assert_eq!(
+            suggested_price(&[priced(5.0, "divine")]).unwrap(),
+            (5.0, "divine".to_string())
+        );
     }
 
     #[test]
