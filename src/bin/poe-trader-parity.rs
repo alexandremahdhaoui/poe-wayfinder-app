@@ -68,6 +68,14 @@ const WAIVED: &[(&str, &str)] = &[
         "parseRuneforged",
         "a no-op in the reference, kept as a named stage",
     ),
+    (
+        "calcBaseDamage",
+        "base_value with the PHYSICAL_DAMAGE table, not a separate function",
+    ),
+    (
+        "calcTotalDamage",
+        "total_value with the PHYSICAL_DAMAGE table, not a separate function",
+    ),
 ];
 
 /// Reference names we ported under a different Rust name.
@@ -94,6 +102,14 @@ const ALIASES: &[(&str, &str)] = &[
     // Aggregation.
     ("sumStatsByModType", "sum_stats_by_type"),
     ("statSourcesTotal", "combine"),
+    // calc-base says what it produces rather than what it is called.
+    ("calcPropBase", "contributions"),
+    ("calcBase", "base_value"),
+    ("calcTotal", "total_value"),
+    // The filter rules say what they decide.
+    ("enableGoodRolledFilters", "should_enable"),
+    ("hideNotVariableStat", "hidden_reason"),
+    ("filterFillMinMax", "fill_ends"),
     // Filters.
     ("createFilters", "build_query"),
     ("createExactStatFilters", "build_stat_group"),
