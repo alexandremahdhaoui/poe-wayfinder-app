@@ -5,6 +5,7 @@
 //! allowlist has exactly one place to live.
 
 pub mod clipboard_adapter;
+pub mod config_store_adapter;
 pub mod game_data_adapter;
 pub mod game_log_adapter;
 pub mod game_window_adapter;
