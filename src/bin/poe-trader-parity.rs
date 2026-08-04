@@ -144,6 +144,16 @@ const ALIASES: &[(&str, &str)] = &[
     ("hideAllAugments", "is_hidden_by_default"),
     ("hasCraftingValue", "empty_slot"),
     ("isItemMissingItemClass", "is_missing_item_class"),
+    ("floorToBracket", "floor_to_bracket"),
+    ("ceilToBracket", "ceil_to_bracket"),
+    (
+        "areaLevelByAscendancyPoints",
+        "area_level_by_ascendancy_points",
+    ),
+    (
+        "ascendancyPointsByAreaLevel",
+        "ascendancy_points_by_area_level",
+    ),
 ];
 
 fn main() -> ExitCode {
