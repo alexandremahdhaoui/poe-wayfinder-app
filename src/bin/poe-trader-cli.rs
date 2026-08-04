@@ -7,9 +7,10 @@ use std::process::ExitCode;
 
 use poe_trader_app::adapter::game_data_adapter::GameTables;
 use poe_trader_app::adapter::http_adapter::NetworkPolicy;
+use poe_trader_app::adapter::query_json_adapter::to_json;
 use poe_trader_app::config::PoeTraderCliConfig;
 use poe_trader_app::logging::{Logger, Value};
-use poe_trader_core::controller::parse::parse_clipboard;
+use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
@@ -93,8 +94,8 @@ fn main() -> ExitCode {
         ],
     );
 
-    let item = match parse_clipboard(&text, game, &data) {
-        Ok(item) => item,
+    let checked = match price_check(&text, &data, PriceCheckOptions::new(game)) {
+        Ok(checked) => checked,
         Err(err) => {
             log.error(
                 "parsing item text",
@@ -107,6 +108,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    let item = &checked.item;
 
     log.info(
         "parsed item",
@@ -137,8 +140,8 @@ fn main() -> ExitCode {
             ("unidentified", Value::Bool(item.is_unidentified)),
             ("modifiers", Value::Int(item.modifiers.len() as i64)),
             (
-                "stats",
-                Value::Int(item.modifiers.iter().map(|m| m.stats.len()).sum::<usize>() as i64),
+                "stat_filters",
+                Value::Int(checked.stat_filter_count() as i64),
             ),
             (
                 "unknown_modifiers",
@@ -147,10 +150,28 @@ fn main() -> ExitCode {
         ],
     );
 
-    log.warn(
-        "stat matching and the trade query are not implemented yet",
-        &[],
-    );
+    // An unknown modifier means our data is older than the game. A price built
+    // from a partly understood item is wrong in a way the user cannot see.
+    for unknown in &item.unknown_modifiers {
+        log.warn(
+            "modifier not recognised",
+            &[("text", Value::Str(unknown.text.clone()))],
+        );
+    }
+
+    let body = to_json(&checked.query);
+
+    match serde_json::to_string_pretty(&body) {
+        Ok(text) => println!("{text}"),
+        Err(err) => {
+            log.error(
+                "serialising the trade query",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    }
 
     ExitCode::SUCCESS
 }

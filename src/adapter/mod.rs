@@ -6,5 +6,6 @@
 
 pub mod game_data_adapter;
 pub mod http_adapter;
+pub mod query_json_adapter;
 pub mod rate_limit_adapter;
 pub mod trade_api_adapter;
