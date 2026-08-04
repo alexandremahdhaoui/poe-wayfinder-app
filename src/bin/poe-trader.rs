@@ -169,10 +169,15 @@ fn run_overlay(
     hotkey: poe_trader_app::types::Hotkey,
     log: Logger,
 ) -> ExitCode {
-    use poe_trader_app::adapter::game_window_adapter::{GameWindowAdapter, GameWindowSource};
+    use poe_trader_app::adapter::clipboard_adapter::{copy_item, CopyTiming, SystemClipboard};
+    use poe_trader_app::adapter::game_window_adapter::{
+        GameWindowAdapter, GameWindowSource, KeyboardCopyTrigger,
+    };
     use poe_trader_app::controller::overlay_controller::OverlayModel;
+    use poe_trader_app::driver::hotkey_driver::HotkeyDriver;
     use poe_trader_app::driver::overlay_ui_driver::{overlay_viewport, paint, UiEvent};
     use poe_trader_app::types::overlay::OverlayGeometry;
+    use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 
     let window = GameWindowAdapter::new(&cfg.window_title);
 
@@ -192,25 +197,86 @@ fn run_overlay(
         ),
     }
 
+    // Registered before the window opens. A hotkey another application owns
+    // has to be reported now, not on the first press that does nothing.
+    let hotkeys = match HotkeyDriver::start(&hotkey) {
+        Ok(hotkeys) => {
+            log.info(
+                "registered the price check hotkey",
+                &[("hotkey", Value::Str(hotkey.to_string()))],
+            );
+
+            hotkeys
+        }
+        Err(err) => {
+            log.error(
+                "registering the price check hotkey",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut clipboard = match SystemClipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(err) => {
+            log.error(
+                "opening the clipboard",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let trigger = KeyboardCopyTrigger::new();
+    let timing = CopyTiming::default();
+    let options = PriceCheckOptions::new(game);
+
     let mut model = OverlayModel::new(OverlayGeometry::default());
 
-    // Shown immediately so the user can see the tool started. A real price
-    // check replaces this the first time the hotkey fires.
+    // Shown once so the user can see the tool started and which key to press.
+    // The first price check replaces it.
     model.start(window.cursor());
     model.fail(&format!(
-        "Press {hotkey} over an item. Game: {}. Stats loaded: {}.",
-        game.as_str(),
-        data.stat_count()
+        "Ready. Press {hotkey} with the cursor over an item.",
     ));
 
     let first = model.frame_scaled(window.find().ok(), window.scale());
 
-    let options = eframe::NativeOptions {
+    let native_options = eframe::NativeOptions {
         viewport: overlay_viewport(&first),
         ..eframe::NativeOptions::default()
     };
 
-    let result = eframe::run_simple_native("poe-trader", options, move |ctx, _frame| {
+    let cfg_restore = cfg.restore_clipboard;
+
+    let result = eframe::run_simple_native("poe-trader", native_options, move |ctx, _frame| {
+        // A press drains the whole queue. Queuing them would run one price
+        // check per press after a stutter, which is what the rate limiter
+        // exists to prevent.
+        if hotkeys.fired() {
+            model.start(window.cursor());
+
+            match copy_item(
+                &mut clipboard,
+                &trigger,
+                timing,
+                cfg_restore,
+                std::thread::sleep,
+            ) {
+                Ok(text) => match price_check(&text, &data, options) {
+                    // The search itself is not wired into the loop yet, so the
+                    // panel shows what was parsed and how many filters it
+                    // built. Nothing here is fabricated.
+                    Ok(checked) => model.finish(checked, 0),
+                    Err(err) => model.fail(&format!("Could not read the item: {err}")),
+                },
+                Err(err) => model.fail(&format!("Could not copy the item: {err}")),
+            }
+        }
+
         let found = window.find().ok();
         let frame = model.frame_scaled(found, window.scale());
 
