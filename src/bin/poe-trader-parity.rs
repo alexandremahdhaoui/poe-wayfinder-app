@@ -127,6 +127,12 @@ const ALIASES: &[(&str, &str)] = &[
     // The fetch endpoint.
     ("requestResults", "read_listings"),
     ("parseFetchResult", "read_listing"),
+    // Unique, anointment and incursion rules.
+    ("createUniquePresets", "unique_search"),
+    ("createMagebloodFilters", "link_filter"),
+    ("applyAnointmentRules", "anointment"),
+    ("decodeOils", "anointment"),
+    ("applyRules", "valuable_rooms"),
 ];
 
 fn main() -> ExitCode {
