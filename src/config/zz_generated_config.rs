@@ -148,6 +148,8 @@ pub struct PoeTraderConfig {
     pub api_latency_seconds: i64,
     /// The POESESSID cookie. Needed for search and fetch. Never log it and never write it to disk in plain text.
     pub poesessid: String,
+    /// Which league to search. The trade site keeps a separate index per league, so a wrong one returns nothing rather than an error. The log watcher can learn it from Client.txt.
+    pub league: String,
     /// Which game to parse for. Either poe1 or poe2.
     pub game: String,
     /// Exact title of the game window the overlay attaches to.
@@ -177,6 +179,7 @@ impl PoeTraderConfig {
         known.insert("user-agent", false);
         known.insert("api-latency-seconds", false);
         known.insert("poesessid", false);
+        known.insert("league", false);
         known.insert("game", false);
         known.insert("window-title", false);
         known.insert("client-log-path", false);
@@ -236,6 +239,13 @@ impl PoeTraderConfig {
         let raw_poesessid = match raw_poesessid {
             Some(v) => v,
             None => "".to_string(),
+        };
+        let raw_league: Option<String> = None
+            .or_else(|| flags.get("league").cloned())
+            .or_else(|| env::var("POE_LEAGUE").ok());
+        let raw_league = match raw_league {
+            Some(v) => v,
+            None => "Standard".to_string(),
         };
         let raw_game: Option<String> = None
             .or_else(|| flags.get("game").cloned())
@@ -307,6 +317,7 @@ impl PoeTraderConfig {
                 ))
             })?,
             poesessid: raw_poesessid,
+            league: raw_league,
             game: raw_game,
             window_title: raw_window_title,
             client_log_path: raw_client_log_path,
@@ -352,6 +363,11 @@ impl PoeTraderConfig {
             "{}:\"{}\"",
             "\"poesessid\"",
             json_escape(&self.poesessid)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"league\"",
+            json_escape(&self.league)
         ));
         pairs.push(format!("{}:\"{}\"", "\"game\"", json_escape(&self.game)));
         pairs.push(format!(
@@ -417,6 +433,8 @@ pub struct PoeTraderCliConfig {
     pub api_latency_seconds: i64,
     /// The POESESSID cookie.
     pub poesessid: String,
+    /// Which league to search. The trade site keeps a separate index per league, so a wrong one returns nothing rather than an error. The log watcher can learn it from Client.txt.
+    pub league: String,
     /// Which game to parse for. Either poe1 or poe2.
     pub game: String,
     /// Directory holding items.ndjson and stats.ndjson.
@@ -438,6 +456,7 @@ impl PoeTraderCliConfig {
         known.insert("user-agent", false);
         known.insert("api-latency-seconds", false);
         known.insert("poesessid", false);
+        known.insert("league", false);
         known.insert("game", false);
         known.insert("data-dir", false);
         known.insert("item-file", false);
@@ -494,6 +513,13 @@ impl PoeTraderCliConfig {
             Some(v) => v,
             None => "".to_string(),
         };
+        let raw_league: Option<String> = None
+            .or_else(|| flags.get("league").cloned())
+            .or_else(|| env::var("POE_LEAGUE").ok());
+        let raw_league = match raw_league {
+            Some(v) => v,
+            None => "Standard".to_string(),
+        };
         let raw_game: Option<String> = None
             .or_else(|| flags.get("game").cloned())
             .or_else(|| env::var("POE_GAME").ok());
@@ -536,6 +562,7 @@ impl PoeTraderCliConfig {
                 ))
             })?,
             poesessid: raw_poesessid,
+            league: raw_league,
             game: raw_game,
             data_dir: raw_data_dir,
             item_file: raw_item_file,
@@ -577,6 +604,11 @@ impl PoeTraderCliConfig {
             "{}:\"{}\"",
             "\"poesessid\"",
             json_escape(&self.poesessid)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"league\"",
+            json_escape(&self.league)
         ));
         pairs.push(format!("{}:\"{}\"", "\"game\"", json_escape(&self.game)));
         pairs.push(format!(
