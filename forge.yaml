@@ -86,3 +86,18 @@ test:
     spec:
       command: cargo
       args: ["test", "-p", "poe-trader-app"]
+
+  # How much of the reference is ported, as a number rather than an opinion.
+  #
+  # The floor only ever goes up. Raising it is how a port stops being a claim
+  # and starts being a measurement. It passes with no reference checkout, so a
+  # machine without one can still build.
+  - name: parity
+    runner: go://generic-test-runner
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          cargo run --quiet --release --bin poe-trader-parity --
+          --min 44
