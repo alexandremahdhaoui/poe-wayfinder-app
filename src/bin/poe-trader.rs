@@ -10,9 +10,12 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use poe_trader_app::adapter::game_data_adapter::GameTables;
 use poe_trader_app::adapter::http_adapter::{HttpAdapter, NetworkPolicy, PolicyError};
 use poe_trader_app::config::PoeTraderConfig;
 use poe_trader_app::logging::{Logger, Value};
+use poe_trader_app::types::Hotkey;
+use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -87,16 +90,90 @@ fn main() -> ExitCode {
         }
     }
 
+    // Config is validated before anything starts. A bad hotkey that fails at
+    // the first keypress is the hardest kind of bug to report, because there
+    // is nothing to see.
+    let hotkey = match Hotkey::parse(&cfg.price_check_hotkey) {
+        Ok(hotkey) => hotkey,
+        Err(err) => {
+            log.error(
+                "reading the price check hotkey",
+                &[
+                    ("hotkey", Value::Str(cfg.price_check_hotkey.clone())),
+                    ("error", Value::Str(err.to_string())),
+                ],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let Some(game) = GameVersion::parse(&cfg.game) else {
+        log.error("unknown game", &[("game", Value::Str(cfg.game.clone()))]);
+
+        return ExitCode::FAILURE;
+    };
+
+    let data = match GameTables::load(std::path::Path::new(&cfg.data_dir)) {
+        Ok(data) => data,
+        Err(err) => {
+            log.error(
+                "loading game data",
+                &[
+                    ("data_dir", Value::Str(cfg.data_dir.clone())),
+                    ("error", Value::Str(err.to_string())),
+                ],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
     log.info(
         "startup",
         &[
-            ("game", Value::Str(cfg.game.clone())),
+            ("game", Value::Str(game.as_str().to_string())),
             ("window_title", Value::Str(cfg.window_title.clone())),
-            ("data_dir", Value::Str(cfg.data_dir.clone())),
+            ("hotkey", Value::Str(hotkey.to_string())),
+            ("stats", Value::Int(data.stat_count() as i64)),
+            ("item_names", Value::Int(data.item_name_count() as i64)),
         ],
     );
 
-    log.warn("drivers are not implemented yet", &[]);
+    #[cfg(windows)]
+    {
+        use poe_trader_app::adapter::game_window_adapter::{should_draw, GameWindowSource};
+
+        let window =
+            poe_trader_app::adapter::game_window_adapter::GameWindowAdapter::new(&cfg.window_title);
+
+        match window.find() {
+            Ok(found) => log.info(
+                "found the game window",
+                &[
+                    ("x", Value::Int(i64::from(found.rect.x))),
+                    ("y", Value::Int(i64::from(found.rect.y))),
+                    ("width", Value::Int(i64::from(found.rect.width))),
+                    ("height", Value::Int(i64::from(found.rect.height))),
+                    ("foreground", Value::Bool(found.is_foreground)),
+                    ("draw", Value::Bool(should_draw(&found))),
+                    ("scale", Value::Str(format!("{:.2}", window.scale()))),
+                ],
+            ),
+            Err(err) => log.warn(
+                "the game window is not open yet",
+                &[("error", Value::Str(err.to_string()))],
+            ),
+        }
+    }
+
+    #[cfg(not(windows))]
+    log.warn(
+        "the overlay only runs on Windows. Use poe-trader-cli here.",
+        &[],
+    );
+
+    log.warn("the overlay window is not implemented yet", &[]);
 
     ExitCode::SUCCESS
 }

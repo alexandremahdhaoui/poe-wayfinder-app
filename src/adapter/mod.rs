@@ -4,7 +4,9 @@
 //! client. Everything that needs the network takes it as a dependency, so the
 //! allowlist has exactly one place to live.
 
+pub mod clipboard_adapter;
 pub mod game_data_adapter;
+pub mod game_window_adapter;
 pub mod http_adapter;
 pub mod query_json_adapter;
 pub mod rate_limit_adapter;

@@ -50,6 +50,9 @@ build:
 
   # The overlay only makes sense on Windows. cargo has no --out-dir on stable,
   # so the binary is copied out of the shared workspace target dir.
+  #
+  # generic-builder and not go://go-build. forge v0.42.0 passes spec.env to its
+  # own dependency detector, which then fails to compile for Windows.
   - name: poe-trader-windows
     src: ./src
     engine: go://generic-builder

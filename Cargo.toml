@@ -13,6 +13,18 @@ serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 
+# The overlay only exists on Windows. Behind a target gate so the Linux build,
+# where every test runs, never pulls them in.
+[target.'cfg(windows)'.dependencies]
+arboard = { workspace = true }
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_HiDpi",
+] }
+
 [dev-dependencies]
 mockall.workspace = true
 tokio = { workspace = true }
