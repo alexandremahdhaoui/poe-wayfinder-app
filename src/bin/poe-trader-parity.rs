@@ -114,6 +114,11 @@ const ALIASES: &[(&str, &str)] = &[
     ("createFilters", "build_query"),
     ("createExactStatFilters", "build_stat_group"),
     ("filterPseudo", "pseudo_totals"),
+    // Item property filters say which property they pick.
+    ("isSingleAttrArmour", "is_single_defence_armour"),
+    ("armourProps", "armour_filters"),
+    ("weaponProps", "weapon_filters"),
+    ("filterItemProp", "build_stat_group_for"),
 ];
 
 fn main() -> ExitCode {
