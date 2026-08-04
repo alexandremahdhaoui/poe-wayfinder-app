@@ -153,7 +153,10 @@ pub fn error_in_body(body: &str) -> Option<TradeApiError> {
     }
 
     Some(TradeApiError {
-        code: error.get("code").and_then(serde_json::Value::as_i64).unwrap_or(0),
+        code: error
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0),
         message: error
             .get("message")
             .and_then(serde_json::Value::as_str)
@@ -164,7 +167,9 @@ pub fn error_in_body(body: &str) -> Option<TradeApiError> {
 
 /// Split result ids into batches the API will accept.
 pub fn fetch_batches(ids: &[String]) -> Vec<Vec<String>> {
-    ids.chunks(FETCH_BATCH_SIZE).map(<[String]>::to_vec).collect()
+    ids.chunks(FETCH_BATCH_SIZE)
+        .map(<[String]>::to_vec)
+        .collect()
 }
 
 #[cfg(test)]

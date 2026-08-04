@@ -5,6 +5,7 @@
 
 use std::process::ExitCode;
 
+use poe_trader_app::adapter::game_data_adapter::GameTables;
 use poe_trader_app::adapter::http_adapter::NetworkPolicy;
 use poe_trader_app::config::PoeTraderCliConfig;
 use poe_trader_app::logging::{Logger, Value};
@@ -69,7 +70,30 @@ fn main() -> ExitCode {
         }
     };
 
-    let item = match parse_clipboard(&text, game) {
+    let data = match GameTables::load(std::path::Path::new(&cfg.data_dir)) {
+        Ok(data) => data,
+        Err(err) => {
+            log.error(
+                "loading game data",
+                &[
+                    ("data_dir", Value::Str(cfg.data_dir.clone())),
+                    ("error", Value::Str(err.to_string())),
+                ],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    log.info(
+        "loaded game data",
+        &[
+            ("stats", Value::Int(data.stat_count() as i64)),
+            ("item_names", Value::Int(data.item_name_count() as i64)),
+        ],
+    );
+
+    let item = match parse_clipboard(&text, game, &data) {
         Ok(item) => item,
         Err(err) => {
             log.error(
@@ -111,6 +135,11 @@ fn main() -> ExitCode {
             ("quality", Value::Int(item.quality.unwrap_or(0) as i64)),
             ("corrupted", Value::Bool(item.is_corrupted)),
             ("unidentified", Value::Bool(item.is_unidentified)),
+            ("modifiers", Value::Int(item.modifiers.len() as i64)),
+            (
+                "stats",
+                Value::Int(item.modifiers.iter().map(|m| m.stats.len()).sum::<usize>() as i64),
+            ),
             (
                 "unknown_modifiers",
                 Value::Int(item.unknown_modifiers.len() as i64),
