@@ -6,6 +6,7 @@
 
 pub mod clipboard_adapter;
 pub mod game_data_adapter;
+pub mod game_log_adapter;
 pub mod game_window_adapter;
 pub mod http_adapter;
 pub mod query_json_adapter;
