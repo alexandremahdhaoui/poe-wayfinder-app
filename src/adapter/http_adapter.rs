@@ -275,10 +275,32 @@ impl HttpAdapter {
             user_agent
         };
 
+        // The allowlist has to be re-checked on every redirect hop.
+        //
+        // Guarding only the initial URL leaves the whole policy bypassable by
+        // any host that can answer one request: it replies 302 to wherever it
+        // likes and the client follows. reqwest follows up to ten hops by
+        // default, so without this the allowlist stops the first request and
+        // nothing after it.
+        let redirect_policy = policy.clone();
+
         let client = reqwest::Client::builder()
             .cookie_store(true)
             .timeout(timeout)
             .user_agent(agent)
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if redirect_policy.check(attempt.url().as_str()).is_err() {
+                    return attempt.stop();
+                }
+
+                // Ten is reqwest's own default. A redirect loop inside the
+                // allowlist is still a loop.
+                if attempt.previous().len() >= 10 {
+                    return attempt.stop();
+                }
+
+                attempt.follow()
+            }))
             .build()?;
 
         Ok(Self { policy, client })
@@ -585,6 +607,34 @@ mod tests {
             adapter.policy().allowed_hosts(),
             vec!["www.pathofexile.com"]
         );
+    }
+
+    #[test]
+    fn the_policy_is_the_same_one_a_redirect_would_be_checked_against() {
+        // The redirect policy holds a clone. If the two ever diverged, a
+        // redirect could reach a host the initial request could not.
+        let policy = default_policy();
+        let adapter = HttpAdapter::new(policy.clone(), Duration::from_secs(5)).unwrap();
+
+        assert_eq!(adapter.policy().allowed_hosts(), policy.allowed_hosts());
+        assert_eq!(
+            adapter.policy().check("https://attacker.test/x"),
+            policy.check("https://attacker.test/x")
+        );
+    }
+
+    #[test]
+    fn a_redirect_target_is_judged_by_the_same_rules_as_a_first_request() {
+        // The redirect closure calls exactly this. A host refused here is
+        // refused as a redirect target too.
+        let p = default_policy();
+
+        assert!(p
+            .check("https://www.pathofexile.com/api/trade2/search")
+            .is_ok());
+        assert!(p.check("https://attacker.test/steal").is_err());
+        assert!(p.check("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(p.check("file:///etc/passwd").is_err());
     }
 
     #[test]
