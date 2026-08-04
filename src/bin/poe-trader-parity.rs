@@ -84,6 +84,11 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Rune preview edits.
+    ("selectAugmentEffectByItemCategory", "effect_for_category"),
+    ("getAugmentNameByRef", "augment_name"),
+    ("handleApplyItemEdits", "apply"),
+    ("handleRemoveItemEdits", "remove"),
     // The Rust name says what it does rather than how it is called.
     ("itemTextToSections", "text_to_sections"),
     ("markupConditionParser", "strip_markup"),
