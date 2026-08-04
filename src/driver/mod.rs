@@ -4,3 +4,4 @@
 
 pub mod hotkey_driver;
 pub mod overlay_ui_driver;
+pub mod tray_driver;
