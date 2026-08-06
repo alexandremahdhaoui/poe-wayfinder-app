@@ -84,6 +84,12 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Roll rounding and the item editors.
+    ("decimalPlaces", "decimal_places"),
+    ("roundRoll", "round_roll"),
+    ("percentRoll", "percent_roll"),
+    ("percentRollDelta", "percent_roll_delta"),
+    ("getItemEditorType", "editor_kind"),
     // Rendering a trade site listing.
     ("parseAffixStrings", "parse_affix_strings"),
     ("getTier", "tier_at"),
