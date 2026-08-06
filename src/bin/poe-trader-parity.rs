@@ -84,6 +84,13 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Magic name and modifier identity.
+    ("magicBasetype", "magic_base_type"),
+    ("replaceHashWithValues", "fill_placeholders"),
+    ("modsEqual", "mods_equal"),
+    ("applyIncr", "apply_incr"),
+    ("maxUsefulItemLevel", "max_useful_item_level"),
+    ("enableAllFilters", "enable_all"),
     // Rune preview edits.
     ("selectAugmentEffectByItemCategory", "effect_for_category"),
     ("getAugmentNameByRef", "augment_name"),
