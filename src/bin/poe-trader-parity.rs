@@ -49,6 +49,22 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "artificialSlowdown",
+        "a Vue reactive timer for the spinner, no equivalent in an egui overlay",
+    ),
+    (
+        "useTradeApi",
+        "a Vue composable wrapper, replaced by trade_api_adapter in poe-trader-app",
+    ),
+    (
+        "useBulkApi",
+        "a Vue composable wrapper, replaced by trade_api_adapter in poe-trader-app",
+    ),
+    (
+        "t",
+        "the vue-i18n translate binding, this build is English only by policy",
+    ),
+    (
         "filterPseudoSources",
         "a flat_map over sources inline in pseudo_totals, not a named helper",
     ),
@@ -96,6 +112,9 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Recalculating an item after a preview edit.
+    ("applyEleAugment", "apply_elemental_rune"),
+    ("recalculateItemProperties", "rescale"),
     // Which stats a rune preview rebuilds.
     ("refEffectsPseudos", "affects_pseudo"),
     ("translatedEffectsPseudos", "signs_match"),
