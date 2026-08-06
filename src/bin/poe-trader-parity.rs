@@ -49,6 +49,26 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "noSourcePseudoToFilter",
+        "the pseudo loop in stat_filters.rs builds these inline, not through a named helper",
+    ),
+    (
+        "findAndResolveByRef",
+        "our data file is flat, one record per printed text, so there is no group to resolve: stat_by_matcher is the whole lookup",
+    ),
+    (
+        "_findAndResolveByRef",
+        "the private half of findAndResolveByRef, same reason",
+    ),
+    (
+        "_resolveTranslation",
+        "picks one stat out of a translation group. Our builder merges a group into one record and the several trade ids travel as a count group, which matches whichever the listing used",
+    ),
+    (
+        "testItemCategory",
+        "only used by _resolveTranslation's select strategy, which our flat data has no group to run on",
+    ),
+    (
         "parseMemoryStrandsNested",
         "the strand line loop inside parse_accessory, not a separate function",
     ),
@@ -154,6 +174,13 @@ const ALIASES: &[(&str, &str)] = &[
     // after the other, which is `apply_heist_rules` in price_check.
     ("applyContractRules", "contract_filters"),
     ("applyBlueprintRules", "blueprint_exclusion"),
+    // The PoE1 exclusion rules.
+    ("applyFlaskHybridMod", "flask_excludes_increased_effect"),
+    ("filterMemoryStrands", "memory_strands_filter"),
+    ("statToNotFilter", "not_group"),
+    // The reference merges namespaces on every lookup. Ours merges once, in
+    // the builder, so the loaded table is already merged.
+    ("_mergeTradeIdsInto", "merge_trade_ids_into"),
     ("calculatedStatToFilter", "build_one"),
     ("initUiModFilters", "build_stat_group"),
     // Building the request body.

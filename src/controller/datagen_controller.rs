@@ -230,11 +230,7 @@ pub fn build_stats(body: &str) -> Result<Vec<StatRecord>, DatagenError> {
                     option: false,
                 });
 
-            record
-                .trade_ids
-                .entry(group.id.clone())
-                .or_default()
-                .push(entry.id.clone());
+            merge_trade_ids_into(record, &group.id, &entry.id);
 
             // A stat with a fixed option list takes an option and not a range.
             // Sending a range on one returns nothing.
@@ -251,6 +247,25 @@ pub fn build_stats(body: &str) -> Result<Vec<StatRecord>, DatagenError> {
     // Sorted by text. Two runs against the same input produce byte identical
     // files, so a diff means the game data changed.
     Ok(by_text.into_values().collect())
+}
+
+/// Add one trade id to a stat, under its namespace.
+///
+/// Ported from `_mergeTradeIdsInto`. The reference does this at runtime, on
+/// every lookup, because its data file keeps the namespaces apart. Ours does
+/// it once here, so the loaded table is already merged.
+///
+/// A duplicate id is dropped. The API lists the same stat once per group it
+/// can appear in, and a repeated id would make the count group ask for the
+/// same thing twice.
+fn merge_trade_ids_into(record: &mut StatRecord, namespace: &str, id: &str) {
+    let ids = record.trade_ids.entry(namespace.to_string()).or_default();
+
+    if ids.iter().any(|existing| existing == id) {
+        return;
+    }
+
+    ids.push(id.to_string());
 }
 
 /// Turn the items response into records.
