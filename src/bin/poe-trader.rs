@@ -396,6 +396,17 @@ async fn search(
         return Err("No POESESSID. Set it to search the trade site.".to_string());
     }
 
+    // A query that narrows nothing matches the entire trade site, and the
+    // price it comes back with is the market's median rather than this item's.
+    // It happens when the base type is missing from the data file, which is a
+    // fixable problem worth naming rather than pricing through.
+    if !checked.constrains_something() {
+        return Err(
+            "Nothing to search on. The base type is missing from the data file. Rebuild it from the tray."
+                .to_string(),
+        );
+    }
+
     // A currency goes to the exchange endpoint. Pricing one on the search
     // endpoint returns the handful of people who listed one individually
     // rather than the market rate.
