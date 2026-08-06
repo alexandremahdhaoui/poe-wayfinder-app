@@ -49,6 +49,10 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "augmentCount",
+        "returns a hardcoded 1 in the reference, its real body is commented out",
+    ),
+    (
         "propToFilter",
         "a struct literal on PropertyFilter, not a function, in item_property.rs",
     ),
@@ -88,6 +92,8 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // PoE2 modifier splitting.
+    ("parseModifiersPoe2", "read_modifier_section_poe2"),
     // Map and base percentile properties.
     ("mapProps", "map_filters"),
     ("filterBasePercentile", "base_percentile_filter"),
