@@ -220,6 +220,9 @@ impl GameTables {
                 // Roll ranges come from the game bundles and not from the
                 // trade API, so they stay absent until those are vendored.
                 armour_bounds: poe_trader_core::types::item::ArmourBounds::default(),
+                // The data file does not carry a unique's base. The parser
+                // fills this from the base type line the game prints.
+                unique_base: None,
             };
 
             out.by_name
