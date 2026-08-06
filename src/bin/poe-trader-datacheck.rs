@@ -25,8 +25,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use poe_trader_app::adapter::game_data_adapter::GameTables;
+use poe_trader_core::adapter::data_adapter::Namespace;
 use poe_trader_core::adapter::StatLookup;
+use poe_trader_core::controller::parse::parse_clipboard;
 use poe_trader_core::controller::stat_match::placeholder::candidates;
+use poe_trader_core::types::category::ItemCategory;
+use poe_trader_core::types::item::BaseInfo;
+use poe_trader_core::types::GameVersion;
 
 /// The roll written into a rendered line.
 ///
@@ -67,13 +72,14 @@ fn main() -> ExitCode {
             }
         };
 
+        let game = game_of(dir);
         let report = check(&tables);
 
-        println!("\n{}", dir.display());
-        println!("  templates  : {}", report.total);
-        println!("  read back  : {}", report.hit);
-        println!("  missed     : {}", report.missed.len());
-        println!("  coverage   : {:.1}%", report.coverage());
+        println!("\n{} as {}", dir.display(), game.as_str());
+        println!("  stat templates : {}", report.total);
+        println!("  read back      : {}", report.hit);
+        println!("  missed         : {}", report.missed.len());
+        println!("  coverage       : {:.1}%", report.coverage());
 
         for (reference, template, rendered) in report.missed.iter().take(show) {
             println!("    {reference}\n      via {template}\n      as  {rendered}");
@@ -83,7 +89,32 @@ fn main() -> ExitCode {
             println!("    ... {} more", report.missed.len() - show);
         }
 
-        worst = worst.min(report.coverage());
+        let bases = check_items(&tables, game);
+
+        println!("  bases          : {}", bases.total);
+        println!("  named back     : {}", bases.hit);
+        println!("  missed         : {}", bases.missed.len());
+        println!("  coverage       : {:.1}%", bases.coverage());
+
+        for (name, _, got) in bases.missed.iter().take(show) {
+            println!("    {name}\n      came back as {got}");
+        }
+
+        if bases.missed.len() > show {
+            println!("    ... {} more", bases.missed.len() - show);
+        }
+
+        let empty = empty_tables(&tables, game);
+
+        if empty.is_empty() {
+            println!("  tables         : every table the parser reads has entries");
+        } else {
+            println!("  tables         : EMPTY {}", empty.join(", "));
+
+            worst = 0.0;
+        }
+
+        worst = worst.min(report.coverage()).min(bases.coverage());
     }
 
     if worst < min {
@@ -145,6 +176,106 @@ fn check(tables: &GameTables) -> Report {
     }
 
     report
+}
+
+/// Which game a data directory holds.
+///
+/// Read from the directory name, because the file itself does not say. A
+/// wrong guess only changes which parser stages run, and both games are
+/// checked anyway.
+fn game_of(dir: &std::path::Path) -> GameVersion {
+    if dir.to_string_lossy().contains("poe1") {
+        GameVersion::Poe1
+    } else {
+        GameVersion::Poe2
+    }
+}
+
+/// Tables the parser looks in that hold nothing.
+///
+/// The check the base pass cannot make. Gems were filed under `ITEM`, so a
+/// gem-shaped clipboard still found them there and coverage read 100 percent
+/// while the gem table sat empty and every real gem lookup missed.
+///
+/// A table the parser reads and the builder never fills is a whole class of
+/// item that silently prices against the market.
+fn empty_tables(tables: &GameTables, game: GameVersion) -> Vec<&'static str> {
+    let mut wanted = vec![Namespace::Item, Namespace::Unique, Namespace::Gem];
+
+    // PoE2 has no divination cards and no itemised monsters. Requiring them
+    // would fail on a correct build.
+    if game == GameVersion::Poe1 {
+        wanted.push(Namespace::DivinationCard);
+        wanted.push(Namespace::CapturedBeast);
+    }
+
+    wanted
+        .into_iter()
+        .filter(|want| !tables.items().any(|(ns, _)| ns == *want))
+        .map(|ns| ns.as_str())
+        .collect()
+}
+
+/// Build a clipboard for every base and check the parser names it back.
+///
+/// Uniques, cards and beasts are skipped. A unique needs its base type
+/// printed under it and the data file does not carry one, and a card and a
+/// beast are bulk traded and answer with a tag rather than a name. Those paths
+/// are covered by their own tests.
+fn check_items(tables: &GameTables, game: GameVersion) -> Report {
+    let mut report = Report {
+        total: 0,
+        hit: 0,
+        missed: Vec::new(),
+    };
+
+    for (namespace, base) in tables.items() {
+        let Some(clipboard) = clipboard_for(namespace, base) else {
+            continue;
+        };
+
+        report.total += 1;
+
+        let got = parse_clipboard(&clipboard, game, tables)
+            .map(|item| item.info.name)
+            .unwrap_or_default();
+
+        if got == base.name {
+            report.hit += 1;
+        } else {
+            report
+                .missed
+                .push((base.name.clone(), clipboard, format!("{got:?}")));
+        }
+    }
+
+    report
+}
+
+/// The clipboard the game would print for a base of this kind.
+///
+/// Minimal on purpose. The question is whether the name resolves, and every
+/// extra line is another thing that could fail for its own reason.
+fn clipboard_for(namespace: Namespace, base: &BaseInfo) -> Option<String> {
+    let name = &base.name;
+
+    match namespace {
+        // Currency prints its own rarity. Printing it as Normal makes the
+        // parser strip the quality prefixes off `Exceptional Verisium` and
+        // `Blighted Delirium Orb`, which are whole item names and not prefixed
+        // versions of anything.
+        Namespace::Item if base.category == Some(ItemCategory::Currency) => Some(format!(
+            "Item Class: Stackable Currency\nRarity: Currency\n{name}\n--------\nStack Size: 1/10\n"
+        )),
+        Namespace::Item => Some(format!(
+            "Item Class: Unknown\nRarity: Normal\n{name}\n--------\nItem Level: 80\n"
+        )),
+        // The class line is what tells the parser to look in the gem table.
+        Namespace::Gem => Some(format!(
+            "Item Class: Skill Gems\nRarity: Gem\n{name}\n--------\nLevel: 20\n"
+        )),
+        Namespace::Unique | Namespace::DivinationCard | Namespace::CapturedBeast => None,
+    }
 }
 
 /// Turn a matcher template into the line the game would print.

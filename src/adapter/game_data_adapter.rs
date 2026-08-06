@@ -249,6 +249,17 @@ impl GameTables {
     /// Exists for `poe-trader-datacheck`, which renders a game line from every
     /// template and checks the parser reads it back. Nothing in the overlay
     /// needs this, and a coverage number that is not measured is a guess.
+    /// Every base, with the table it was filed in.
+    ///
+    /// For `poe-trader-datacheck`, which builds a clipboard from each one and
+    /// checks the query comes back naming it. 873 gems were filed in the wrong
+    /// table and every one of their queries was untyped, which nothing caught.
+    pub fn items(&self) -> impl Iterator<Item = (Namespace, &BaseInfo)> {
+        self.by_name
+            .iter()
+            .flat_map(|((_, ns), bases)| bases.iter().map(move |b| (*ns, b)))
+    }
+
     pub fn matchers(&self) -> impl Iterator<Item = (&str, &str)> {
         self.stats.iter().flat_map(|stat| {
             stat.matchers
