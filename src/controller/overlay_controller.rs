@@ -101,6 +101,23 @@ impl OverlayModel {
         self.total = None;
     }
 
+    /// The item was read but the price was not.
+    ///
+    /// Keeps the result and shows the message beside it. Distinct from `fail`
+    /// because the two cases differ in what the user can act on: a failed
+    /// parse leaves them nothing, and a failed search still tells them their
+    /// modifiers were read correctly, which is most of what the panel is for.
+    ///
+    /// The stale result rule in `fail` does not apply here. This result is not
+    /// stale, it is the item that was just parsed.
+    pub fn warn(&mut self, message: &str) {
+        // The state stays Showing so the item is drawn. Only the message is
+        // added, and a panel showing an item plus a warning is exactly what
+        // happened.
+        self.state = OverlayState::Showing;
+        self.message = Some(message.to_string());
+    }
+
     /// The user dismissed the overlay.
     pub fn hide(&mut self) {
         self.state = OverlayState::Hidden;

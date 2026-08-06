@@ -177,6 +177,7 @@ fn run_overlay(
     use poe_trader_app::adapter::rate_limit_adapter::LimiterSet;
     use poe_trader_app::adapter::trade_api_adapter::TradeUrls;
     use poe_trader_app::controller::overlay_controller::OverlayModel;
+    use poe_trader_app::controller::price_check_loop;
     use poe_trader_app::driver::hotkey_driver::HotkeyDriver;
     use poe_trader_app::driver::overlay_ui_driver::{overlay_viewport, paint, UiEvent};
     use poe_trader_app::types::overlay::OverlayGeometry;
@@ -286,44 +287,41 @@ fn run_overlay(
         // check per press after a stutter, which is what the rate limiter
         // exists to prevent.
         if hotkeys.fired() {
-            model.start(window.cursor());
-
-            match copy_item(
-                &mut clipboard,
-                &trigger,
-                timing,
-                cfg_restore,
-                std::thread::sleep,
-            ) {
-                Ok(text) => match price_check(&text, &data, options) {
-                    Ok(checked) => {
-                        match runtime.block_on(search(
-                            &http,
-                            &urls,
-                            &league,
-                            &session,
-                            latency,
-                            &mut limits,
-                            &checked,
-                        )) {
-                            Ok(total) => model.finish(checked, total),
-                            Err(message) => {
-                                search_log.warn(
-                                    "search failed",
-                                    &[("error", Value::Str(message.clone()))],
-                                );
-
-                                // The item still parsed. Showing what we read
-                                // beats showing nothing, so the panel reports
-                                // the parse and says the search failed.
-                                model.finish(checked, 0);
-                                model.fail(&message);
-                            }
-                        }
-                    }
-                    Err(err) => model.fail(&format!("Could not read the item: {err}")),
+            // The whole chain lives in a controller so it can be tested
+            // without a game, a clipboard or a network. This is the only
+            // place that supplies the real three.
+            let outcome = price_check_loop::run(
+                &mut model,
+                window.cursor(),
+                || {
+                    copy_item(
+                        &mut clipboard,
+                        &trigger,
+                        timing,
+                        cfg_restore,
+                        std::thread::sleep,
+                    )
+                    .map_err(|e| format!("{e}"))
                 },
-                Err(err) => model.fail(&format!("Could not copy the item: {err}")),
+                |text| price_check(text, &data, options).map_err(|e| format!("{e}")),
+                |checked| {
+                    runtime.block_on(search(
+                        &http,
+                        &urls,
+                        &league,
+                        &session,
+                        latency,
+                        &mut limits,
+                        checked,
+                    ))
+                },
+            );
+
+            if !matches!(outcome, price_check_loop::Outcome::Priced { .. }) {
+                search_log.warn(
+                    "price check did not produce a price",
+                    &[("outcome", Value::Str(format!("{outcome:?}")))],
+                );
             }
         }
 
