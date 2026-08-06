@@ -49,6 +49,10 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "propToFilter",
+        "a struct literal on PropertyFilter, not a function, in item_property.rs",
+    ),
+    (
         "parseVaalGemName",
         "disabled in the reference itself, see its issue 954",
     ),
@@ -84,6 +88,10 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Map and base percentile properties.
+    ("mapProps", "map_filters"),
+    ("filterBasePercentile", "base_percentile_filter"),
+    ("removeUsedStats", "remove_used_stats"),
     // Routing between the search and exchange endpoints.
     ("apiToSatisfySearch", "endpoint_for"),
     ("tradeTag", "trade_tag"),
