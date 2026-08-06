@@ -73,6 +73,7 @@ pub fn should_draw(window: &GameWindow) -> bool {
 mod win {
     use super::{GameWindow, GameWindowSource, WindowError};
     use crate::types::overlay::WindowRect;
+    use poe_trader_core::controller::overlay::copy_key_sequence;
 
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{HWND, POINT, RECT};
@@ -191,14 +192,25 @@ mod win {
 
     impl crate::adapter::clipboard_adapter::CopyTrigger for KeyboardCopyTrigger {
         fn trigger_copy(&self) -> Result<(), crate::adapter::clipboard_adapter::ClipboardError> {
-            // Down, down, up, up. Releasing control before C would send a bare
-            // C into the game's chat box.
-            let events = [
-                key_event(VK_CONTROL, false),
-                key_event(VK_C, false),
-                key_event(VK_C, true),
-                key_event(VK_CONTROL, true),
-            ];
+            // The sequence itself is decided in the domain crate and tested
+            // there, because the order is the whole of the correctness and it
+            // cannot be checked from here. This turns it into Windows events
+            // and nothing else.
+            let events: Vec<INPUT> = copy_key_sequence()
+                .iter()
+                .filter_map(|stroke| {
+                    let key = match stroke.key.as_str() {
+                        "Ctrl" => VK_CONTROL,
+                        "C" => VK_C,
+                        // A key this adapter cannot send is dropped rather
+                        // than guessed. Sending the wrong scan code types a
+                        // character into the game.
+                        _ => return None,
+                    };
+
+                    Some(key_event(key, !stroke.down))
+                })
+                .collect();
 
             // SAFETY: `events` is a live, correctly sized array of INPUT and
             // the size argument matches INPUT exactly.
