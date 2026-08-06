@@ -49,6 +49,10 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "filterPseudoSources",
+        "a flat_map over sources inline in pseudo_totals, not a named helper",
+    ),
+    (
         "augmentCount",
         "returns a hardcoded 1 in the reference, its real body is commented out",
     ),
@@ -92,6 +96,9 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Which stats a rune preview rebuilds.
+    ("refEffectsPseudos", "affects_pseudo"),
+    ("translatedEffectsPseudos", "signs_match"),
     // Filter bounds and negation.
     ("shortRollToFilter", "short_roll_to_filter"),
     ("filterAdjustmentForNegate", "negate"),
