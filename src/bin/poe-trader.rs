@@ -388,15 +388,27 @@ async fn search(
     checked: &poe_trader_core::controller::price_check::PriceCheck,
 ) -> Result<u64, String> {
     use poe_trader_app::adapter::http_adapter::HttpClient;
-    use poe_trader_app::adapter::query_json_adapter::to_json;
+    use poe_trader_app::adapter::query_json_adapter::{to_exchange_json, to_json};
     use poe_trader_app::controller::price_check_controller::read_search_result;
+    use poe_trader_core::controller::bulk::Endpoint;
 
     if session.is_empty() {
         return Err("No POESESSID. Set it to search the trade site.".to_string());
     }
 
-    let body = serde_json::to_string(&to_json(&checked.query))
-        .map_err(|e| format!("building the search body: {e}"))?;
+    // A currency goes to the exchange endpoint. Pricing one on the search
+    // endpoint returns the handful of people who listed one individually
+    // rather than the market rate.
+    let exchange = match (checked.endpoint, &checked.trade_tag) {
+        (Endpoint::Exchange, Some(tag)) => Some(tag.clone()),
+        _ => None,
+    };
+
+    let body = match &exchange {
+        Some(tag) => serde_json::to_string(&to_exchange_json(tag, &[], checked.query.status)),
+        None => serde_json::to_string(&to_json(&checked.query)),
+    }
+    .map_err(|e| format!("building the search body: {e}"))?;
 
     let now = now_millis();
     let wait = limits.wait_for(now);
@@ -411,8 +423,13 @@ async fn search(
     let cookie = format!("POESESSID={session}");
     let headers = [("accept", "application/json"), ("cookie", cookie.as_str())];
 
+    let url = match &exchange {
+        Some(_) => urls.exchange(league),
+        None => urls.search(league),
+    };
+
     let response = http
-        .post_json(&urls.search(league), &headers, &body)
+        .post_json(&url, &headers, &body)
         .await
         .map_err(|e| format!("{e}"))?;
 

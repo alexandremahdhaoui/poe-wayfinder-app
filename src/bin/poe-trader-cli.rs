@@ -7,9 +7,10 @@ use std::process::ExitCode;
 
 use poe_trader_app::adapter::game_data_adapter::GameTables;
 use poe_trader_app::adapter::http_adapter::NetworkPolicy;
-use poe_trader_app::adapter::query_json_adapter::to_json;
+use poe_trader_app::adapter::query_json_adapter::{to_exchange_json, to_json};
 use poe_trader_app::config::PoeTraderCliConfig;
 use poe_trader_app::logging::{Logger, Value};
+use poe_trader_core::controller::bulk::Endpoint;
 use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 use poe_trader_core::types::GameVersion;
 
@@ -159,7 +160,13 @@ fn main() -> ExitCode {
         );
     }
 
-    let body = to_json(&checked.query);
+    // A currency goes to the exchange endpoint, which takes a different body
+    // shape. Printing the search body for one would show a request the overlay
+    // is not going to send.
+    let body = match (checked.endpoint, &checked.trade_tag) {
+        (Endpoint::Exchange, Some(tag)) => to_exchange_json(tag, &[], checked.query.status),
+        _ => to_json(&checked.query),
+    };
 
     match serde_json::to_string_pretty(&body) {
         Ok(text) => println!("{text}"),

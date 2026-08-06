@@ -12,7 +12,7 @@
 //! is the only shape that behaves the same on every endpoint.
 
 use poe_trader_core::types::query::{
-    Filters, Flag, NameField, Range, StatFilter, StatGroup, TradeQuery,
+    Filters, Flag, NameField, Range, StatFilter, StatGroup, Status, TradeQuery,
 };
 use serde_json::{json, Map, Value};
 
@@ -45,6 +45,36 @@ pub fn to_json(query: &TradeQuery) -> Value {
     json!({
         "query": Value::Object(q),
         "sort": { "price": "asc" },
+    })
+}
+
+/// Build an exchange request body.
+///
+/// The exchange endpoint takes a different shape from the search endpoint. It
+/// asks what the buyer has and what they want, both as short currency ids, and
+/// it has no concept of a modifier filter.
+///
+/// `have` is what the user is paying with. Sending an empty list asks for
+/// every currency pair the item trades in, which is what a price check wants:
+/// the market rate, not one pair.
+pub fn to_exchange_json(want: &str, have: &[String], status: Status) -> Value {
+    let mut query = Map::new();
+
+    query.insert(
+        "status".into(),
+        serde_json::json!({ "option": status.as_str() }),
+    );
+    query.insert("want".into(), serde_json::json!([want]));
+    query.insert("have".into(), serde_json::json!(have));
+
+    serde_json::json!({
+        "query": Value::Object(query),
+        // Cheapest first, same as the search endpoint. A buyer wants the best
+        // rate and a seller wants to know what the best rate is.
+        "sort": { "have": "asc" },
+        // The newer engine. The old one returns a shape this build does not
+        // read, and asking for it silently would look like an empty market.
+        "engine": "new",
     })
 }
 
@@ -249,7 +279,7 @@ fn number(value: f64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use poe_trader_core::types::query::{Status, TradeQuery};
+    use poe_trader_core::types::query::TradeQuery;
 
     fn body(query: &TradeQuery) -> Value {
         to_json(query)
@@ -534,5 +564,67 @@ mod tests {
             got["query"]["stats"][0]["filters"][0]["id"],
             "explicit.stat_life"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Exchange requests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn an_exchange_request_names_what_is_wanted() {
+        let got = to_exchange_json("divine", &[], Status::Online);
+
+        assert_eq!(got["query"]["want"], serde_json::json!(["divine"]));
+    }
+
+    #[test]
+    fn an_empty_have_list_asks_for_every_pair() {
+        // That is what a price check wants: the market rate, not one pair.
+        let got = to_exchange_json("divine", &[], Status::Online);
+
+        assert_eq!(got["query"]["have"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_have_list_reaches_the_body() {
+        let got = to_exchange_json("divine", &["chaos".to_string()], Status::Online);
+
+        assert_eq!(got["query"]["have"], serde_json::json!(["chaos"]));
+    }
+
+    #[test]
+    fn the_status_reaches_the_exchange_body() {
+        assert_eq!(
+            to_exchange_json("divine", &[], Status::Any)["query"]["status"]["option"],
+            "any"
+        );
+    }
+
+    #[test]
+    fn an_exchange_request_asks_for_the_new_engine() {
+        // The old one returns a shape this build does not read, and asking for
+        // it silently would look like an empty market.
+        assert_eq!(
+            to_exchange_json("divine", &[], Status::Online)["engine"],
+            "new"
+        );
+    }
+
+    #[test]
+    fn an_exchange_request_sorts_cheapest_first() {
+        assert_eq!(
+            to_exchange_json("divine", &[], Status::Online)["sort"]["have"],
+            "asc"
+        );
+    }
+
+    #[test]
+    fn an_exchange_request_carries_no_stat_filters() {
+        // The endpoint has no concept of one, and sending it would be a field
+        // the server ignores while the user thinks it applied.
+        let got = to_exchange_json("divine", &[], Status::Online);
+
+        assert!(got["query"].get("stats").is_none());
+        assert!(got["query"].get("filters").is_none());
     }
 }
