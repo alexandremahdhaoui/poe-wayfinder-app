@@ -112,6 +112,25 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    ("finalFilterTweaks", "final_filter_tweaks"),
+    ("createNewStatFilter", "preview_filters"),
+    // The last of the filter and parser helpers.
+    ("translateStatWithRoll", "wording_for"),
+    ("buildMageBloodNotFilter", "duplicates_filter"),
+    ("buildFilterWithValue", "duplicates_filter"),
+    ("calcPropBounds", "prop_bounds"),
+    (
+        "trySecondaryParseTranslation",
+        "try_secondary_parse_translation",
+    ),
+    ("createVirtualItem", "virtual_item"),
+    ("calculatedStatToFilter", "build_one"),
+    ("initUiModFilters", "build_stat_group"),
+    // Building the request body.
+    ("createTradeRequest", "build_query"),
+    ("nameToQuery", "new"),
+    ("tradeIdToQuery", "stat_filter_to_json"),
+    ("parseMods", "mod_block"),
     // Recalculating an item after a preview edit.
     ("applyEleAugment", "apply_elemental_rune"),
     ("recalculateItemProperties", "rescale"),
