@@ -1,3 +1,5 @@
 /.forge/
 .envrc
 target/
+/data-poe1/
+/data-poe2/

@@ -240,6 +240,19 @@ impl GameTables {
     pub fn item_name_count(&self) -> usize {
         self.by_name.len()
     }
+
+    /// Every stat reference paired with each of its matcher templates.
+    ///
+    /// Exists for `poe-trader-datacheck`, which renders a game line from every
+    /// template and checks the parser reads it back. Nothing in the overlay
+    /// needs this, and a coverage number that is not measured is a guess.
+    pub fn matchers(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.stats.iter().flat_map(|stat| {
+            stat.matchers
+                .iter()
+                .map(move |m| (stat.reference.as_str(), m.string.as_str()))
+        })
+    }
 }
 
 impl StatLookup for GameTables {
