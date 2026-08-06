@@ -92,6 +92,10 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Filter bounds and negation.
+    ("shortRollToFilter", "short_roll_to_filter"),
+    ("filterAdjustmentForNegate", "negate"),
+    ("getMinMax", "for_trade"),
     // PoE2 modifier splitting.
     ("parseModifiersPoe2", "read_modifier_section_poe2"),
     // Map and base percentile properties.
