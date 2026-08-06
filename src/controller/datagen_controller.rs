@@ -297,7 +297,7 @@ pub fn build_items(
 
             out.push(ItemRecord {
                 name,
-                namespace: if is_unique { "UNIQUE" } else { "ITEM" }.to_string(),
+                namespace: namespace_for(&group.id, is_unique).to_string(),
                 trade_discriminator: entry.disc.clone(),
                 category: category.map(|c| c.as_str().to_string()),
                 trade_tag: trade_tags.get(&name_for_tag).cloned(),
@@ -315,6 +315,29 @@ pub fn build_items(
     out.dedup();
 
     Ok(out)
+}
+
+/// Which table an entry belongs in.
+///
+/// The parser asks for a gem in the gem table, a divination card in the card
+/// table and an itemised monster in the beast table. Filing all three under
+/// `ITEM` made every one of those lookups miss, so a gem's query carried no
+/// type at all and matched the whole market.
+///
+/// A unique wins over its group. A unique gem is still looked up by name.
+fn namespace_for(group_id: &str, is_unique: bool) -> &'static str {
+    if is_unique {
+        return "UNIQUE";
+    }
+
+    match group_id {
+        "gem" => "GEM",
+        "card" => "DIVINATION_CARD",
+        // The trade site calls them itemised monsters. The parser and the
+        // reference both call the table captured beasts.
+        "monster" => "CAPTURED_BEAST",
+        _ => "ITEM",
+    }
 }
 
 /// Map an items group id to a category.
@@ -436,6 +459,15 @@ mod tests {
         {"id":"weapon","label":"Weapons","entries":[
             {"type":"Spine Bow"}
         ]},
+        {"id":"gem","label":"Gems","entries":[
+            {"type":"Awakened Fire Penetration Support"}
+        ]},
+        {"id":"card","label":"Cards","entries":[
+            {"type":"The Doctor"}
+        ]},
+        {"id":"monster","label":"Itemised Monsters","entries":[
+            {"type":"Cave Beast"}
+        ]},
         {"id":"something.new","label":"Unmapped","entries":[
             {"type":"Mystery Thing"}
         ]}
@@ -544,7 +576,7 @@ mod tests {
 
     #[test]
     fn the_live_items_shape_builds() {
-        assert_eq!(items().len(), 6);
+        assert_eq!(items().len(), 9);
     }
 
     #[test]
@@ -556,6 +588,55 @@ mod tests {
 
         assert_eq!(ring.category.as_deref(), Some("Ring"));
         assert_eq!(ring.namespace, "ITEM");
+    }
+
+    #[test]
+    fn a_gem_is_filed_in_the_gem_table() {
+        // The parser looks a gem up in the gem table. Filing it under ITEM
+        // made every gem lookup miss, so a gem query carried no type and
+        // priced against the whole market.
+        let gem = items()
+            .into_iter()
+            .find(|i| i.name == "Awakened Fire Penetration Support")
+            .unwrap();
+
+        assert_eq!(gem.namespace, "GEM");
+    }
+
+    #[test]
+    fn a_divination_card_is_filed_in_the_card_table() {
+        let card = items()
+            .into_iter()
+            .find(|i| i.name == "The Doctor")
+            .unwrap();
+
+        assert_eq!(card.namespace, "DIVINATION_CARD");
+    }
+
+    #[test]
+    fn an_itemised_monster_is_filed_in_the_beast_table() {
+        // The trade site calls the group itemised monsters. The parser calls
+        // the table captured beasts.
+        let beast = items()
+            .into_iter()
+            .find(|i| i.name == "Cave Beast")
+            .unwrap();
+
+        assert_eq!(beast.namespace, "CAPTURED_BEAST");
+    }
+
+    #[test]
+    fn every_namespace_written_is_one_the_parser_reads() {
+        // A namespace the parser cannot parse is a table nothing ever looks
+        // in, which fails silently.
+        for item in items() {
+            assert!(
+                poe_trader_core::adapter::data_adapter::Namespace::parse(&item.namespace).is_some(),
+                "{} was filed under {}",
+                item.name,
+                item.namespace
+            );
+        }
     }
 
     #[test]
