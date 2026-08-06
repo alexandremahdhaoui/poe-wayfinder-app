@@ -226,6 +226,36 @@ mod win {
         }
     }
 
+    /// Prove `SendInput` works, without touching anything the user owns.
+    ///
+    /// # Why this exists
+    ///
+    /// `SendInput` was the one Windows call in this build that no check
+    /// reached. It fires only on a hotkey press and types into whatever has
+    /// focus, so exercising it the ordinary way means pressing Ctrl+C on the
+    /// user's desktop and overwriting their clipboard. That is their state.
+    ///
+    /// So this sends `VK_NONAME` instead. Windows documents it as reserved
+    /// and it carries no character, no command and no binding. Every part of
+    /// the call is the same as a real copy: the same struct, the same size
+    /// argument, the same up and down pair, the same return check. Only the
+    /// key differs, and that key does nothing anywhere.
+    ///
+    /// What it proves is the call itself. Whether Windows then delivers a
+    /// Ctrl+C to the game is Windows' job, and the key order it would deliver
+    /// is decided and tested in `poe_trader_core::controller::overlay`.
+    ///
+    /// Returns how many events Windows accepted. Two is success.
+    pub fn self_test_send_input() -> u32 {
+        use windows::Win32::UI::Input::KeyboardAndMouse::VK_NONAME;
+
+        let events = [key_event(VK_NONAME, false), key_event(VK_NONAME, true)];
+
+        // SAFETY: the same contract as trigger_copy. A live, correctly sized
+        // array of INPUT and a size argument that matches INPUT exactly.
+        unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) }
+    }
+
     fn key_event(key: VIRTUAL_KEY, up: bool) -> INPUT {
         INPUT {
             r#type: INPUT_KEYBOARD,
@@ -245,7 +275,7 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{GameWindowAdapter, KeyboardCopyTrigger};
+pub use win::{self_test_send_input, GameWindowAdapter, KeyboardCopyTrigger};
 
 #[cfg(test)]
 mod tests {

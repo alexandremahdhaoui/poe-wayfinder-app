@@ -233,6 +233,28 @@ fn run_overlay(
         ),
     }
 
+    // The one Windows call nothing else reaches. It fires only on a hotkey
+    // press and types into whatever has focus, so the ordinary path cannot be
+    // exercised without overwriting the user's clipboard. This sends a key
+    // that does nothing anywhere and reports whether Windows took it.
+    //
+    // Logged at startup rather than hidden behind a flag, because a build
+    // whose SendInput does not work cannot copy an item and should say so
+    // before the user presses the hotkey and sees nothing happen.
+    let sent = poe_trader_app::adapter::game_window_adapter::self_test_send_input();
+
+    if sent == 2 {
+        log.info(
+            "keyboard input works",
+            &[("events_accepted", Value::Int(2))],
+        );
+    } else {
+        log.error(
+            "keyboard input is not working, a price check will not be able to copy the item",
+            &[("events_accepted", Value::Int(i64::from(sent)))],
+        );
+    }
+
     // Registered before the window opens. A hotkey another application owns
     // has to be reported now, not on the first press that does nothing.
     let hotkeys = match HotkeyDriver::start(&hotkey) {
