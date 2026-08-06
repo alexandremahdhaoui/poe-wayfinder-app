@@ -140,6 +140,38 @@ fn main() -> ExitCode {
         ],
     );
 
+    // The game's own config. Read for a diagnostic and not for the copy: since
+    // 3.29 a copy produces the detailed format on its own. Saying at startup
+    // whether the install was found turns a silent setup problem into a line
+    // the user can act on.
+    let game_config = poe_trader_app::adapter::game_config_adapter::read(
+        std::path::Path::new(&documents_dir()),
+        game,
+        poe_trader_app::adapter::game_config_adapter::load_from_disk,
+    );
+
+    log.info(
+        "game configuration",
+        &[
+            (
+                "path",
+                Value::Str(
+                    game_config
+                        .path
+                        .as_ref()
+                        .map_or_else(|| "not found".to_string(), |p| p.display().to_string()),
+                ),
+            ),
+            (
+                "show_mods_key",
+                Value::Str(game_config.show_mods_key.clone()),
+            ),
+            // The difference between reading Alt and assuming it. Both are the
+            // same key and very different confidence.
+            ("read", Value::Bool(game_config.read)),
+        ],
+    );
+
     #[cfg(windows)]
     return run_overlay(&cfg, game, data, hotkey, http, log);
 
@@ -461,4 +493,19 @@ fn now_millis() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
 
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// The user's documents folder.
+///
+/// The game writes its config under here. Read from the environment rather
+/// than guessed, because a user who moved their documents folder would
+/// otherwise get "not found" for a file that is plainly there.
+fn documents_dir() -> String {
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        return format!("{profile}\\Documents");
+    }
+
+    // Not Windows, or a stripped environment. The read reports not found,
+    // which is the honest answer rather than a guess at a path.
+    std::env::var("HOME").map_or_else(|_| String::new(), |home| format!("{home}/Documents"))
 }
