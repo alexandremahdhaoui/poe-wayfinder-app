@@ -49,6 +49,14 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "shortcutToElectron",
+        "maps a hotkey to Electron accelerator syntax, which this build has no Electron to accept",
+    ),
+    (
+        "addFileUploadRoutes",
+        "an Electron HTTP file upload server, deliberately absent: this build opens no listening socket",
+    ),
+    (
         "artificialSlowdown",
         "a Vue reactive timer for the spinner, no equivalent in an egui overlay",
     ),
@@ -112,6 +120,16 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // The overlay runtime, from Awakened PoE Trade's Electron shell.
+    ("isPoeItem", "clipboard_kind"),
+    ("isPointInsideRect", "point_in_rect"),
+    ("isStashArea", "is_stash_area"),
+    ("eventToString", "event_to_hotkey"),
+    ("pressKeysToCopyItemText", "keys_to_hold_for_copy"),
+    ("typeInChat", "type_in_chat"),
+    ("stashSearch", "stash_search"),
+    ("parseConfigHotkey", "parse_config_hotkey"),
+    ("readConfig", "parse_ini"),
     ("finalFilterTweaks", "final_filter_tweaks"),
     ("createNewStatFilter", "preview_filters"),
     // The last of the filter and parser helpers.
@@ -269,6 +287,23 @@ fn main() -> ExitCode {
         .cloned()
         .unwrap_or_else(|| "..".to_string());
 
+    // Which subtrees of the reference to measure. Configurable so a second
+    // reference with a different layout can be measured by the same tool
+    // rather than by a second one that drifts from this.
+    let subdirs: Vec<String> = args
+        .iter()
+        .position(|a| a == "--subdirs")
+        .and_then(|i| args.get(i + 1))
+        .map_or_else(
+            || {
+                ["parser", "web/price-check/filters", "web/price-check/trade"]
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect()
+            },
+            |v| v.split(',').map(|s| s.trim().to_string()).collect(),
+        );
+
     // A floor to fail below, so parity can only go up.
     let floor: f64 = args
         .iter()
@@ -287,20 +322,23 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let ref_files = collect_reference(reference);
+    let ref_files = collect_reference(reference, &subdirs);
     let our_source = collect_our_source(Path::new(&ours));
 
     report(&ref_files, &our_source, floor)
 }
 
 /// Read every reference source file worth tracking.
-fn collect_reference(root: &Path) -> Vec<RefFile> {
+fn collect_reference(root: &Path, subdirs: &[String]) -> Vec<RefFile> {
     let mut out = Vec::new();
 
-    // Only the parts we are porting. The Vue components and the Electron shell
-    // are replaced rather than ported, so counting them would report a gap
-    // that is not one.
-    for sub in ["parser", "web/price-check/filters", "web/price-check/trade"] {
+    // Only the parts we are porting. The Vue components are replaced rather
+    // than ported, so counting them would report a gap that is not one.
+    //
+    // The Electron shell used to be waved off the same way. That was wrong:
+    // its shortcut and host file modules hold real logic, and skipping them
+    // hid the fact that the overlay could not whisper a seller at all.
+    for sub in subdirs {
         collect_ts(&root.join(sub), &mut out);
     }
 

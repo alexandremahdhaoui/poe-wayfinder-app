@@ -101,3 +101,21 @@ test:
         - >-
           cargo run --quiet --release --bin poe-trader-parity --
           --min 100
+
+  # The overlay runtime, measured against the other reference.
+  #
+  # Awakened PoE Trade's Electron shell was waved off as "replaced rather than
+  # ported" and never measured. It held real logic, and skipping it hid that
+  # the overlay could not whisper a seller at all. It is measured now so that
+  # cannot happen again quietly.
+  - name: parity-overlay
+    runner: go://generic-test-runner
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          cargo run --quiet --release --bin poe-trader-parity --
+          --reference ../reference/awakened-poe-trade/main/src
+          --subdirs shortcuts,host-files,windowing
+          --min 100
