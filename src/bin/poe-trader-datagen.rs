@@ -12,7 +12,7 @@ use poe_trader_app::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPoli
 use poe_trader_app::adapter::trade_api_adapter::TradeUrls;
 use poe_trader_app::config::PoeTraderDatagenConfig;
 use poe_trader_app::controller::datagen_controller::{
-    build_items, build_stats, item_to_ndjson, stat_to_ndjson,
+    build_items, build_stats, build_trade_tags, item_to_ndjson, stat_to_ndjson,
 };
 use poe_trader_app::logging::{Logger, Value};
 use poe_trader_core::types::GameVersion;
@@ -117,6 +117,27 @@ async fn run() -> ExitCode {
         None => return ExitCode::FAILURE,
     };
 
+    // The bulk trading tags. The exchange endpoint knows a currency by a short
+    // id rather than by its name, and without this every currency price check
+    // goes to the search endpoint and returns the few individual listings
+    // instead of the market rate.
+    let static_body = match fetch(&http, &urls.data("static"), &log).await {
+        Some(body) => body,
+        None => return ExitCode::FAILURE,
+    };
+
+    let trade_tags = match build_trade_tags(&static_body) {
+        Ok(tags) => tags,
+        Err(err) => {
+            log.error(
+                "building trade tags",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
     let stats = match build_stats(&stats_body) {
         Ok(stats) => stats,
         Err(err) => {
@@ -126,7 +147,7 @@ async fn run() -> ExitCode {
         }
     };
 
-    let items = match build_items(&items_body) {
+    let items = match build_items(&items_body, &trade_tags) {
         Ok(items) => items,
         Err(err) => {
             log.error("building items", &[("error", Value::Str(err.to_string()))]);

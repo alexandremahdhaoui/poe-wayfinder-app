@@ -155,6 +155,7 @@ impl OverlayModel {
 mod tests {
     use super::*;
     use crate::types::overlay::Anchor;
+    use poe_trader_core::controller::bulk::Endpoint;
     use poe_trader_core::types::item::ParsedItem;
     use poe_trader_core::types::query::TradeQuery;
 
@@ -169,6 +170,8 @@ mod tests {
         PriceCheck {
             item: ParsedItem::default(),
             query: TradeQuery::default(),
+            endpoint: Endpoint::Search,
+            trade_tag: None,
         }
     }
 

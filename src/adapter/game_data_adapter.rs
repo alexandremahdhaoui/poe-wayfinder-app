@@ -119,6 +119,8 @@ struct WireItem {
     namespace: String,
     #[serde(default, rename = "tradeDisc")]
     trade_disc: Option<String>,
+    #[serde(default, rename = "tradeTag")]
+    trade_tag: Option<String>,
     #[serde(default)]
     craftable: Option<WireCraftable>,
     #[serde(default)]
@@ -211,6 +213,7 @@ impl GameTables {
                 reference_name: w.reference_name,
                 namespace: w.namespace,
                 trade_discriminator: w.trade_disc,
+                trade_tag: w.trade_tag,
                 craftable: w.craftable.is_some(),
                 map_tier: w.map.and_then(|m| m.tier),
                 category,

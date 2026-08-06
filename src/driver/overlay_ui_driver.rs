@@ -262,6 +262,7 @@ pub use win::{overlay_viewport, paint};
 mod tests {
     use super::*;
     use crate::types::overlay::{OverlayGeometry, WindowRect};
+    use poe_trader_core::controller::bulk::Endpoint;
     use poe_trader_core::controller::price_check::PriceCheck;
     use poe_trader_core::types::item::{BaseInfo, ItemRarity, ParsedItem, UnknownModifier};
     use poe_trader_core::types::modifier::ModifierType;
@@ -271,6 +272,8 @@ mod tests {
         PriceCheck {
             item,
             query: TradeQuery::default(),
+            endpoint: Endpoint::Search,
+            trade_tag: None,
         }
     }
 

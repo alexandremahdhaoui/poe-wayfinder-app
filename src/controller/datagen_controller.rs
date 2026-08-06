@@ -135,6 +135,71 @@ pub struct ItemRecord {
     pub namespace: String,
     pub trade_discriminator: Option<String>,
     pub category: Option<String>,
+    /// The id the exchange endpoint knows this item by.
+    ///
+    /// Absent for anything not traded in bulk, which is most items. Its
+    /// absence is what routes a price check to the search endpoint.
+    pub trade_tag: Option<String>,
+}
+
+/// Turn the static response into a map from item name to bulk trading tag.
+///
+/// # What the tag is for
+///
+/// The exchange endpoint knows a currency by a short id rather than by its
+/// name. `Divine Orb` is `divine` there, and sending the name finds nothing.
+///
+/// A name the table does not list is not traded in bulk, so it has no tag and
+/// its price check goes to the search endpoint instead.
+pub fn build_trade_tags(body: &str) -> Result<BTreeMap<String, String>, DatagenError> {
+    let parsed: StaticResponse =
+        serde_json::from_str(body).map_err(|source| DatagenError::Decode {
+            table: "static",
+            source,
+        })?;
+
+    let mut out = BTreeMap::new();
+
+    for group in parsed.result {
+        for entry in group.entries {
+            let (Some(text), Some(id)) = (entry.text, entry.id) else {
+                continue;
+            };
+
+            if text.trim().is_empty() || id.trim().is_empty() {
+                continue;
+            }
+
+            // First wins. The table lists a few names twice across groups and
+            // the earlier group is the one the exchange endpoint accepts.
+            out.entry(text).or_insert(id);
+        }
+    }
+
+    if out.is_empty() {
+        return Err(DatagenError::Empty { table: "static" });
+    }
+
+    Ok(out)
+}
+
+#[derive(serde::Deserialize)]
+struct StaticResponse {
+    result: Vec<StaticGroup>,
+}
+
+#[derive(serde::Deserialize)]
+struct StaticGroup {
+    #[serde(default)]
+    entries: Vec<StaticEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct StaticEntry {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 /// Turn the stats response into records.
@@ -193,7 +258,10 @@ pub fn build_stats(body: &str) -> Result<Vec<StatRecord>, DatagenError> {
 /// A unique entry is filed under the unique namespace and everything else
 /// under the item namespace. Mixing them makes the database lookup return a
 /// unique when the parser asked for a base.
-pub fn build_items(body: &str) -> Result<Vec<ItemRecord>, DatagenError> {
+pub fn build_items(
+    body: &str,
+    trade_tags: &BTreeMap<String, String>,
+) -> Result<Vec<ItemRecord>, DatagenError> {
     let parsed: ItemsResponse =
         serde_json::from_str(body).map_err(|source| DatagenError::Decode {
             table: "items",
@@ -225,11 +293,14 @@ pub fn build_items(body: &str) -> Result<Vec<ItemRecord>, DatagenError> {
 
             let category = group_category.or_else(|| category_from_name(&group.id, &name));
 
+            let name_for_tag = name.clone();
+
             out.push(ItemRecord {
                 name,
                 namespace: if is_unique { "UNIQUE" } else { "ITEM" }.to_string(),
                 trade_discriminator: entry.disc.clone(),
                 category: category.map(|c| c.as_str().to_string()),
+                trade_tag: trade_tags.get(&name_for_tag).cloned(),
             });
         }
     }
@@ -325,6 +396,10 @@ pub fn item_to_ndjson(record: &ItemRecord) -> String {
         value["tradeDisc"] = serde_json::Value::String(disc.clone());
     }
 
+    if let Some(tag) = &record.trade_tag {
+        value["tradeTag"] = serde_json::Value::String(tag.clone());
+    }
+
     if let Some(category) = &record.category {
         value["craftable"] = serde_json::json!({ "category": category });
     }
@@ -371,7 +446,7 @@ mod tests {
     }
 
     fn items() -> Vec<ItemRecord> {
-        build_items(ITEMS).unwrap()
+        build_items(ITEMS, &BTreeMap::new()).unwrap()
     }
 
     #[test]
@@ -538,7 +613,7 @@ mod tests {
             {"id":"accessory","entries":[{"type":"Sapphire Ring"}]}
         ]}"##;
 
-        assert_eq!(build_items(body).unwrap().len(), 1);
+        assert_eq!(build_items(body, &BTreeMap::new()).unwrap().len(), 1);
     }
 
     #[test]
@@ -547,12 +622,12 @@ mod tests {
             {},{"type":""},{"type":"Sapphire Ring"}
         ]}]}"##;
 
-        assert_eq!(build_items(body).unwrap().len(), 1);
+        assert_eq!(build_items(body, &BTreeMap::new()).unwrap().len(), 1);
     }
 
     #[test]
     fn an_empty_items_response_is_an_error() {
-        let err = build_items(r#"{"result":[]}"#).unwrap_err();
+        let err = build_items(r#"{"result":[]}"#, &BTreeMap::new()).unwrap_err();
 
         assert!(matches!(err, DatagenError::Empty { table: "items" }));
     }
