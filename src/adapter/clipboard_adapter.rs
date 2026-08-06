@@ -17,6 +17,8 @@
 
 use std::time::Duration;
 
+use poe_trader_core::controller::overlay::{clipboard_kind, ClipboardKind};
+
 use thiserror::Error;
 
 /// Why a clipboard read failed.
@@ -106,15 +108,22 @@ where
 
         let now = clipboard.read()?;
 
-        // Changed AND non empty. The game briefly empties the clipboard on the
-        // way, and reading that empty moment yields nothing to parse.
-        if now != before {
-            if let Some(text) = now {
-                if !text.trim().is_empty() {
-                    found = Some(text);
+        // Wait for item text, not for a change.
+        //
+        // Waiting for a change looks equivalent and is not. Pricing the same
+        // item twice leaves the clipboard already holding the game's answer,
+        // so nothing ever changes and the second press times out. A user who
+        // presses the key twice on one item is the most ordinary thing there
+        // is.
+        //
+        // Checking the content also rejects whatever the user had copied
+        // before. The game briefly empties the clipboard on the way, and a
+        // shopping list read at the wrong moment is priced as an item.
+        if let Some(text) = now {
+            if clipboard_kind(&text) != ClipboardKind::NotAnItem {
+                found = Some(text);
 
-                    break;
-                }
+                break;
             }
         }
     }
@@ -276,7 +285,7 @@ mod tests {
 
     #[test]
     fn the_copy_keystroke_is_sent_once() {
-        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("new")]);
+        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
         let trigger = FakeTrigger::new();
 
         copy_item(&mut clip, &trigger, fast(), false, no_sleep).unwrap();
@@ -383,7 +392,7 @@ mod tests {
     #[test]
     fn a_successful_copy_stops_waiting_early() {
         // A price check that always took the full timeout would feel broken.
-        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("new")]);
+        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
         let slept = RefCell::new(Duration::ZERO);
 
         copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |d| {
@@ -401,5 +410,43 @@ mod tests {
 
         assert!(t.timeout >= Duration::from_millis(500));
         assert!(t.poll_interval <= Duration::from_millis(20));
+    }
+
+    #[test]
+    fn pricing_the_same_item_twice_works() {
+        // The clipboard already holds the game's answer, so nothing changes.
+        // Waiting for a change times out here, and a user pressing the key
+        // twice on one item is the most ordinary thing there is.
+        let mut clip =
+            FakeClipboard::scripted(Some("Item Class: Rings"), vec![Some("Item Class: Rings")]);
+
+        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {}).unwrap();
+
+        assert_eq!(got, "Item Class: Rings");
+    }
+
+    #[test]
+    fn a_clipboard_that_never_holds_an_item_times_out() {
+        // The game did not answer. Returning the user's own clipboard would
+        // price their shopping list.
+        let mut clip = FakeClipboard::scripted(
+            Some("my notes"),
+            vec![Some("still my notes"), Some("and again")],
+        );
+
+        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {});
+
+        assert!(matches!(got, Err(ClipboardError::NoChange { .. })));
+    }
+
+    #[test]
+    fn a_foreign_client_item_is_returned_rather_than_timing_out() {
+        // It is item text. The parser is what tells the user their client is
+        // not English, and a timeout here would blame the clipboard instead.
+        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Класс предмета: Кольца")]);
+
+        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {}).unwrap();
+
+        assert!(got.starts_with("Класс предмета"));
     }
 }
