@@ -120,6 +120,25 @@ test:
           --subdirs shortcuts,host-files,windowing
           --min 100
 
+  # The PoE1 price check logic, measured against the reference that owns it.
+  #
+  # Exiled Exchange 2 is a PoE2 fork and drops what PoE1 needs. Its influence
+  # filter is commented out, its heist rules are gone and half its parser
+  # stages for PoE1 items went with them. Measuring only that reference read
+  # 100 percent while PoE1 was missing 23 functions.
+  #
+  # The floor only ever goes up.
+  - name: parity-poe1
+    runner: go://generic-test-runner
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          cargo run --quiet --release --bin poe-trader-parity --
+          --reference ../reference/awakened-poe-trade/renderer/src
+          --min 82
+
   # How much of each game's data file the parser can read back.
   #
   # Parity counts functions. This counts stats, which is what a wrong parser
