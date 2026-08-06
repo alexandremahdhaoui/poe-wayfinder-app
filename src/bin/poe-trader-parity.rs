@@ -84,6 +84,14 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Rendering a trade site listing.
+    ("parseAffixStrings", "parse_affix_strings"),
+    ("getTier", "tier_at"),
+    ("getTierV2", "tier_of"),
+    ("parseModBlock", "mod_block"),
+    ("buildItemProps", "item_properties"),
+    ("buildGrantSkillBlock", "granted_skills"),
+    ("buildNameBlock", "item_tags"),
     // Magic name and modifier identity.
     ("magicBasetype", "magic_base_type"),
     ("replaceHashWithValues", "fill_placeholders"),

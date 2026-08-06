@@ -100,4 +100,4 @@ test:
         - -c
         - >-
           cargo run --quiet --release --bin poe-trader-parity --
-          --min 71
+          --min 75
