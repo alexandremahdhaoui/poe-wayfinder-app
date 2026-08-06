@@ -84,6 +84,13 @@ const WAIVED: &[(&str, &str)] = &[
 /// recorded. Without it the tracker under-reports and stops being trusted,
 /// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
+    // Routing between the search and exchange endpoints.
+    ("apiToSatisfySearch", "endpoint_for"),
+    ("tradeTag", "trade_tag"),
+    ("preventQueueCreation", "queue_wait"),
+    ("toPricingResult", "seller_status"),
+    ("adjustRateLimits", "adjust"),
+    ("_adjustRateLimits", "parse_rate_limit_headers"),
     // Roll rounding and the item editors.
     ("decimalPlaces", "decimal_places"),
     ("roundRoll", "round_roll"),
