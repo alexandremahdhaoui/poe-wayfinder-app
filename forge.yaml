@@ -137,7 +137,7 @@ test:
         - >-
           cargo run --quiet --release --bin poe-trader-parity --
           --reference ../reference/awakened-poe-trade/renderer/src
-          --min 82
+          --min 92
 
   # How much of each game's data file the parser can read back.
   #

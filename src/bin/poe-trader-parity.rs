@@ -49,6 +49,14 @@ enum Status {
 /// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
+        "parseMemoryStrandsNested",
+        "the strand line loop inside parse_accessory, not a separate function",
+    ),
+    (
+        "parseScryingOrb",
+        "reads a map area from the AREA table, which the trade API does not publish: the reference extracts it from the game bundles",
+    ),
+    (
         "shortcutToElectron",
         "maps a hotkey to Electron accelerator syntax, which this build has no Electron to accept",
     ),
@@ -142,6 +150,10 @@ const ALIASES: &[(&str, &str)] = &[
         "try_secondary_parse_translation",
     ),
     ("createVirtualItem", "virtual_item"),
+    // The PoE1 heist rules. `applyHeistRules` is the pair of them run one
+    // after the other, which is `apply_heist_rules` in price_check.
+    ("applyContractRules", "contract_filters"),
+    ("applyBlueprintRules", "blueprint_exclusion"),
     ("calculatedStatToFilter", "build_one"),
     ("initUiModFilters", "build_stat_group"),
     // Building the request body.
