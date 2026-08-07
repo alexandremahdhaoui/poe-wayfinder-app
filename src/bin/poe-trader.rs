@@ -693,8 +693,14 @@ async fn search(
     // either: Exiled Exchange 2 sends whatever cookies its Electron session
     // happens to hold, and Awakened PoE Trade never mentions a session at all.
     //
-    // A session is still sent when one is configured, because it raises the
-    // rate limit and is what a heavy user wants.
+    // A session is still sent when one is configured, but it buys less than it
+    // looks. The search endpoint answers `x-rate-limit-rules: Ip`, so the
+    // limit is counted per address and not per account: signing in does not
+    // raise it. Measured anonymously as 5 per 10s, 15 per 60s, 30 per 300s
+    // and 600 per 6h.
+    //
+    // It is kept for the cases a session does change, such as a private
+    // league, and because a user who set one expects it to be used.
 
     // A query that narrows nothing matches the entire trade site, and the
     // price it comes back with is the market's median rather than this item's.
