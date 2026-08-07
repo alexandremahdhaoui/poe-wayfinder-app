@@ -28,6 +28,22 @@ fn main() -> ExitCode {
         return list_windows();
     }
 
+    // Price whatever is on the clipboard already, then exit.
+    //
+    // The price check chain is copy, parse, filter, search. Every link but the
+    // first is provable without a game. This proves the first one too, as far
+    // as anything can without one: it reads the real Windows clipboard through
+    // the same adapter the overlay uses.
+    //
+    // What is left after this is the game itself answering Ctrl+C, which is
+    // the game's behaviour and not ours.
+    let check_clipboard = args.iter().any(|a| a == "--check-clipboard");
+
+    let args: Vec<String> = args
+        .into_iter()
+        .filter(|a| a != "--check-clipboard")
+        .collect();
+
     let cfg = match PoeTraderConfig::load(&args) {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -181,6 +197,14 @@ fn main() -> ExitCode {
     );
 
     #[cfg(windows)]
+    if check_clipboard {
+        return check_clipboard_now(game, &data, &log);
+    }
+
+    #[cfg(not(windows))]
+    let _ = check_clipboard;
+
+    #[cfg(windows)]
     return run_overlay(&cfg, game, data, hotkey, http, log);
 
     #[cfg(not(windows))]
@@ -225,6 +249,111 @@ fn list_windows() -> ExitCode {
         eprintln!("poe-trader: --list-windows only works on Windows.");
 
         ExitCode::FAILURE
+    }
+}
+
+/// Read the clipboard and price what is on it, then exit.
+///
+/// Everything the hotkey does except sending the keystroke. Used to prove the
+/// clipboard adapter reads real Windows clipboard text and that the parser
+/// handles it, without needing the game running or touching what the user has
+/// copied.
+#[cfg(windows)]
+fn check_clipboard_now(game: GameVersion, data: &GameTables, log: &Logger) -> ExitCode {
+    use poe_trader_app::adapter::clipboard_adapter::{Clipboard, SystemClipboard};
+    use poe_trader_core::controller::overlay::{clipboard_kind, ClipboardKind};
+    use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
+
+    let mut clipboard = match SystemClipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(err) => {
+            log.error(
+                "opening the clipboard",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let text = match clipboard.read() {
+        Ok(Some(text)) => text,
+        Ok(None) => {
+            log.warn("the clipboard holds no text", &[]);
+
+            return ExitCode::FAILURE;
+        }
+        Err(err) => {
+            log.error(
+                "reading the clipboard",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let kind = clipboard_kind(&text);
+
+    log.info(
+        "read the clipboard",
+        &[
+            ("bytes", Value::Int(text.len() as i64)),
+            ("kind", Value::Str(format!("{kind:?}"))),
+        ],
+    );
+
+    if kind == ClipboardKind::NotAnItem {
+        log.warn(
+            "the clipboard does not hold a copied item. Copy one in game first.",
+            &[],
+        );
+
+        return ExitCode::FAILURE;
+    }
+
+    match price_check(&text, data, PriceCheckOptions::new(game)) {
+        Ok(checked) => {
+            log.info(
+                "priced the clipboard item",
+                &[
+                    ("name", Value::Str(checked.item.info.name.clone())),
+                    (
+                        "category",
+                        Value::Str(
+                            checked
+                                .item
+                                .category
+                                .map(|c| c.as_str().to_string())
+                                .unwrap_or_default(),
+                        ),
+                    ),
+                    ("modifiers", Value::Int(checked.item.modifiers.len() as i64)),
+                    (
+                        "stat_filters",
+                        Value::Int(checked.stat_filter_count() as i64),
+                    ),
+                    (
+                        "unknown_modifiers",
+                        Value::Int(checked.item.unknown_modifiers.len() as i64),
+                    ),
+                    (
+                        "constrains_something",
+                        Value::Bool(checked.constrains_something()),
+                    ),
+                ],
+            );
+
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            log.error(
+                "parsing the clipboard item",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            ExitCode::FAILURE
+        }
     }
 }
 
