@@ -252,6 +252,7 @@ fn run_overlay(
     use poe_trader_app::controller::price_check_loop;
     use poe_trader_app::driver::hotkey_driver::HotkeyDriver;
     use poe_trader_app::driver::overlay_ui_driver::{overlay_viewport, paint, UiEvent};
+    use poe_trader_app::driver::tray_driver::{accepts_hotkey, TrayAction, TrayIcon, TrayState};
     use poe_trader_app::types::overlay::OverlayGeometry;
     use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 
@@ -313,6 +314,38 @@ fn run_overlay(
             );
 
             return ExitCode::FAILURE;
+        }
+    };
+
+    // The only thing that tells the user the tool is running. The overlay
+    // draws nothing until a price check produces something and hides whenever
+    // the game is not in front, so without this a running overlay and one that
+    // never started look exactly the same.
+    //
+    // Not fatal. An overlay with no tray icon still prices items, and taking
+    // the process down over a missing icon would be worse than the icon is
+    // worth.
+    let mut tray_state = TrayState {
+        game_found: window.find().is_ok(),
+        paused: false,
+        has_search: false,
+        league: Some(cfg.league.clone()),
+        stat_count: data.stat_count(),
+    };
+
+    let tray = match TrayIcon::start(tray_state.clone(), game.as_str(), &hotkey.to_string()) {
+        Ok(tray) => {
+            log.info("tray icon added", &[]);
+
+            Some(tray)
+        }
+        Err(err) => {
+            log.warn(
+                "no tray icon. The overlay still works, but nothing will show it is running.",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            None
         }
     };
 
@@ -381,11 +414,121 @@ fn run_overlay(
     // repeat a line already logged.
     let mut window_was_found = window.find().is_ok();
 
+    // The last search, kept for "Open in browser" and "Search again".
+    let mut last_search: Option<SearchOutcome> = None;
+
+    // What the panel asked for while it was being drawn. See where it is
+    // drained.
+    let mut pending_ui_events: Vec<UiEvent> = Vec::new();
+
+    let cfg_site_url = cfg.trade_base_url.clone();
+    let cfg_data_dir = cfg.data_dir.clone();
+
     let result = eframe::run_simple_native("poe-trader", native_options, move |ctx, _frame| {
-        // A press drains the whole queue. Queuing them would run one price
-        // check per press after a stutter, which is what the rate limiter
-        // exists to prevent.
-        if hotkeys.fired() {
+        // Everything the user asked for this frame, from the tray and from the
+        // panel's own buttons. They are the same actions and are handled in
+        // one place, because the panel's buttons used to be handled with an
+        // empty match arm and did nothing at all.
+        let mut asked: Vec<TrayAction> = tray.as_ref().map(|t| t.actions()).unwrap_or_default();
+
+        for event in pending_ui_events.drain(..) {
+            match event {
+                UiEvent::OpenInBrowser => asked.push(TrayAction::OpenInBrowser),
+                UiEvent::Research => asked.push(TrayAction::Research),
+                UiEvent::Dismiss => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                UiEvent::ToggleFilter(_) => {}
+            }
+        }
+
+        for action in asked {
+            match action {
+                TrayAction::Quit => {
+                    search_log.info("quit chosen from the tray", &[]);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+
+                TrayAction::TogglePaused => {
+                    tray_state.paused = !tray_state.paused;
+
+                    search_log.info(
+                        "pause toggled",
+                        &[("paused", Value::Bool(tray_state.paused))],
+                    );
+                }
+
+                TrayAction::OpenInBrowser => match &last_search {
+                    Some(outcome) => match outcome.browser_url(&cfg_site_url, game, &league) {
+                        Some(url) => {
+                            search_log
+                                .info("opening the search", &[("url", Value::Str(url.clone()))]);
+                            open_in_browser(&url);
+                        }
+                        None => search_log.warn("the last search has no id to open", &[]),
+                    },
+                    None => model.warn("Nothing searched yet."),
+                },
+
+                TrayAction::Research => match model.result() {
+                    Some(checked) => {
+                        let checked = checked.clone();
+
+                        search_log.info("searching again", &[]);
+
+                        match runtime.block_on(search(
+                            &http,
+                            &urls,
+                            &league,
+                            &session,
+                            latency,
+                            &mut limits,
+                            &checked,
+                        )) {
+                            Ok(outcome) => {
+                                let total = outcome.total;
+                                last_search = Some(outcome);
+                                model.finish(checked, total);
+                            }
+                            Err(message) => model.warn(&message),
+                        }
+                    }
+                    None => model.warn("Nothing to search again yet."),
+                },
+
+                TrayAction::RebuildData => {
+                    search_log.info("rebuilding the game data", &[]);
+
+                    match rebuild_data(game, &cfg_data_dir) {
+                        Ok(()) => model.warn("Rebuilding the data. Restart when it finishes."),
+                        Err(message) => {
+                            search_log.error(
+                                "rebuilding the game data",
+                                &[("error", Value::Str(message.clone()))],
+                            );
+
+                            model.warn(&format!("Could not rebuild the data: {message}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Read once. `fired` drains the queue, so asking twice swallows the
+        // press and the second answer is always false.
+        let pressed = hotkeys.fired();
+
+        // The model decides whether to act on it. Pausing, a missing game and
+        // an empty data file each make a price check meaningless, and copying
+        // with no game in front takes text from whatever else has focus.
+        if pressed && !accepts_hotkey(&tray_state) {
+            search_log.info(
+                "hotkey ignored",
+                &[
+                    ("paused", Value::Bool(tray_state.paused)),
+                    ("game_found", Value::Bool(tray_state.game_found)),
+                    ("stats", Value::Int(tray_state.stat_count as i64)),
+                ],
+            );
+        } else if pressed {
             // Logged on every press. Without this line a user whose hotkey
             // never reaches us and a user whose price check silently worked
             // see exactly the same empty log, and there is no way to tell
@@ -410,7 +553,7 @@ fn run_overlay(
                 },
                 |text| price_check(text, &data, options).map_err(|e| format!("{e}")),
                 |checked| {
-                    runtime.block_on(search(
+                    let outcome = runtime.block_on(search(
                         &http,
                         &urls,
                         &league,
@@ -418,7 +561,16 @@ fn run_overlay(
                         latency,
                         &mut limits,
                         checked,
-                    ))
+                    ))?;
+
+                    let total = outcome.total;
+
+                    // Kept so "Open in browser" has something to open. The
+                    // loop only needs the total, and the id is the half that
+                    // turns a search into a link.
+                    last_search = Some(outcome);
+
+                    Ok(total)
                 },
             );
 
@@ -435,6 +587,15 @@ fn run_overlay(
         }
 
         let found = window.find().ok();
+
+        // The tray shows what the app is doing, so it has to be told. Cheap:
+        // the icon is only touched when something actually changed.
+        tray_state.game_found = found.is_some();
+        tray_state.has_search = model.result().is_some();
+
+        if let Some(tray) = &tray {
+            tray.update(tray_state.clone());
+        }
 
         // Said once each time the answer changes. The overlay draws nothing at
         // all while the window is missing, and without this the user sees an
@@ -478,12 +639,11 @@ fn run_overlay(
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(frame.rect.is_some()));
         ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(!frame.takes_input));
 
-        for event in paint(ctx, &model) {
-            match event {
-                UiEvent::Dismiss => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                UiEvent::OpenInBrowser | UiEvent::Research | UiEvent::ToggleFilter(_) => {}
-            }
-        }
+        // Queued rather than handled here. The panel is drawn while `model` is
+        // borrowed, and both Research and Open in browser need to change it.
+        // They run at the top of the next frame, one sixtieth of a second
+        // later, which no user can perceive.
+        pending_ui_events.extend(paint(ctx, &model));
 
         // Repaint continuously. The game window can move at any time and there
         // is no event that tells us.
@@ -518,7 +678,7 @@ async fn search(
     latency: u32,
     limits: &mut poe_trader_app::adapter::rate_limit_adapter::LimiterSet,
     checked: &poe_trader_core::controller::price_check::PriceCheck,
-) -> Result<u64, String> {
+) -> Result<SearchOutcome, String> {
     use poe_trader_app::adapter::http_adapter::HttpClient;
     use poe_trader_app::adapter::query_json_adapter::{to_exchange_json, to_json};
     use poe_trader_app::controller::price_check_controller::read_search_result;
@@ -580,7 +740,131 @@ async fn search(
 
     let result = read_search_result(&response).map_err(|e| format!("{e}"))?;
 
-    Ok(result.total)
+    // The id comes back as well as the total, because it is what turns a
+    // search into a link. Without it "Open in browser" has nothing to open.
+    Ok(SearchOutcome {
+        total: result.total,
+        id: result.id,
+        exchange: exchange.is_some(),
+    })
+}
+
+/// Open a url in the user's browser.
+///
+/// `ShellExecuteW` rather than spawning a browser by name, because it honours
+/// whatever the user set as their default. Failure is ignored: the url is
+/// already in the log, so the user can copy it.
+#[cfg(windows)]
+fn open_in_browser(url: &str) {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let verb: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // SAFETY: both strings are null terminated and live for the call.
+    unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+/// Rebuild the game data by running the builder beside this binary.
+///
+/// Spawned rather than awaited. A full rebuild takes tens of seconds and the
+/// overlay must not freeze over the game for that long, so the user is told to
+/// restart when it finishes.
+#[cfg(windows)]
+fn rebuild_data(game: GameVersion, data_dir: &str) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("finding this binary: {e}"))?;
+
+    let builder = exe
+        .parent()
+        .ok_or_else(|| "this binary has no directory".to_string())?
+        .join("poe-trader-datagen.exe");
+
+    if !builder.exists() {
+        return Err(format!(
+            "{} is not next to the overlay",
+            builder.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+
+    std::process::Command::new(&builder)
+        .args(["--game", game.as_str(), "--out-dir", data_dir])
+        .spawn()
+        .map_err(|e| format!("starting {}: {e}", builder.display()))?;
+
+    Ok(())
+}
+
+/// What one search produced.
+///
+/// Only the overlay reads this, and the overlay is Windows only. The tests
+/// below still exercise the url building on every platform, because a wrong
+/// trade path is a 404 that reads to the user as the tool being broken.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct SearchOutcome {
+    /// How many listings matched.
+    total: u64,
+    /// The trade site's id for this search.
+    id: String,
+    /// Whether it went to the exchange endpoint, which the site shows under a
+    /// different path.
+    exchange: bool,
+}
+
+impl SearchOutcome {
+    /// The page a person would open to see this search.
+    ///
+    /// Not the API url. The API answers with JSON and the user wants the site.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn browser_url(&self, base: &str, game: GameVersion, league: &str) -> Option<String> {
+        if self.id.is_empty() {
+            return None;
+        }
+
+        let section = match (game, self.exchange) {
+            (GameVersion::Poe1, false) => "trade/search",
+            (GameVersion::Poe1, true) => "trade/exchange",
+            (GameVersion::Poe2, false) => "trade2/search/poe2",
+            (GameVersion::Poe2, true) => "trade2/exchange/poe2",
+        };
+
+        Some(format!(
+            "{}/{section}/{}/{}",
+            base.trim_end_matches('/'),
+            urlencode(league),
+            self.id
+        ))
+    }
+}
+
+/// Percent encode the characters a league name can carry.
+///
+/// A league is named things like "Settlers HC" and a raw space in a url is
+/// rejected by some browsers and silently truncated by others.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn urlencode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    out
 }
 
 /// Milliseconds since the process started.
@@ -610,4 +894,102 @@ fn documents_dir() -> String {
     // Not Windows, or a stripped environment. The read reports not found,
     // which is the honest answer rather than a guess at a path.
     std::env::var("HOME").map_or_else(|_| String::new(), |home| format!("{home}/Documents"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(id: &str, exchange: bool) -> SearchOutcome {
+        SearchOutcome {
+            total: 12,
+            id: id.to_string(),
+            exchange,
+        }
+    }
+
+    const SITE: &str = "https://www.pathofexile.com";
+
+    #[test]
+    fn a_poe2_search_opens_the_trade2_path() {
+        // PoE1 and PoE2 are different sites under one domain. The wrong path
+        // is a 404, which reads to the user as the tool being broken.
+        let got = outcome("abc123", false)
+            .browser_url(SITE, GameVersion::Poe2, "Standard")
+            .unwrap();
+
+        assert_eq!(
+            got,
+            "https://www.pathofexile.com/trade2/search/poe2/Standard/abc123"
+        );
+    }
+
+    #[test]
+    fn a_poe1_search_opens_the_trade_path() {
+        let got = outcome("abc123", false)
+            .browser_url(SITE, GameVersion::Poe1, "Standard")
+            .unwrap();
+
+        assert_eq!(
+            got,
+            "https://www.pathofexile.com/trade/search/Standard/abc123"
+        );
+    }
+
+    #[test]
+    fn a_currency_search_opens_the_exchange_path() {
+        // Currency goes to the exchange endpoint, and the site shows those
+        // under a different path. Opening the search path shows nothing.
+        let got = outcome("abc123", true)
+            .browser_url(SITE, GameVersion::Poe2, "Standard")
+            .unwrap();
+
+        assert!(got.contains("/exchange/"), "{got}");
+    }
+
+    #[test]
+    fn a_search_with_no_id_opens_nothing() {
+        // Better than opening a url that cannot work.
+        assert_eq!(
+            outcome("", false).browser_url(SITE, GameVersion::Poe2, "Standard"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_league_with_a_space_is_encoded() {
+        // A raw space is rejected by some browsers and silently truncated by
+        // others, which loses the league and searches the wrong one.
+        let got = outcome("abc", false)
+            .browser_url(SITE, GameVersion::Poe2, "Settlers HC")
+            .unwrap();
+
+        assert!(got.contains("Settlers%20HC"), "{got}");
+        assert!(!got.contains("Settlers HC"), "{got}");
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_site_url_does_not_double() {
+        let got = outcome("abc", false)
+            .browser_url(
+                "https://www.pathofexile.com/",
+                GameVersion::Poe2,
+                "Standard",
+            )
+            .unwrap();
+
+        assert!(!got.contains("com//"), "{got}");
+    }
+
+    #[test]
+    fn encoding_leaves_the_unreserved_characters_alone() {
+        // Percent encoding every character would work and would make the url
+        // unreadable in a log.
+        assert_eq!(urlencode("Standard-1_2.3~x"), "Standard-1_2.3~x");
+    }
+
+    #[test]
+    fn encoding_escapes_what_a_url_cannot_carry() {
+        assert_eq!(urlencode("a/b?c#d"), "a%2Fb%3Fc%23d");
+    }
 }

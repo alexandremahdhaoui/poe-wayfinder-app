@@ -25,6 +25,9 @@ windows = { workspace = true, features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_Graphics_Gdi",
   "Win32_UI_HiDpi",
+  # The tray icon. A feature on a crate already depended on, not a new one.
+  "Win32_UI_Shell",
+  "Win32_System_LibraryLoader",
 ] }
 
 [dev-dependencies]
