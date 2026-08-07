@@ -33,6 +33,10 @@ fn main() -> ExitCode {
     //
     // It stops short of Windows itself handing over a real key press, which
     // no test can reach. See the function.
+    if args.iter().any(|a| a == "--self-test-hook") {
+        return self_test_hook();
+    }
+
     if args.iter().any(|a| a == "--self-test-hotkey") {
         return self_test_hotkey();
     }
@@ -48,9 +52,13 @@ fn main() -> ExitCode {
     // the game's behaviour and not ours.
     let check_clipboard = args.iter().any(|a| a == "--check-clipboard");
 
+    // Press the hotkey at whatever overlay is already running, then exit. The
+    // one link no single process can test. See `press_hotkey`.
+    let press = args.iter().any(|a| a == "--press-hotkey");
+
     let args: Vec<String> = args
         .into_iter()
-        .filter(|a| a != "--check-clipboard")
+        .filter(|a| a != "--check-clipboard" && a != "--press-hotkey")
         .collect();
 
     let cfg = match PoeTraderConfig::load(&args) {
@@ -140,6 +148,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // After the hotkey is parsed, because the point is to press the one the
+    // overlay is actually watching, and before the data loads, because pressing
+    // a key needs none of it.
+    if press {
+        return press_hotkey(&hotkey);
+    }
 
     let Some(game) = GameVersion::parse(&cfg.game) else {
         log.error("unknown game", &[("game", Value::Str(cfg.game.clone()))]);
@@ -346,6 +361,264 @@ fn self_test_hotkey() -> ExitCode {
 #[cfg(not(windows))]
 fn self_test_hotkey() -> ExitCode {
     eprintln!("poe-trader: --self-test-hotkey only works on Windows.");
+
+    ExitCode::FAILURE
+}
+
+/// Press the configured hotkey, then exit.
+///
+/// # Why a flag and not a test
+///
+/// The last untested link is a press arriving at a *running overlay* rather
+/// than at a test that installed its own hook. That needs two processes, so one
+/// of them has to be able to do nothing but press the key.
+///
+/// With this, the whole thing is checkable without a human: start the overlay,
+/// run this, read the log.
+#[cfg(windows)]
+fn press_hotkey(hotkey: &Hotkey) -> ExitCode {
+    use poe_trader_app::types::Modifier;
+
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY,
+    };
+
+    let Some(code) = poe_trader_app::driver::hotkey_driver::virtual_key_code(hotkey.key()) else {
+        eprintln!("poe-trader: {hotkey} has no Windows key code.");
+
+        return ExitCode::FAILURE;
+    };
+
+    fn key(code: u16, down: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(code),
+                    wScan: 0,
+                    dwFlags: if down {
+                        KEYBD_EVENT_FLAGS(0)
+                    } else {
+                        KEYEVENTF_KEYUP
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    let modifier_code = |m: &Modifier| match m {
+        Modifier::Ctrl => 0x11,
+        Modifier::Alt => 0x12,
+        Modifier::Shift => 0x10,
+        Modifier::Meta => 0x5B,
+    };
+
+    // Modifiers down, key, then everything up in reverse. The hook tracks
+    // modifier state as it goes, so a key pressed before its modifiers would
+    // arrive with none of them held and match nothing.
+    let mut presses: Vec<INPUT> = hotkey
+        .modifiers()
+        .iter()
+        .map(|m| key(modifier_code(m), true))
+        .collect();
+
+    presses.push(key(code, true));
+    presses.push(key(code, false));
+
+    for m in hotkey.modifiers().iter().rev() {
+        presses.push(key(modifier_code(m), false));
+    }
+
+    // SAFETY: a live array of correctly sized INPUT values.
+    let sent = unsafe { SendInput(&presses, std::mem::size_of::<INPUT>() as i32) };
+
+    if sent as usize != presses.len() {
+        eprintln!(
+            "poe-trader: only {sent} of {} events were accepted.",
+            presses.len()
+        );
+
+        return ExitCode::FAILURE;
+    }
+
+    eprintln!("poe-trader: pressed {hotkey}.");
+
+    ExitCode::SUCCESS
+}
+
+#[cfg(not(windows))]
+fn press_hotkey(_hotkey: &Hotkey) -> ExitCode {
+    eprintln!("poe-trader: --press-hotkey only works on Windows.");
+
+    ExitCode::FAILURE
+}
+
+/// The configured modifiers, in the shape the hook matcher wants.
+///
+/// # Why this is not a `From` impl
+///
+/// `Hotkey` lives in the app crate and the matcher in core, and core is not
+/// allowed to know about either. Converting here keeps that boundary and puts
+/// the mapping somewhere it can be tested on its own, which matters because a
+/// swapped pair here means the hotkey silently never matches.
+///
+/// Only the Windows build calls it, but it is compiled and tested everywhere,
+/// because a mapping that only exists on the platform it cannot be tested on is
+/// how the swap gets in.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn hook_modifiers(hotkey: &Hotkey) -> poe_trader_core::controller::hotkey_match::Modifiers {
+    use poe_trader_app::types::Modifier;
+    use poe_trader_core::controller::hotkey_match::Modifiers;
+
+    let has = |wanted: Modifier| hotkey.modifiers().contains(&wanted);
+
+    Modifiers {
+        ctrl: has(Modifier::Ctrl),
+        alt: has(Modifier::Alt),
+        shift: has(Modifier::Shift),
+        meta: has(Modifier::Meta),
+    }
+}
+
+/// Press the keys for real and check the hook sees them.
+///
+/// # Why this one is a genuine end to end test and `--self-test-hotkey` is not
+///
+/// `RegisterHotKey` ignores input flagged `LLKHF_INJECTED`, so the other test
+/// can only post a message to its own thread and prove the plumbing behind the
+/// press. A low level keyboard hook is called for injected input too, so here
+/// the keys are actually pressed with `SendInput` and the whole path runs:
+/// Windows, the hook procedure, the modifier tracking, the match, the counter.
+///
+/// Nothing about this needs the game open or a human at the keyboard.
+#[cfg(windows)]
+fn self_test_hook() -> ExitCode {
+    use poe_trader_app::driver::hook_driver::HookDriver;
+    use poe_trader_core::controller::hotkey_match::Modifiers;
+
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY,
+    };
+
+    // F24 with three modifiers. Nothing binds it, so pressing it cannot do
+    // something else on the machine while the test runs.
+    const F24: u16 = 0x87;
+    const CTRL: u16 = 0x11;
+    const ALT: u16 = 0x12;
+    const SHIFT: u16 = 0x10;
+
+    let log = Logger::new("info", "poe-trader");
+
+    let wanted = Modifiers {
+        ctrl: true,
+        alt: true,
+        shift: true,
+        meta: false,
+    };
+
+    let mut hook = match HookDriver::start(F24, wanted) {
+        Ok(hook) => hook,
+        Err(err) => {
+            log.error(
+                "installing the keyboard hook",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    log.info(
+        "hook installed",
+        &[("hotkey", Value::Str("Ctrl+Alt+Shift+F24".into()))],
+    );
+
+    /// One key going down or coming up.
+    fn key(code: u16, down: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(code),
+                    wScan: 0,
+                    dwFlags: if down {
+                        KEYBD_EVENT_FLAGS(0)
+                    } else {
+                        KEYEVENTF_KEYUP
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    // Modifiers down first, then the key, then everything up in reverse. The
+    // order matters: the hook tracks modifier state as it goes, so a key
+    // pressed before its modifiers would not match.
+    let presses = [
+        key(CTRL, true),
+        key(ALT, true),
+        key(SHIFT, true),
+        key(F24, true),
+        key(F24, false),
+        key(SHIFT, false),
+        key(ALT, false),
+        key(CTRL, false),
+    ];
+
+    // SAFETY: a live array of correctly sized INPUT values.
+    let sent = unsafe { SendInput(&presses, std::mem::size_of::<INPUT>() as i32) };
+
+    if sent as usize != presses.len() {
+        log.error(
+            "the key presses were not accepted. Something is blocking injected \
+             input, usually another tool or a privilege mismatch.",
+            &[("sent", Value::Int(sent as i64))],
+        );
+
+        hook.stop();
+
+        return ExitCode::FAILURE;
+    }
+
+    // The press crosses into the hook thread, so the answer is not instant.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+    while std::time::Instant::now() < deadline {
+        if hook.fired() {
+            log.info(
+                "a real key press reached the hook and matched. The whole press \
+                 path works without anyone touching the keyboard.",
+                &[],
+            );
+
+            hook.stop();
+
+            return ExitCode::SUCCESS;
+        }
+
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    log.error(
+        "the keys were pressed and the hook never matched. The hook, the \
+         modifier tracking or the match is broken.",
+        &[],
+    );
+
+    hook.stop();
+
+    ExitCode::FAILURE
+}
+
+#[cfg(not(windows))]
+fn self_test_hook() -> ExitCode {
+    eprintln!("poe-trader: --self-test-hook only works on Windows.");
 
     ExitCode::FAILURE
 }
@@ -588,6 +861,43 @@ fn run_overlay(
         }
     };
 
+    // The same hotkey, watched a second way.
+    //
+    // `RegisterHotKey` above is the smaller ask and it sees nothing but its own
+    // combination, so it stays. But it can register cleanly and then never be
+    // delivered, which is the hardest failure this tool has and the one that
+    // made the overlay look dead in game.
+    //
+    // A low level hook is what Awakened PoE Trade uses and it fires where the
+    // registration does not. It is also the only path that can be tested end to
+    // end, by `--self-test-hook`, because a hook is called for injected input
+    // and the hotkey machinery is not.
+    //
+    // Both feed the same drained check below, so a press that arrives on both
+    // paths is still one price check.
+    //
+    // Not fatal. If the hook will not install, the registration alone is what
+    // the tool had before.
+    let mut hook = match poe_trader_app::driver::hook_driver::HookDriver::start(
+        poe_trader_app::driver::hotkey_driver::virtual_key_code(hotkey.key()).unwrap_or(0),
+        hook_modifiers(&hotkey),
+    ) {
+        Ok(hook) => {
+            log.info("watching the hotkey with a keyboard hook as well", &[]);
+
+            Some(hook)
+        }
+        Err(err) => {
+            log.warn(
+                "the keyboard hook did not install. The hotkey still works if \
+                 Windows delivers the registration.",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            None
+        }
+    };
+
     // The only thing that tells the user the tool is running. The overlay
     // draws nothing until a price check produces something and hides whenever
     // the game is not in front, so without this a running overlay and one that
@@ -695,7 +1005,33 @@ fn run_overlay(
     let cfg_site_url = cfg.trade_base_url.clone();
     let cfg_data_dir = cfg.data_dir.clone();
 
+    // Whether the frame loop has ever run.
+    //
+    // Everything up to here logs a line, and then the log stops, which reads
+    // the same whether the loop is running quietly or never started at all.
+    // The hotkey is only read inside the loop, so a loop that never starts is
+    // a hotkey that never works, and it looked exactly like a hotkey Windows
+    // refused to deliver.
+    let mut first_frame = true;
+    let mut frames: i64 = 0;
+
     let result = eframe::run_simple_native("poe-trader", native_options, move |ctx, _frame| {
+        if first_frame {
+            first_frame = false;
+
+            search_log.info("the frame loop is running. The hotkey is being read.", &[]);
+        }
+
+        frames += 1;
+
+        // A heartbeat, because the loop stopping is a real failure mode and it
+        // stopped silently once already. Every ten seconds at roughly ten
+        // frames a second, and only at debug, so it costs nothing to leave in
+        // and is there when somebody asks why the hotkey went quiet.
+        if frames % 100 == 0 {
+            search_log.debug("frame loop alive", &[("frames", Value::Int(frames))]);
+        }
+
         // Everything the user asked for this frame, from the tray and from the
         // panel's own buttons. They are the same actions and are handled in
         // one place, because the panel's buttons used to be handled with an
@@ -785,7 +1121,13 @@ fn run_overlay(
 
         // Read once. `fired` drains the queue, so asking twice swallows the
         // press and the second answer is always false.
-        let pressed = hotkeys.fired();
+        //
+        // Both paths are drained every frame, not just until one answers, or a
+        // press seen on both would leave the other one armed and fire a second
+        // price check on the next frame.
+        let by_registration = hotkeys.fired();
+        let by_hook = hook.as_mut().is_some_and(|hook| hook.fired());
+        let pressed = by_registration || by_hook;
 
         // The model decides whether to act on it. Pausing, a missing game and
         // an empty data file each make a price check meaningless, and copying
@@ -896,19 +1238,35 @@ fn run_overlay(
 
         // The window follows the game every frame. The game can be moved,
         // resized or alt tabbed at any moment.
-        if let Some(rect) = frame.rect {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                rect.x as f32,
-                rect.y as f32,
-            )));
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                rect.width as f32,
-                rect.height as f32,
-            )));
-        }
+        //
+        // With no game it is parked off screen rather than hidden. Windows does
+        // not repaint a hidden window, and this loop runs from a repaint, so
+        // hiding it stopped the loop and with it the hotkey. See
+        // `overlay_placement`.
+        let placement = poe_trader_app::driver::overlay_placement::placement(
+            frame
+                .rect
+                .map(|r| poe_trader_app::driver::overlay_placement::Rect {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                }),
+            frame.takes_input,
+        );
 
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(frame.rect.is_some()));
-        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(!frame.takes_input));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            placement.x,
+            placement.y,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+            placement.width,
+            placement.height,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(placement.visible));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(
+            placement.passthrough,
+        ));
 
         // Queued rather than handled here. The panel is drawn while `model` is
         // borrowed, and both Research and Open in browser need to change it.
@@ -1200,6 +1558,66 @@ mod tests {
     }
 
     const SITE: &str = "https://www.pathofexile.com";
+
+    // -----------------------------------------------------------------
+    // The configured hotkey, as the hook matcher sees it
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn every_modifier_maps_to_its_own_flag() {
+        // One at a time, because a swapped pair is invisible when they are set
+        // together and means the hotkey silently never matches.
+        for (text, wanted) in [
+            ("Ctrl+D", (true, false, false, false)),
+            ("Alt+D", (false, true, false, false)),
+            ("Shift+D", (false, false, true, false)),
+            ("Meta+D", (false, false, false, true)),
+        ] {
+            let hotkey = Hotkey::parse(text).expect(text);
+            let got = hook_modifiers(&hotkey);
+
+            assert_eq!(
+                (got.ctrl, got.alt, got.shift, got.meta),
+                wanted,
+                "{text} maps wrong"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hotkey_with_no_modifiers_wants_none() {
+        let got = hook_modifiers(&Hotkey::parse("F5").expect("F5"));
+
+        assert_eq!(
+            (got.ctrl, got.alt, got.shift, got.meta),
+            (false, false, false, false)
+        );
+    }
+
+    #[test]
+    fn several_modifiers_are_all_carried() {
+        let got = hook_modifiers(&Hotkey::parse("Ctrl+Alt+Shift+D").expect("hotkey"));
+
+        assert_eq!(
+            (got.ctrl, got.alt, got.shift, got.meta),
+            (true, true, true, false)
+        );
+    }
+
+    #[test]
+    fn the_default_hotkey_is_watchable_by_the_hook() {
+        // The whole reason the hook exists. If either half of this fails the
+        // hook is installed and can never match, which looks exactly like the
+        // registration failure it was added to work around.
+        let hotkey = Hotkey::parse("Ctrl+D").expect("hotkey");
+        let code = poe_trader_app::driver::hotkey_driver::virtual_key_code(hotkey.key());
+
+        assert_eq!(code, Some(0x44));
+
+        let mods = hook_modifiers(&hotkey);
+
+        assert!(mods.ctrl && !mods.alt && !mods.shift && !mods.meta);
+    }
 
     #[test]
     fn a_poe2_search_opens_the_trade2_path() {
