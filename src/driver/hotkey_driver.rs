@@ -119,10 +119,14 @@ mod win {
 
     use std::sync::mpsc::{self, Receiver};
 
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetMessageW, PostThreadMessageW, MSG, WM_HOTKEY,
+    };
 
     /// Our id for the price check hotkey.
     const PRICE_CHECK_ID: i32 = 1;
@@ -134,6 +138,11 @@ mod win {
     /// and the UI thread is busy drawing.
     pub struct HotkeyDriver {
         presses: Receiver<()>,
+        /// The thread Windows delivers `WM_HOTKEY` to.
+        ///
+        /// Kept so a self test can post the same message this thread waits
+        /// for. See `simulate_press`.
+        thread_id: u32,
     }
 
     impl HotkeyDriver {
@@ -147,8 +156,12 @@ mod win {
 
             let (ready_tx, ready_rx) = mpsc::channel();
             let (press_tx, press_rx) = mpsc::channel();
+            let (id_tx, id_rx) = mpsc::channel();
 
             std::thread::spawn(move || {
+                // SAFETY: no arguments and no failure mode.
+                let _ = id_tx.send(unsafe { GetCurrentThreadId() });
+
                 // SAFETY: a null window handle registers the hotkey against
                 // this thread, which is exactly what the message loop below
                 // reads from.
@@ -188,9 +201,37 @@ mod win {
             });
 
             match ready_rx.recv() {
-                Ok(true) => Ok(Self { presses: press_rx }),
+                Ok(true) => Ok(Self {
+                    presses: press_rx,
+                    thread_id: id_rx.recv().unwrap_or_default(),
+                }),
                 _ => Err(HotkeyDriverError::AlreadyTaken { hotkey: label }),
             }
+        }
+
+        /// Post the message Windows would post, for a self test.
+        ///
+        /// # What this proves and what it cannot
+        ///
+        /// It proves the half this program owns: the message loop is running,
+        /// `WM_HOTKEY` with our id is recognised, the channel carries it, and
+        /// `fired` reports it.
+        ///
+        /// It cannot prove Windows delivers a real key press, and nothing can.
+        /// Input injected with `SendInput` is marked `LLKHF_INJECTED` and the
+        /// hotkey machinery ignores it, so a synthetic press never fires a
+        /// registered hotkey. Only a finger on a key does.
+        pub fn simulate_press(&self) -> bool {
+            // SAFETY: posting a thread message to a thread this struct owns.
+            unsafe {
+                PostThreadMessageW(
+                    self.thread_id,
+                    WM_HOTKEY,
+                    WPARAM(PRICE_CHECK_ID as usize),
+                    LPARAM(0),
+                )
+            }
+            .is_ok()
         }
 
         /// Whether the hotkey fired since the last check.

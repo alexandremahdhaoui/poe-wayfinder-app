@@ -307,6 +307,37 @@ mod win {
         keep_going
     }
 
+    /// Press and release a hotkey combination, for the self test.
+    ///
+    /// # Why this is safe to fire
+    ///
+    /// The caller picks a combination nothing else binds. It goes to whatever
+    /// has focus, like any synthetic key, so the combination has to be one no
+    /// application reacts to. `Ctrl+Alt+Shift+F24` is the one the self test
+    /// uses.
+    ///
+    /// Modifiers go down in order and up in reverse, which is what a real
+    /// keyboard produces. Releasing them in the same order leaves Windows
+    /// believing a modifier is still held.
+    pub fn press_combination(modifiers: &[u16], key: u16) -> u32 {
+        let mut events: Vec<INPUT> = Vec::new();
+
+        for code in modifiers {
+            events.push(key_event(VIRTUAL_KEY(*code), false));
+        }
+
+        events.push(key_event(VIRTUAL_KEY(key), false));
+        events.push(key_event(VIRTUAL_KEY(key), true));
+
+        for code in modifiers.iter().rev() {
+            events.push(key_event(VIRTUAL_KEY(*code), true));
+        }
+
+        // SAFETY: `events` is a live, correctly sized array of INPUT and the
+        // size argument matches INPUT exactly.
+        unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) }
+    }
+
     /// Prove `SendInput` works, without touching anything the user owns.
     ///
     /// # Why this exists
@@ -357,7 +388,8 @@ mod win {
 
 #[cfg(windows)]
 pub use win::{
-    self_test_send_input, visible_window_titles, GameWindowAdapter, KeyboardCopyTrigger,
+    press_combination, self_test_send_input, visible_window_titles, GameWindowAdapter,
+    KeyboardCopyTrigger,
 };
 
 #[cfg(test)]

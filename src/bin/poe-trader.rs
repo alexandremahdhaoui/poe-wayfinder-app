@@ -28,6 +28,15 @@ fn main() -> ExitCode {
         return list_windows();
     }
 
+    // Prove the hotkey chain this program owns: register, deliver, report.
+    // No game and nobody at the keyboard.
+    //
+    // It stops short of Windows itself handing over a real key press, which
+    // no test can reach. See the function.
+    if args.iter().any(|a| a == "--self-test-hotkey") {
+        return self_test_hotkey();
+    }
+
     // Price whatever is on the clipboard already, then exit.
     //
     // The price check chain is copy, parse, filter, search. Every link but the
@@ -250,6 +259,95 @@ fn list_windows() -> ExitCode {
 
         ExitCode::FAILURE
     }
+}
+
+/// Prove the hotkey chain this program owns, end to end.
+///
+/// # What it does and does not prove
+///
+/// It registers the real hotkey, delivers the exact message Windows delivers,
+/// and checks the frame loop sees a press. That covers the message loop, the
+/// id match, the channel and `fired`.
+///
+/// It cannot prove Windows delivers a real key press, and no test can. Input
+/// injected with `SendInput` is flagged `LLKHF_INJECTED`, and the hotkey
+/// machinery ignores flagged input, so a synthetic press never fires a
+/// registered hotkey. Only a finger on a key does.
+///
+/// That was learned the hard way: an earlier version of this test pressed the
+/// keys with `SendInput` and reported the tool broken when nothing arrived.
+/// The tool was fine. The test was impossible.
+#[cfg(windows)]
+fn self_test_hotkey() -> ExitCode {
+    use poe_trader_app::driver::hotkey_driver::HotkeyDriver;
+    use poe_trader_app::types::Hotkey;
+
+    // Nothing binds F24 with three modifiers, so registration cannot fail
+    // because somebody else owns it.
+    const COMBINATION: &str = "Ctrl+Alt+Shift+F24";
+
+    let log = Logger::new("info", "poe-trader");
+
+    let Ok(hotkey) = Hotkey::parse(COMBINATION) else {
+        log.error("the self test hotkey does not parse", &[]);
+
+        return ExitCode::FAILURE;
+    };
+
+    let hotkeys = match HotkeyDriver::start(&hotkey) {
+        Ok(hotkeys) => hotkeys,
+        Err(err) => {
+            log.error(
+                "registering the self test hotkey",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    log.info("registered", &[("hotkey", Value::Str(COMBINATION.into()))]);
+
+    if !hotkeys.simulate_press() {
+        log.error("could not post to the hotkey thread", &[]);
+
+        return ExitCode::FAILURE;
+    }
+
+    // The press crosses a thread and a channel, so the answer is not instant.
+    // Two seconds is far longer than that takes and short enough to sit in a
+    // build.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+    while std::time::Instant::now() < deadline {
+        if hotkeys.fired() {
+            log.info(
+                "a press reached the frame loop. Registration, message loop and \
+                 channel all work. Whether Windows hands over a real key press \
+                 depends on privilege, which the startup check reports.",
+                &[],
+            );
+
+            return ExitCode::SUCCESS;
+        }
+
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    log.error(
+        "the press never reached the frame loop. The message loop or the \
+         channel is broken, and the hotkey would do nothing in game.",
+        &[],
+    );
+
+    ExitCode::FAILURE
+}
+
+#[cfg(not(windows))]
+fn self_test_hotkey() -> ExitCode {
+    eprintln!("poe-trader: --self-test-hotkey only works on Windows.");
+
+    ExitCode::FAILURE
 }
 
 /// Say whether the hotkey can reach us, and what to do if it cannot.
