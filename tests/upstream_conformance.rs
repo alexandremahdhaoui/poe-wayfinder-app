@@ -440,3 +440,122 @@ fn the_data_directory_is_reported_when_it_is_missing() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The map properties, from `renderer/specs/Parser/mapParser.test.ts`
+//
+// A waystone's worth is almost entirely these numbers. Pack size and rarity
+// decide what the map drops, and a buyer filters on them rather than on the
+// modifiers that granted them. Reading one into the wrong field is invisible:
+// every number is plausible in every other field.
+// ---------------------------------------------------------------------------
+
+/// The reference's map fields, paired with what our parser calls them.
+fn map_values(item: &ParsedItem) -> Vec<(&'static str, Option<f64>)> {
+    vec![
+        ("mapTier", item.map.tier.map(f64::from)),
+        ("mapPackSize", item.map.pack_size),
+        ("mapItemRarity", item.map.item_rarity),
+        ("mapRevives", item.map.revives.map(f64::from)),
+        ("mapDropChance", item.map.drop_chance),
+        ("mapMagicMonsters", item.map.magic_monsters),
+        ("mapRareMonsters", item.map.rare_monsters),
+        ("mapMonsterRarity", item.map.monster_rarity),
+        ("mapEffectiveness", item.map.effectiveness),
+    ]
+}
+
+#[test]
+fn every_map_number_matches_the_reference() {
+    // Both of the reference's map fixtures, every field it declares.
+    for (fixture, item) in parsed() {
+        for (key, got) in map_values(&item) {
+            let Some(&want) = fixture.expected.get(key) else {
+                continue;
+            };
+
+            assert!(
+                same(got, want),
+                "{} {key}: got {got:?}, reference says {want}",
+                fixture.name
+            );
+        }
+    }
+}
+
+#[test]
+fn a_map_with_every_property_reads_all_of_them() {
+    // RareMapFakeAllProps exists in the reference precisely because a map
+    // printing every line at once is where fields get crossed. Nine numbers,
+    // all of them plausible in each other's slots.
+    let Some(tables) = data() else {
+        return;
+    };
+
+    let fixture = fixtures()
+        .into_iter()
+        .find(|f| f.name == "RareMapFakeAllProps")
+        .expect("the fixture is in the set");
+
+    let item = parse_clipboard(&fixture.text, GameVersion::Poe2, &tables).expect("parses");
+
+    let declared = map_values(&item)
+        .into_iter()
+        .filter(|(key, _)| fixture.expected.contains_key(*key))
+        .count();
+
+    // The reference declares nine numbers for it. Reading fewer means a line
+    // went unparsed and its value silently stayed absent.
+    assert!(declared >= 8, "only {declared} map fields were declared");
+
+    for (key, got) in map_values(&item) {
+        if fixture.expected.contains_key(key) {
+            assert!(got.is_some(), "{key} was declared and came back empty");
+        }
+    }
+}
+
+#[test]
+fn a_map_tier_in_the_name_is_read() {
+    // Both fixtures print the tier inside the base name, as
+    // "Waystone (Tier 16)", and not on a line of its own.
+    let Some(tables) = data() else {
+        return;
+    };
+
+    for name in ["RareMap", "RareMapFakeAllProps"] {
+        let fixture = fixtures()
+            .into_iter()
+            .find(|f| f.name == name)
+            .expect("the fixture is in the set");
+
+        let Some(&want) = fixture.expected.get("mapTier") else {
+            continue;
+        };
+
+        let item = parse_clipboard(&fixture.text, GameVersion::Poe2, &tables).expect("parses");
+
+        assert_eq!(item.map.tier.map(i64::from), Some(want), "{name}");
+    }
+}
+
+#[test]
+fn a_revive_count_of_zero_is_read_and_not_dropped() {
+    // RareMapFakeAllProps declares zero revives. A parser that treated zero as
+    // absent would lose the one number that makes the map harder, and the
+    // failure is invisible because absent and zero look the same downstream.
+    let Some(tables) = data() else {
+        return;
+    };
+
+    let fixture = fixtures()
+        .into_iter()
+        .find(|f| f.name == "RareMapFakeAllProps")
+        .expect("the fixture is in the set");
+
+    assert_eq!(fixture.expected.get("mapRevives"), Some(&0));
+
+    let item = parse_clipboard(&fixture.text, GameVersion::Poe2, &tables).expect("parses");
+
+    assert_eq!(item.map.revives, Some(0));
+}

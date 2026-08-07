@@ -141,6 +141,11 @@ pub struct ItemRecord {
     /// category could be worked out. Those are different questions and
     /// conflating them left every weapon and armour base marked uncraftable.
     pub craftable: bool,
+    /// The tier a waystone always has.
+    ///
+    /// PoE2 prints no tier line on a waystone. The tier is part of the base
+    /// name, `Waystone (Tier 16)`, and the parser reads it from here.
+    pub map_tier: Option<u32>,
     /// The id the exchange endpoint knows this item by.
     ///
     /// Absent for anything not traded in bulk, which is most items. Its
@@ -322,6 +327,7 @@ pub fn build_items(
                 trade_discriminator: entry.disc.clone(),
                 category: category.map(|c| c.as_str().to_string()),
                 craftable: is_craftable(&group.id),
+                map_tier: map_tier_in(&name_for_tag),
                 trade_tag: trade_tags.get(&name_for_tag).cloned(),
             });
         }
@@ -337,6 +343,27 @@ pub fn build_items(
     out.dedup();
 
     Ok(out)
+}
+
+/// The tier inside a base name like `Waystone (Tier 16)`.
+///
+/// # Why the name and not a field
+///
+/// PoE2 prints no tier line on a waystone. The trade API lists each tier as
+/// its own base, with the number in the name, and nothing else carries it.
+///
+/// Without this every waystone came out with no tier at all, so the map tier
+/// filter was never sent. Tier is the first thing anyone filters a waystone
+/// by, and a search without it prices a tier 16 against a tier 1.
+fn map_tier_in(name: &str) -> Option<u32> {
+    let head = name.strip_suffix(')')?;
+    let (_, digits) = head.rsplit_once(" (Tier ")?;
+
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    digits.parse().ok()
 }
 
 /// Whether a group's bases can carry rolled modifiers.
@@ -492,6 +519,10 @@ pub fn item_to_ndjson(record: &ItemRecord) -> String {
 
     if let Some(category) = &record.category {
         value["category"] = serde_json::Value::String(category.clone());
+    }
+
+    if let Some(tier) = record.map_tier {
+        value["map"] = serde_json::json!({ "tier": tier });
     }
 
     value.to_string()
@@ -655,6 +686,35 @@ mod tests {
 
         assert_eq!(ring.category.as_deref(), Some("Ring"));
         assert_eq!(ring.namespace, "ITEM");
+    }
+
+    #[test]
+    fn a_waystone_carries_the_tier_from_its_name() {
+        // PoE2 prints no tier line. The trade API lists each tier as its own
+        // base with the number in the name, and nothing else carries it, so
+        // without this every waystone had no tier and the map tier filter was
+        // never sent.
+        assert_eq!(map_tier_in("Waystone (Tier 16)"), Some(16));
+        assert_eq!(map_tier_in("Waystone (Tier 1)"), Some(1));
+    }
+
+    #[test]
+    fn a_base_with_no_tier_in_its_name_has_none() {
+        assert_eq!(map_tier_in("Sapphire Ring"), None);
+        assert_eq!(map_tier_in("Waystone"), None);
+    }
+
+    #[test]
+    fn a_tier_that_is_not_a_number_is_not_a_tier() {
+        // A unique can be called anything. Reading "(Tier of Doom)" as a tier
+        // would put a wrong number on a filter nobody could explain.
+        assert_eq!(map_tier_in("Thing (Tier of Doom)"), None);
+        assert_eq!(map_tier_in("Thing (Tier )"), None);
+    }
+
+    #[test]
+    fn a_tier_must_be_at_the_end_of_the_name() {
+        assert_eq!(map_tier_in("Waystone (Tier 3) of Doom"), None);
     }
 
     #[test]
