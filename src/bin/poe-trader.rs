@@ -684,9 +684,17 @@ async fn search(
     use poe_trader_app::controller::price_check_controller::read_search_result;
     use poe_trader_core::controller::bulk::Endpoint;
 
-    if session.is_empty() {
-        return Err("No POESESSID. Set it to search the trade site.".to_string());
-    }
+    // No session needed. The search endpoint answers an unauthenticated POST
+    // with real results: measured against the live PoE2 API, an anonymous
+    // request returned HTTP 200 and a total.
+    //
+    // This used to refuse outright without a POESESSID, which made the tool
+    // useless out of the box for no reason. Neither reference requires one
+    // either: Exiled Exchange 2 sends whatever cookies its Electron session
+    // happens to hold, and Awakened PoE Trade never mentions a session at all.
+    //
+    // A session is still sent when one is configured, because it raises the
+    // rate limit and is what a heavy user wants.
 
     // A query that narrows nothing matches the entire trade site, and the
     // price it comes back with is the market's median rather than this item's.
@@ -723,8 +731,14 @@ async fn search(
     let now = now_millis();
     limits.borrow(now);
 
+    // The cookie header is only sent when there is a session to put in it. An
+    // empty `POESESSID=` is a malformed cookie rather than an absent one.
     let cookie = format!("POESESSID={session}");
-    let headers = [("accept", "application/json"), ("cookie", cookie.as_str())];
+
+    let headers: Vec<(&str, &str)> = match session.is_empty() {
+        true => vec![("accept", "application/json")],
+        false => vec![("accept", "application/json"), ("cookie", cookie.as_str())],
+    };
 
     let url = match &exchange {
         Some(_) => urls.exchange(league),
