@@ -123,6 +123,14 @@ struct WireItem {
     trade_tag: Option<String>,
     #[serde(default)]
     craftable: Option<WireCraftable>,
+    /// The category, written at the top level.
+    ///
+    /// The reference nests it inside `craftable`, which loses it for anything
+    /// not craftable. Currency is not craftable and is very much a category.
+    /// Read from here first and from the nested field as a fallback, so a data
+    /// file in either shape loads.
+    #[serde(default)]
+    category: Option<String>,
     #[serde(default)]
     map: Option<WireMap>,
 }
@@ -203,9 +211,9 @@ impl GameTables {
             };
 
             let category = w
-                .craftable
-                .as_ref()
-                .and_then(|c| c.category.as_deref())
+                .category
+                .as_deref()
+                .or_else(|| w.craftable.as_ref().and_then(|c| c.category.as_deref()))
                 .and_then(ItemCategory::parse);
 
             let info = BaseInfo {

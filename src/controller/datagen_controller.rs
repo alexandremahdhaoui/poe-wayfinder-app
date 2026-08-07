@@ -135,6 +135,12 @@ pub struct ItemRecord {
     pub namespace: String,
     pub trade_discriminator: Option<String>,
     pub category: Option<String>,
+    /// Whether the base can carry rolled modifiers.
+    ///
+    /// Decided by the group the trade API lists it in, not by whether a fine
+    /// category could be worked out. Those are different questions and
+    /// conflating them left every weapon and armour base marked uncraftable.
+    pub craftable: bool,
     /// The id the exchange endpoint knows this item by.
     ///
     /// Absent for anything not traded in bulk, which is most items. Its
@@ -315,6 +321,7 @@ pub fn build_items(
                 namespace: namespace_for(&group.id, is_unique).to_string(),
                 trade_discriminator: entry.disc.clone(),
                 category: category.map(|c| c.as_str().to_string()),
+                craftable: is_craftable(&group.id),
                 trade_tag: trade_tags.get(&name_for_tag).cloned(),
             });
         }
@@ -330,6 +337,38 @@ pub fn build_items(
     out.dedup();
 
     Ok(out)
+}
+
+/// Whether a group's bases can carry rolled modifiers.
+///
+/// # Why this is not "did we work out a category"
+///
+/// It used to be. The builder wrote `craftable` only when it could name a fine
+/// category, and it can only do that for a handful of groups. Every weapon and
+/// every armour base came out uncraftable, which is the field the parser reads
+/// to find a magic item's base type.
+///
+/// So `Pulsing Antler Focus` resolved to no base at all, the query searched for
+/// the whole rolled name, and the search returned nothing. An empty result
+/// reads as "this item is worthless". 810 of 3578 PoE2 bases were marked
+/// craftable; the reference marks the equipment.
+///
+/// Equipment rolls modifiers. Currency, cards, gems and itemised monsters do
+/// not, and marking one of those craftable would let a magic item's affix words
+/// match a currency name.
+fn is_craftable(group_id: &str) -> bool {
+    matches!(
+        group_id,
+        "accessory"
+            | "armour"
+            | "weapon"
+            | "flask"
+            | "jewel"
+            | "map"
+            | "tincture"
+            | "idol"
+            | "heistequipment"
+    )
 }
 
 /// Which table an entry belongs in.
@@ -438,8 +477,21 @@ pub fn item_to_ndjson(record: &ItemRecord) -> String {
         value["tradeTag"] = serde_json::Value::String(tag.clone());
     }
 
+    // Two separate facts, two separate fields.
+    //
+    // Nesting the category inside `craftable`, which is the reference's shape,
+    // means a base that is not craftable loses its category. Currency is not
+    // craftable and is very much a category, and writing them together dropped
+    // it from every currency record.
+    if record.craftable {
+        value["craftable"] = match &record.category {
+            Some(category) => serde_json::json!({ "category": category }),
+            None => serde_json::json!({}),
+        };
+    }
+
     if let Some(category) = &record.category {
-        value["craftable"] = serde_json::json!({ "category": category });
+        value["category"] = serde_json::Value::String(category.clone());
     }
 
     value.to_string()
@@ -603,6 +655,63 @@ mod tests {
 
         assert_eq!(ring.category.as_deref(), Some("Ring"));
         assert_eq!(ring.namespace, "ITEM");
+    }
+
+    #[test]
+    fn a_weapon_base_is_craftable() {
+        // The bug: craftable was written only when a fine category could be
+        // named, and the builder can only name a few. Every weapon and armour
+        // base came out uncraftable, and that field is what the parser reads
+        // to find a magic item's base type.
+        let bow = items().into_iter().find(|i| i.name == "Spine Bow").unwrap();
+
+        assert!(bow.craftable);
+    }
+
+    #[test]
+    fn an_accessory_is_craftable() {
+        let ring = items()
+            .into_iter()
+            .find(|i| i.name == "Sapphire Ring")
+            .unwrap();
+
+        assert!(ring.craftable);
+    }
+
+    #[test]
+    fn a_gem_is_not_craftable() {
+        // A gem carries no rolled modifiers. Marking one craftable would let a
+        // magic item's affix words match a gem name.
+        let gem = items()
+            .into_iter()
+            .find(|i| i.name == "Awakened Fire Penetration Support")
+            .unwrap();
+
+        assert!(!gem.craftable);
+    }
+
+    #[test]
+    fn a_divination_card_is_not_craftable() {
+        let card = items()
+            .into_iter()
+            .find(|i| i.name == "The Doctor")
+            .unwrap();
+
+        assert!(!card.craftable);
+    }
+
+    #[test]
+    fn a_craftable_base_with_no_known_category_still_says_so() {
+        // The whole point. A weapon whose fine category the builder cannot
+        // name is still a base a magic item can be built on.
+        let bow = items().into_iter().find(|i| i.name == "Spine Bow").unwrap();
+
+        assert!(bow.category.is_none());
+        assert!(bow.craftable);
+
+        let json = item_to_ndjson(&bow);
+
+        assert!(json.contains("craftable"), "{json}");
     }
 
     #[test]
