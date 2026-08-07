@@ -72,7 +72,12 @@ const UNASSERTED: [&str; 2] = ["gemLevel", "itemLevel"];
 struct Fixture {
     name: String,
     text: String,
-    expected: BTreeMap<String, i64>,
+    /// Every number the reference declares. Floats now: attack speed is 1.2
+    /// and physical damage is 48.5, and reading only whole numbers silently
+    /// dropped both.
+    expected: BTreeMap<String, f64>,
+    /// The level and attribute requirements, when it declares them.
+    requires: Option<BTreeMap<String, i64>>,
 }
 
 fn fixtures() -> Vec<Fixture> {
@@ -96,8 +101,16 @@ fn fixtures() -> Vec<Fixture> {
                 expected: object
                     .iter()
                     .filter(|(key, _)| !UNASSERTED.contains(&key.as_str()))
-                    .filter_map(|(key, value)| Some((key.clone(), value.as_i64()?)))
+                    .filter_map(|(key, value)| Some((key.clone(), value.as_f64()?)))
                     .collect(),
+                requires: object.get("requires").and_then(|r| {
+                    Some(
+                        r.as_object()?
+                            .iter()
+                            .filter_map(|(k, v)| Some((k.clone(), v.as_i64()?)))
+                            .collect(),
+                    )
+                }),
             }
         })
         .collect()
@@ -156,9 +169,12 @@ fn count_kind(item: &ParsedItem, kind: ModifierType) -> i64 {
         .count() as i64
 }
 
-/// Whether a float field matches the reference's integer.
-fn same(got: Option<f64>, want: i64) -> bool {
-    got.is_some_and(|v| (v - want as f64).abs() < 0.5)
+/// Whether a parsed number matches the reference's.
+///
+/// A tenth of a tolerance, not a half. Attack speed is quoted to two decimals
+/// and 1.2 against 1.25 is a different weapon.
+fn same(got: Option<f64>, want: f64) -> bool {
+    got.is_some_and(|v| (v - want).abs() < 0.01)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +229,7 @@ fn every_section_count_matches_the_reference() {
             continue;
         }
 
-        let Some(&want) = fixture.expected.get("sectionCount") else {
+        let Some(want) = fixture.expected.get("sectionCount").map(|v| *v as i64) else {
             continue;
         };
 
@@ -277,7 +293,7 @@ fn every_weapon_value_matches_the_reference() {
 #[test]
 fn every_quality_matches_the_reference() {
     for (fixture, item) in parsed() {
-        let Some(&want) = fixture.expected.get("quality") else {
+        let Some(want) = fixture.expected.get("quality").map(|v| *v as i64) else {
             continue;
         };
 
@@ -311,7 +327,7 @@ fn the_unasserted_fields_are_kept_out_of_the_expectations() {
 // ---------------------------------------------------------------------------
 
 fn check_count(fixture: &Fixture, item: &ParsedItem, key: &str, got: i64) {
-    let Some(&want) = fixture.expected.get(key) else {
+    let Some(want) = fixture.expected.get(key).map(|v| *v as i64) else {
         return;
     };
 
@@ -529,7 +545,7 @@ fn a_map_tier_in_the_name_is_read() {
             .find(|f| f.name == name)
             .expect("the fixture is in the set");
 
-        let Some(&want) = fixture.expected.get("mapTier") else {
+        let Some(want) = fixture.expected.get("mapTier").map(|v| *v as i64) else {
             continue;
         };
 
@@ -553,9 +569,135 @@ fn a_revive_count_of_zero_is_read_and_not_dropped() {
         .find(|f| f.name == "RareMapFakeAllProps")
         .expect("the fixture is in the set");
 
-    assert_eq!(fixture.expected.get("mapRevives"), Some(&0));
+    assert_eq!(fixture.expected.get("mapRevives"), Some(&0.0));
 
     let item = parse_clipboard(&fixture.text, GameVersion::Poe2, &tables).expect("parses");
 
     assert_eq!(item.map.revives, Some(0));
+}
+
+// ---------------------------------------------------------------------------
+// The fields the first harvest dropped
+//
+// It kept only whole numbers, so attack speed at 1.2, crit at 9.4 and physical
+// damage at 48.5 were all thrown away before anything could compare them. The
+// requirements were dropped too, being an object rather than a number.
+//
+// `integration.test.ts` asserts every one of these.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_fractional_weapon_number_matches_the_reference() {
+    // Attack speed and crit are quoted to two decimals and are never whole.
+    // Reading them with an integer parser truncates 1.2 to 1, which is a
+    // different weapon and a very different price.
+    // Collected rather than asserted one at a time. A bare assert stops at the
+    // first mismatch and hides how many others there are, which turns one fix
+    // into a dozen rounds of discovering the next.
+    let mut wrong: Vec<String> = Vec::new();
+
+    for (fixture, item) in parsed() {
+        for (key, got) in [
+            ("weaponAS", item.weapon.attack_speed),
+            ("weaponCRIT", item.weapon.crit),
+            ("weaponPHYSICAL", item.weapon.physical),
+            ("weaponFIRE", item.weapon.fire),
+            ("weaponCOLD", item.weapon.cold),
+            ("weaponLIGHTNING", item.weapon.lightning),
+            ("weaponSPIRIT", item.weapon.spirit),
+        ] {
+            let Some(&want) = fixture.expected.get(key) else {
+                continue;
+            };
+
+            if !same(got, want) {
+                wrong.push(format!(
+                    "{} {key}: got {got:?}, reference says {want}",
+                    fixture.name
+                ));
+            }
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "{} wrong:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn at_least_one_fixture_carries_a_fractional_number() {
+    // A guard on the harvest rather than the parser. If the fixture ever loses
+    // its floats again the test above passes by having nothing to check.
+    let fractional = fixtures()
+        .into_iter()
+        .filter(|f| f.expected.values().any(|v| v.fract() != 0.0))
+        .count();
+
+    assert!(fractional >= 5, "only {fractional} fixtures carry a float");
+}
+
+#[test]
+fn every_requirement_matches_the_reference() {
+    // The level and attributes decide who can equip the item at all. A buyer
+    // filtering for something they cannot use is the search working perfectly
+    // and helping nobody.
+    for (fixture, item) in parsed() {
+        let Some(want) = &fixture.requires else {
+            continue;
+        };
+
+        let got = item.requires.unwrap_or_default();
+
+        for (key, got) in [
+            ("level", got.level),
+            ("str", got.str),
+            ("dex", got.dex),
+            ("int", got.int),
+        ] {
+            let Some(&want) = want.get(key) else {
+                continue;
+            };
+
+            assert_eq!(i64::from(got), want, "{} requires.{key}", fixture.name);
+        }
+    }
+}
+
+#[test]
+fn an_item_the_reference_gives_requirements_actually_has_some() {
+    // Zero across the board would satisfy the comparison above for an item
+    // whose requirement section never parsed.
+    for (fixture, item) in parsed() {
+        let Some(want) = &fixture.requires else {
+            continue;
+        };
+
+        // The reference declares zero for attributes an item does not need, so
+        // only the level is reliably non zero.
+        if want.get("level").copied().unwrap_or(0) == 0 {
+            continue;
+        }
+
+        assert!(
+            item.requires.is_some(),
+            "{} declares requirements and parsed none",
+            fixture.name
+        );
+    }
+}
+
+#[test]
+fn enough_fixtures_declare_requirements_to_prove_something() {
+    let with_requires = fixtures()
+        .into_iter()
+        .filter(|f| f.requires.is_some())
+        .count();
+
+    assert!(
+        with_requires >= 15,
+        "only {with_requires} declare requirements"
+    );
 }
