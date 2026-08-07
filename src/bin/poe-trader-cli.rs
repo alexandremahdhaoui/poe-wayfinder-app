@@ -356,16 +356,28 @@ fn report_price(
 ) {
     use poe_trader_app::controller::price_check_controller::suggested_price;
 
-    match suggested_price(listings) {
-        Some((amount, currency)) => log.info(
-            "suggested price",
-            &[
-                ("amount", Value::Str(format!("{amount}"))),
-                ("currency", Value::Str(currency)),
-            ],
-        ),
-        None => log.warn("the listings carry no price to average", &[]),
+    let Some((amount, currency)) = suggested_price(listings) else {
+        log.warn("the listings carry no price to average", &[]);
+
+        return;
+    };
+
+    // Rounded before it is shown. The raw rate for a Divine in Mirrors comes
+    // out as 0.0007201155913700063, which is true and unreadable.
+    let shown = poe_trader_core::controller::money::price(amount, &currency);
+
+    let mut fields = vec![
+        ("amount", Value::Str(shown.amount)),
+        ("currency", Value::Str(shown.currency)),
+    ];
+
+    // A rate below a hundredth is quoted the other way up, which is how the
+    // game's economy is actually spoken about.
+    if let Some(inverted) = shown.inverted {
+        fields.push(("also", Value::Str(inverted)));
     }
+
+    log.info("suggested price", &fields);
 }
 
 /// Milliseconds since the process started.
