@@ -252,6 +252,42 @@ fn list_windows() -> ExitCode {
     }
 }
 
+/// Say whether the hotkey can reach us, and what to do if it cannot.
+#[cfg(windows)]
+fn report_hotkey_outlook(
+    window: &poe_trader_app::adapter::game_window_adapter::GameWindowAdapter,
+    log: &Logger,
+) {
+    use poe_trader_app::adapter::elevation_adapter::{own_elevation, window_elevation};
+    use poe_trader_core::controller::elevation::{advice, hotkey_outlook, is_blocking, Elevation};
+
+    let overlay = own_elevation();
+
+    // Without a window there is no process to compare against, and the
+    // comparison is the whole point.
+    let game = match window.raw_handle() {
+        Some(handle) => window_elevation(handle, overlay == Elevation::Elevated),
+        None => Elevation::Unknown,
+    };
+
+    let outlook = hotkey_outlook(overlay, game);
+
+    let fields = [
+        ("overlay", Value::Str(format!("{overlay:?}"))),
+        ("game", Value::Str(format!("{game:?}"))),
+        ("outlook", Value::Str(format!("{outlook:?}"))),
+    ];
+
+    match advice(outlook) {
+        // A blocked hotkey is the failure, not a note about it.
+        Some(text) if is_blocking(outlook) => {
+            log.error(text, &fields);
+        }
+        Some(text) => log.info(text, &fields),
+        None => log.info("the hotkey can reach this process", &fields),
+    }
+}
+
 /// Read the clipboard and price what is on it, then exit.
 ///
 /// Everything the hotkey does except sending the keystroke. Used to prove the
@@ -402,6 +438,14 @@ fn run_overlay(
             &[("error", Value::Str(err.to_string()))],
         ),
     }
+
+    // Said before the user ever presses the key.
+    //
+    // Windows will not deliver a hotkey to a process less privileged than the
+    // window with focus. When that happens everything above this line succeeds
+    // and the hotkey is silently dead forever, which is the single most
+    // confusing way this tool can fail.
+    report_hotkey_outlook(&window, &log);
 
     // The one Windows call nothing else reaches. It fires only on a hotkey
     // press and types into whatever has focus, so the ordinary path cannot be

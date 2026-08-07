@@ -27,6 +27,8 @@ windows = { workspace = true, features = [
   "Win32_UI_HiDpi",
   # The tray icon. A feature on a crate already depended on, not a new one.
   "Win32_UI_Shell",
+  "Win32_Security",
+  "Win32_System_Threading",
   "Win32_System_LibraryLoader",
 ] }
 

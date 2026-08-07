@@ -99,6 +99,15 @@ mod win {
             }
         }
 
+        /// The raw window handle, for callers that need to ask Windows about
+        /// the process behind it.
+        ///
+        /// A plain integer, so nothing outside this module has to name a
+        /// Windows type.
+        pub fn raw_handle(&self) -> Option<isize> {
+            self.handle().ok().map(|h| h.0 as isize)
+        }
+
         fn handle(&self) -> Result<HWND, WindowError> {
             let title = HSTRING::from(self.title.as_str());
 
