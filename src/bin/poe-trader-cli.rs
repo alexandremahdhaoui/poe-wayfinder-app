@@ -4,6 +4,7 @@
 //! game, a display or a hotkey. Every conformance test runs through it.
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use poe_trader_app::adapter::game_data_adapter::GameTables;
 use poe_trader_app::adapter::http_adapter::NetworkPolicy;
@@ -15,7 +16,12 @@ use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Taken out before the config loader sees it. The loader is generated from
+    // the spec and refuses a flag it does not know, and this one is a switch
+    // for this binary rather than a configuration value.
+    let should_send = std::env::args().any(|a| a == "--send");
+
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--send").collect();
 
     let cfg = match PoeTraderCliConfig::load(&args) {
         Ok(cfg) => cfg,
@@ -180,5 +186,194 @@ fn main() -> ExitCode {
         }
     }
 
-    ExitCode::SUCCESS
+    // Printing the body proves the query was built. It does not prove the
+    // trade site accepts it, and a query the site rejects looks identical from
+    // here.
+    //
+    // Off by default because it is a real request against GGG's servers, and
+    // every run of the test suite firing one would be rude at best.
+    if !should_send {
+        return ExitCode::SUCCESS;
+    }
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            log.error(
+                "starting the runtime",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match runtime.block_on(send(&cfg, game, &checked, &body, &log)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            log.error("sending the search", &[("error", Value::Str(message))]);
+
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run the search for real and report what came back.
+///
+/// The whole chain the overlay runs, minus the clipboard: rate limiter, the
+/// one allowed socket, the search, the fetch and the price. The clipboard is
+/// the only part that needs a game.
+async fn send(
+    cfg: &PoeTraderCliConfig,
+    game: GameVersion,
+    checked: &poe_trader_core::controller::price_check::PriceCheck,
+    body: &serde_json::Value,
+    log: &Logger,
+) -> Result<(), String> {
+    use poe_trader_app::adapter::http_adapter::{HttpAdapter, HttpClient};
+    use poe_trader_app::adapter::rate_limit_adapter::LimiterSet;
+    use poe_trader_app::adapter::trade_api_adapter::TradeUrls;
+    use poe_trader_app::controller::price_check_controller::{
+        read_exchange_listings, read_listings, read_search_result,
+    };
+
+    let policy = NetworkPolicy::new(
+        cfg.network_enabled,
+        cfg.block_unlisted_hosts,
+        &cfg.allowed_hosts,
+    );
+
+    let http = HttpAdapter::with_user_agent(policy, Duration::from_secs(30), &cfg.user_agent)
+        .map_err(|e| format!("building the http client: {e}"))?;
+
+    let urls = TradeUrls::new(&cfg.trade_base_url, game);
+    let mut limits = LimiterSet::conservative();
+
+    let url = match checked.endpoint {
+        Endpoint::Exchange => urls.exchange(&cfg.league),
+        Endpoint::Search => urls.search(&cfg.league),
+    };
+
+    let text = serde_json::to_string(body).map_err(|e| format!("serialising the body: {e}"))?;
+
+    // The limiter is not optional. GGG bans for violations, and this is a real
+    // request to their servers.
+    let wait = limits.wait_for(now_millis());
+
+    if wait > 0 {
+        log.info(
+            "waiting for the rate limiter",
+            &[("ms", Value::Int(wait as i64))],
+        );
+        std::thread::sleep(Duration::from_millis(wait));
+    }
+
+    limits.borrow(now_millis());
+
+    // No cookie. The search endpoint answers an unauthenticated request, which
+    // is why the overlay no longer demands a session.
+    let headers = [("accept", "application/json")];
+
+    let response = http
+        .post_json(&url, &headers, &text)
+        .await
+        .map_err(|e| format!("{e}"))?;
+
+    limits.adjust(
+        &response.headers,
+        cfg.api_latency_seconds.max(0) as u32,
+        now_millis(),
+    );
+
+    let found = read_search_result(&response).map_err(|e| format!("{e}"))?;
+
+    log.info(
+        "search returned",
+        &[
+            ("url", Value::Str(url)),
+            ("total", Value::Int(found.total as i64)),
+            ("id", Value::Str(found.id.clone())),
+        ],
+    );
+
+    // The exchange endpoint already sent the listings. Only the search
+    // endpoint answers with ids that have to be fetched.
+    if checked.endpoint == Endpoint::Exchange {
+        let listings = read_exchange_listings(&response).map_err(|e| format!("{e}"))?;
+
+        log.info(
+            "read exchange offers",
+            &[("count", Value::Int(listings.len() as i64))],
+        );
+
+        report_price(&listings, log);
+
+        return Ok(());
+    }
+
+    if found.result.is_empty() {
+        log.warn("no listings matched. Nothing to price.", &[]);
+
+        return Ok(());
+    }
+
+    // Only the first batch. A price is the median of the cheapest few and
+    // fetching every page would spend the rate limit for no better answer.
+    let batch: Vec<String> = found.result.iter().take(10).cloned().collect();
+
+    let wait = limits.wait_for(now_millis());
+
+    if wait > 0 {
+        std::thread::sleep(Duration::from_millis(wait));
+    }
+
+    limits.borrow(now_millis());
+
+    let response = http
+        .get(&urls.fetch(&batch, &found.id), &headers)
+        .await
+        .map_err(|e| format!("{e}"))?;
+
+    let listings = read_listings(&response).map_err(|e| format!("{e}"))?;
+
+    log.info(
+        "fetched listings",
+        &[("count", Value::Int(listings.len() as i64))],
+    );
+
+    report_price(&listings, log);
+
+    Ok(())
+}
+
+/// Log what the listings suggest.
+fn report_price(
+    listings: &[poe_trader_app::controller::price_check_controller::Listing],
+    log: &Logger,
+) {
+    use poe_trader_app::controller::price_check_controller::suggested_price;
+
+    match suggested_price(listings) {
+        Some((amount, currency)) => log.info(
+            "suggested price",
+            &[
+                ("amount", Value::Str(format!("{amount}"))),
+                ("currency", Value::Str(currency)),
+            ],
+        ),
+        None => log.warn("the listings carry no price to average", &[]),
+    }
+}
+
+/// Milliseconds since the process started.
+fn now_millis() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static START: OnceLock<Instant> = OnceLock::new();
+
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }

@@ -305,6 +305,90 @@ fn read_listing(entry: &serde_json::Value) -> Option<Listing> {
     })
 }
 
+/// Read an exchange response into listings.
+///
+/// # Why the exchange endpoint needs its own reader
+///
+/// It answers in a different shape from the search endpoint, and the
+/// difference is easy to miss because both return `id`, `total` and
+/// `result`.
+///
+/// Search returns `result` as an array of ids, which then have to be fetched.
+/// Exchange returns `result` as an **object** with the listings already in it,
+/// and no fetch is needed or possible.
+///
+/// Reading an exchange response with the search reader finds no array, returns
+/// an empty list, and the tool reports "no listings matched" for a currency
+/// that has hundreds. That is what it did: every currency price check came
+/// back with no price at all.
+///
+/// # What the numbers mean
+///
+/// An offer says what the seller gives and what they want for it. Wanting one
+/// Fracturing Orb for ten Divine makes a Divine worth a tenth of a Fracturing
+/// Orb, so the rate is the exchange amount divided by the item amount.
+pub fn read_exchange_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheckError> {
+    if let Some(error) = error_in_body(&response.body) {
+        return Err(PriceCheckError::Api(error));
+    }
+
+    if !(200..300).contains(&response.status) {
+        return Err(PriceCheckError::Status {
+            status: response.status,
+            body: response.body.clone(),
+        });
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(PriceCheckError::Decode)?;
+
+    let Some(results) = value.get("result").and_then(serde_json::Value::as_object) else {
+        // No result object is an empty page, not a failure.
+        return Ok(Vec::new());
+    };
+
+    Ok(results.values().filter_map(read_exchange_listing).collect())
+}
+
+/// Read one exchange offer, or nothing when it prices nothing.
+fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
+    let listing = entry.get("listing")?;
+
+    // The first offer only. A seller can post several rates and the first is
+    // the one the site shows.
+    let offer = listing.get("offers")?.as_array()?.first()?;
+
+    let want = offer.get("exchange")?;
+    let give = offer.get("item")?;
+
+    let want_amount = want.get("amount").and_then(serde_json::Value::as_f64)?;
+    let give_amount = give.get("amount").and_then(serde_json::Value::as_f64)?;
+    let currency = want.get("currency").and_then(serde_json::Value::as_str)?;
+
+    // A zero here would divide to infinity and poison the median.
+    if give_amount == 0.0 {
+        return None;
+    }
+
+    let account = listing
+        .get("account")
+        .and_then(|a| a.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    let online = listing
+        .get("account")
+        .and_then(|a| a.get("online"))
+        .is_some_and(|o| !o.is_null());
+
+    Some(Listing {
+        amount: want_amount / give_amount,
+        currency: currency.to_string(),
+        account: account.to_string(),
+        online,
+    })
+}
+
 /// The price a set of listings suggests.
 ///
 /// The median and not the mean. One listing at a thousand divine drags a mean
@@ -895,5 +979,115 @@ mod tests {
         assert_eq!(limiter_for(Endpoint::Search), "search");
         assert_eq!(limiter_for(Endpoint::Fetch), "fetch");
         assert_eq!(limiter_for(Endpoint::Exchange), "exchange");
+    }
+}
+
+#[cfg(test)]
+mod exchange_tests {
+    use super::*;
+
+    /// One offer, exactly as the live exchange endpoint returns it.
+    ///
+    /// Taken from a real response, trimmed to the fields the reader touches.
+    /// The shape is the whole point: `result` is an object here and an array
+    /// on the search endpoint, and reading one with the other's reader finds
+    /// nothing and reports no listings.
+    const REAL: &str = r#"{
+      "id": "aL5D8Z77He",
+      "complexity": null,
+      "total": 2,
+      "result": {
+        "996e5eba1a1d": {
+          "id": "996e5eba1a1d",
+          "item": null,
+          "listing": {
+            "account": { "name": "mathews#2383", "online": { "league": "Standard" } },
+            "offers": [
+              {
+                "exchange": { "currency": "fracturing-orb", "amount": 1 },
+                "item": { "currency": "divine", "amount": 10, "stock": 19798 }
+              }
+            ]
+          }
+        }
+      }
+    }"#;
+
+    fn response(body: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            body: body.to_string(),
+            headers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_real_exchange_response_produces_a_listing() {
+        // The search reader finds no array here and returns nothing, which is
+        // why every currency price check came back with no price.
+        let got = read_exchange_listings(&response(REAL)).unwrap();
+
+        assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn the_rate_is_what_is_wanted_over_what_is_given() {
+        // One Fracturing Orb for ten Divine makes a Divine worth a tenth of a
+        // Fracturing Orb. Reading the amounts the other way round reports a
+        // price ten times too high.
+        let got = read_exchange_listings(&response(REAL)).unwrap();
+
+        assert_eq!(got[0].amount, 0.1);
+        assert_eq!(got[0].currency, "fracturing-orb");
+    }
+
+    #[test]
+    fn the_seller_is_carried_through() {
+        let got = read_exchange_listings(&response(REAL)).unwrap();
+
+        assert_eq!(got[0].account, "mathews#2383");
+        assert!(got[0].online);
+    }
+
+    #[test]
+    fn the_search_reader_finds_nothing_in_an_exchange_response() {
+        // The bug, pinned. Both endpoints answer with id, total and result,
+        // so the two are easy to confuse and the failure is silent.
+        let got = read_listings(&response(REAL)).unwrap();
+
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn an_offer_giving_nothing_is_skipped() {
+        // Dividing by it yields infinity, which poisons the median and prices
+        // the item at nothing anyone can read.
+        let body = REAL.replace("\"amount\": 10", "\"amount\": 0");
+
+        assert!(read_exchange_listings(&response(&body)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_response_with_no_result_is_empty_rather_than_an_error() {
+        let got = read_exchange_listings(&response(r#"{"id":"x","total":0}"#)).unwrap();
+
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn a_failing_status_is_an_error_and_not_an_empty_page() {
+        // An empty page reads as "this item is worthless". A refused request
+        // has to say so.
+        let mut bad = response(REAL);
+        bad.status = 429;
+
+        assert!(read_exchange_listings(&bad).is_err());
+    }
+
+    #[test]
+    fn an_offer_with_no_offers_array_is_skipped() {
+        let body = REAL.replace("\"offers\"", "\"nope\"");
+
+        assert!(read_exchange_listings(&response(&body)).unwrap().is_empty());
     }
 }
