@@ -362,17 +362,18 @@ mod win {
 
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
         Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
         NOTIFYICONDATAW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, PostQuitMessage, RegisterClassW,
-        SetForegroundWindow, TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_GRAYED,
-        MF_STRING, MSG, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-        WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WNDCLASSW,
+        AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+        DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, PostQuitMessage,
+        RegisterClassW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, HICON, ICONINFO,
+        IDI_APPLICATION, MF_GRAYED, MF_STRING, MSG, TPM_BOTTOMALIGN, TPM_RIGHTALIGN,
+        WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WNDCLASSW,
     };
 
     /// Our id for the icon. One tray icon per process.
@@ -551,9 +552,18 @@ mod win {
 
         *window_out.lock().unwrap() = Some(window.0 as isize);
 
-        // SAFETY: IDI_APPLICATION is built in and always present. A stock icon
-        // avoids embedding an .ico that would have to track the build.
-        let icon = unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(|_| TrayError::AddIcon)?;
+        // A drawn icon rather than the stock one. IDI_APPLICATION is the
+        // generic Windows program glyph: it is identical to every other
+        // unbranded app in the tray, and the first user to look for this one
+        // scanned straight past it.
+        //
+        // Falls back to the stock icon rather than failing. An ugly icon beats
+        // no tray at all.
+        let icon = match draw_icon() {
+            Some(icon) => icon,
+            // SAFETY: IDI_APPLICATION is built in and always present.
+            None => unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(|_| TrayError::AddIcon)?,
+        };
 
         let mut data = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -706,6 +716,101 @@ mod win {
         );
 
         let _ = DestroyMenu(handle);
+    }
+
+    /// The icon size Windows asks for in the notification area.
+    const ICON: i32 = 32;
+
+    /// Draw the tray icon in memory.
+    ///
+    /// # Why drawn and not embedded
+    ///
+    /// An embedded `.ico` needs a resource file and a resource compiler in the
+    /// cross build, which is one more thing to keep in step with the binary.
+    /// A shape this simple is fewer moving parts drawn here.
+    ///
+    /// # What it looks like
+    ///
+    /// A filled amber diamond on transparent, the colour Path of Exile uses
+    /// for currency. The point is only to be unmistakably *not* the generic
+    /// grey window that every unbranded app shows.
+    ///
+    /// Returns None if any GDI call fails, and the caller falls back.
+    fn draw_icon() -> Option<HICON> {
+        // Little endian, so a u32 of 0xAARRGGBB lands in memory as B, G, R, A,
+        // which is the order CreateBitmap wants for 32 bits per pixel.
+        const AMBER: u32 = 0xFF_C8_A0_50;
+        const EDGE: u32 = 0xFF_6B_50_20;
+        const CLEAR: u32 = 0x00_00_00_00;
+
+        let mut pixels = vec![CLEAR; (ICON * ICON) as usize];
+
+        let centre = ICON / 2;
+        let radius = centre - 3;
+
+        for y in 0..ICON {
+            for x in 0..ICON {
+                // A diamond is the set of points whose distance along the axes
+                // adds up to less than the radius.
+                let distance = (x - centre).abs() + (y - centre).abs();
+
+                if distance > radius {
+                    continue;
+                }
+
+                pixels[(y * ICON + x) as usize] = if distance > radius - 3 { EDGE } else { AMBER };
+            }
+        }
+
+        // SAFETY: `pixels` holds exactly 32 by 32 four byte pixels and outlives
+        // the call, which copies them.
+        let colour = unsafe {
+            CreateBitmap(
+                ICON,
+                ICON,
+                1,
+                32,
+                Some(pixels.as_ptr() as *const std::ffi::c_void),
+            )
+        };
+
+        if colour.is_invalid() {
+            return None;
+        }
+
+        // The mask is ignored for a 32 bit icon with an alpha channel, but
+        // CreateIconIndirect still requires one.
+        // SAFETY: a null pointer asks for an uninitialised bitmap, which is
+        // all this needs.
+        let mask = unsafe { CreateBitmap(ICON, ICON, 1, 1, None) };
+
+        if mask.is_invalid() {
+            // SAFETY: `colour` was created above and is not used again.
+            unsafe {
+                let _ = DeleteObject(colour.into());
+            }
+
+            return None;
+        }
+
+        let info = ICONINFO {
+            fIcon: true.into(),
+            hbmColor: colour,
+            hbmMask: mask,
+            ..Default::default()
+        };
+
+        // SAFETY: `info` holds two live bitmaps of matching size.
+        let icon = unsafe { CreateIconIndirect(&info) };
+
+        // The icon owns its own copy, so the bitmaps are ours to release.
+        // SAFETY: both were created here and are not used again.
+        unsafe {
+            let _ = DeleteObject(colour.into());
+            let _ = DeleteObject(mask.into());
+        }
+
+        icon.ok()
     }
 
     /// Copy a tooltip into the fixed buffer Windows expects.
