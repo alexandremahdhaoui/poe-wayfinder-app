@@ -20,6 +20,14 @@ use poe_trader_core::types::GameVersion;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // Answered before config, because the whole point is to find out what to
+    // put in the config. An overlay pointed at a title that does not exist
+    // starts perfectly, logs nothing wrong and never draws, and there is no
+    // way to guess the right string from outside the machine.
+    if args.iter().any(|a| a == "--list-windows") {
+        return list_windows();
+    }
+
     let cfg = match PoeTraderConfig::load(&args) {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -188,6 +196,38 @@ fn main() -> ExitCode {
     }
 }
 
+/// Print every visible window title and exit.
+///
+/// Plain text rather than the JSON the rest of the tool logs, because this is
+/// read by a person who is about to copy one of these lines into `--window-
+/// title`.
+fn list_windows() -> ExitCode {
+    #[cfg(windows)]
+    {
+        let titles = poe_trader_app::adapter::game_window_adapter::visible_window_titles();
+
+        println!("Visible windows, one per line.");
+        println!("Copy the game's line into --window-title, quotes included.\n");
+
+        for title in &titles {
+            println!("  {title:?}");
+        }
+
+        if titles.is_empty() {
+            println!("  (none, which should be impossible on a running desktop)");
+        }
+
+        ExitCode::SUCCESS
+    }
+
+    #[cfg(not(windows))]
+    {
+        eprintln!("poe-trader: --list-windows only works on Windows.");
+
+        ExitCode::FAILURE
+    }
+}
+
 /// Run the overlay window.
 ///
 /// The window is created hidden and only shown once a price check produces
@@ -335,12 +375,23 @@ fn run_overlay(
     let latency = cfg.api_latency_seconds.max(0) as u32;
     let mut limits = LimiterSet::conservative();
     let search_log = Logger::new(&cfg.log_level, "poe-trader");
+    let title = cfg.window_title.clone();
+
+    // Starts as whatever the startup check found, so the first frame does not
+    // repeat a line already logged.
+    let mut window_was_found = window.find().is_ok();
 
     let result = eframe::run_simple_native("poe-trader", native_options, move |ctx, _frame| {
         // A press drains the whole queue. Queuing them would run one price
         // check per press after a stutter, which is what the rate limiter
         // exists to prevent.
         if hotkeys.fired() {
+            // Logged on every press. Without this line a user whose hotkey
+            // never reaches us and a user whose price check silently worked
+            // see exactly the same empty log, and there is no way to tell
+            // which half of the chain to look at.
+            search_log.info("price check hotkey pressed", &[]);
+
             // The whole chain lives in a controller so it can be tested
             // without a game, a clipboard or a network. This is the only
             // place that supplies the real three.
@@ -371,15 +422,44 @@ fn run_overlay(
                 },
             );
 
-            if !matches!(outcome, price_check_loop::Outcome::Priced { .. }) {
-                search_log.warn(
+            match outcome {
+                price_check_loop::Outcome::Priced { total } => search_log.info(
+                    "price check finished",
+                    &[("listings", Value::Int(total as i64))],
+                ),
+                other => search_log.warn(
                     "price check did not produce a price",
-                    &[("outcome", Value::Str(format!("{outcome:?}")))],
-                );
+                    &[("outcome", Value::Str(format!("{other:?}")))],
+                ),
             }
         }
 
         let found = window.find().ok();
+
+        // Said once each time the answer changes. The overlay draws nothing at
+        // all while the window is missing, and without this the user sees an
+        // overlay that started cleanly and then does nothing, with no line
+        // anywhere saying the title never matched.
+        let visible = found.is_some();
+
+        if visible != window_was_found {
+            window_was_found = visible;
+
+            match found {
+                Some(rect) => search_log.info(
+                    "the game window appeared",
+                    &[
+                        ("width", Value::Int(i64::from(rect.rect.width))),
+                        ("height", Value::Int(i64::from(rect.rect.height))),
+                    ],
+                ),
+                None => search_log.warn(
+                    "the game window is gone. The overlay stays hidden until it is back.",
+                    &[("window_title", Value::Str(title.clone()))],
+                ),
+            }
+        }
+
         let frame = model.frame_scaled(found, window.scale());
 
         // The window follows the game every frame. The game can be moved,

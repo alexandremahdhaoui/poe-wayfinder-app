@@ -226,6 +226,78 @@ mod win {
         }
     }
 
+    /// Every visible window title on the desktop.
+    ///
+    /// # Why this exists
+    ///
+    /// The overlay attaches to a window by its exact title, and a title that
+    /// does not match produces an overlay that starts perfectly, logs nothing
+    /// wrong and never draws. There is no way to guess the right string from
+    /// the outside: it changes between game versions, between the Steam and
+    /// standalone clients, and between regional builds.
+    ///
+    /// So the tool lists what is actually on screen and the user copies one.
+    pub fn visible_window_titles() -> Vec<String> {
+        use windows::Win32::Foundation::LPARAM;
+        use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+        let mut out: Vec<String> = Vec::new();
+
+        // SAFETY: `collect` matches the WNDENUMPROC signature and `out` lives
+        // for the whole call. EnumWindows is synchronous, so the pointer
+        // cannot outlive it.
+        unsafe {
+            let _ = EnumWindows(Some(collect), LPARAM(&mut out as *mut Vec<String> as isize));
+        }
+
+        out.sort();
+        out.dedup();
+
+        out
+    }
+
+    /// The callback `EnumWindows` calls once per top level window.
+    ///
+    /// # Safety
+    ///
+    /// `lparam` must be a live `*mut Vec<String>`, which is what
+    /// `visible_window_titles` passes and nothing else calls this.
+    unsafe extern "system" fn collect(
+        handle: HWND,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) -> windows::core::BOOL {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+        };
+
+        // Always true. Returning false stops the enumeration early and would
+        // silently truncate the list.
+        let keep_going = windows::core::BOOL(1);
+
+        // A hidden window cannot be the game and there are hundreds of them.
+        if !IsWindowVisible(handle).as_bool() {
+            return keep_going;
+        }
+
+        let length = GetWindowTextLengthW(handle);
+
+        if length <= 0 {
+            return keep_going;
+        }
+
+        let mut buffer = vec![0u16; length as usize + 1];
+        let written = GetWindowTextW(handle, &mut buffer);
+
+        if written > 0 {
+            let title = String::from_utf16_lossy(&buffer[..written as usize]);
+
+            let out = &mut *(lparam.0 as *mut Vec<String>);
+            out.push(title);
+        }
+
+        keep_going
+    }
+
     /// Prove `SendInput` works, without touching anything the user owns.
     ///
     /// # Why this exists
@@ -275,7 +347,9 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{self_test_send_input, GameWindowAdapter, KeyboardCopyTrigger};
+pub use win::{
+    self_test_send_input, visible_window_titles, GameWindowAdapter, KeyboardCopyTrigger,
+};
 
 #[cfg(test)]
 mod tests {
