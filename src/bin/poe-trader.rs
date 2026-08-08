@@ -1,52 +1,20 @@
 use std::process::ExitCode;
-use std::time::Duration;
 
 use poe_trader_app::adapter::game_data_adapter::GameTables;
-use poe_trader_app::adapter::http_adapter::{HttpAdapter, NetworkPolicy, PolicyError};
+#[cfg(windows)]
+use poe_trader_app::adapter::http_adapter::HttpAdapter;
 use poe_trader_app::config::PoeTraderConfig;
+use poe_trader_app::controller::startup_controller;
 use poe_trader_app::driver::cli_driver;
 use poe_trader_app::logging::{Logger, Value};
-use poe_trader_app::types::Hotkey;
+#[cfg(windows)]
 use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if args.iter().any(|a| a == "--list-windows") {
-        return cli_driver::list_windows();
-    }
-
-    if args.first().map(String::as_str) == Some("--fake-game") {
-        let title = args
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| "Path of Exile 2".into());
-        let seconds = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
-
-        let Some(path) = args.get(3) else {
-            eprintln!("usage: --fake-game <title> <seconds> <item-file>");
-
-            return ExitCode::FAILURE;
-        };
-
-        let item = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(err) => {
-                eprintln!("poe-trader: reading {path}: {err}");
-
-                return ExitCode::FAILURE;
-            }
-        };
-
-        return cli_driver::fake_game(&title, seconds, &item);
-    }
-
-    if args.iter().any(|a| a == "--self-test-hook") {
-        return cli_driver::self_test_hook();
-    }
-
-    if args.iter().any(|a| a == "--self-test-hotkey") {
-        return cli_driver::self_test_hotkey();
+    if let Some(code) = cli_driver::run_subcommand(&args) {
+        return code;
     }
 
     let check_clipboard = args.iter().any(|a| a == "--check-clipboard");
@@ -69,80 +37,40 @@ fn main() -> ExitCode {
 
     let log = Logger::new(&cfg.log_level, "poe-trader");
 
-    let policy = NetworkPolicy::new(
-        cfg.network_enabled,
-        cfg.block_unlisted_hosts,
-        &cfg.allowed_hosts,
-    );
+    let http = match cli_driver::build_http(&cfg, &log) {
+        Some(http) => http,
+        None => return ExitCode::FAILURE,
+    };
 
-    log.info(
-        "network policy",
-        &[
-            ("enabled", Value::Bool(cfg.network_enabled)),
-            ("block_unlisted", Value::Bool(cfg.block_unlisted_hosts)),
-            ("hosts", Value::Str(policy.allowed_hosts().join(","))),
-        ],
-    );
-
-    log.info(
-        "session",
-        &[("poesessid_present", Value::Bool(!cfg.poesessid.is_empty()))],
-    );
-
-    let http = match HttpAdapter::new(policy, Duration::from_secs(30)) {
-        Ok(http) => http,
+    let validated = match startup_controller::validate(
+        &cfg.game,
+        &cfg.price_check_hotkey,
+        http.policy().check(&cfg.trade_base_url),
+    ) {
+        Ok(validated) => validated,
         Err(err) => {
             log.error(
-                "building http client",
-                &[("error", Value::Str(err.to_string()))],
+                "the configuration cannot start the overlay",
+                &[(
+                    "error",
+                    Value::Str(poe_trader_app::util::error_chain::render(&err)),
+                )],
             );
 
             return ExitCode::FAILURE;
         }
     };
 
-    match http.policy().check(&cfg.trade_base_url) {
-        Ok(()) => {}
-        Err(PolicyError::NetworkDisabled) => {
-            log.warn("network is disabled. Pricing will not work.", &[]);
-        }
-        Err(err) => {
-            log.error(
-                "trade_base_url is refused by the network policy",
-                &[
-                    ("url", Value::Str(cfg.trade_base_url.clone())),
-                    ("error", Value::Str(err.to_string())),
-                ],
-            );
-
-            return ExitCode::FAILURE;
-        }
+    if validated.network_disabled {
+        log.warn("network is disabled. Pricing will not work.", &[]);
     }
 
-    let hotkey = match Hotkey::parse(&cfg.price_check_hotkey) {
-        Ok(hotkey) => hotkey,
-        Err(err) => {
-            log.error(
-                "reading the price check hotkey",
-                &[
-                    ("hotkey", Value::Str(cfg.price_check_hotkey.clone())),
-                    ("error", Value::Str(err.to_string())),
-                ],
-            );
-
-            return ExitCode::FAILURE;
-        }
-    };
+    let hotkey = validated.hotkey;
+    let game = validated.game;
 
     if press {
         return cli_driver::press_hotkey(&hotkey);
     }
-
-    let Some(game) = GameVersion::parse(&cfg.game) else {
-        log.error("unknown game", &[("game", Value::Str(cfg.game.clone()))]);
-
-        return ExitCode::FAILURE;
-    };
 
     let data = match GameTables::load(std::path::Path::new(&cfg.data_dir)) {
         Ok(data) => data,
@@ -159,42 +87,7 @@ fn main() -> ExitCode {
         }
     };
 
-    log.info(
-        "startup",
-        &[
-            ("game", Value::Str(game.as_str().to_string())),
-            ("window_title", Value::Str(cfg.window_title.clone())),
-            ("hotkey", Value::Str(hotkey.to_string())),
-            ("stats", Value::Int(data.stat_count() as i64)),
-            ("item_names", Value::Int(data.item_name_count() as i64)),
-        ],
-    );
-
-    let game_config = poe_trader_app::adapter::game_config_adapter::read(
-        std::path::Path::new(&cli_driver::documents_dir()),
-        game,
-        poe_trader_app::adapter::game_config_adapter::load_from_disk,
-    );
-
-    log.info(
-        "game configuration",
-        &[
-            (
-                "path",
-                Value::Str(
-                    game_config
-                        .path
-                        .as_ref()
-                        .map_or_else(|| "not found".to_string(), |p| p.display().to_string()),
-                ),
-            ),
-            (
-                "show_mods_key",
-                Value::Str(game_config.show_mods_key.clone()),
-            ),
-            ("read", Value::Bool(game_config.read)),
-        ],
-    );
+    cli_driver::report_startup(&log, game, &cfg.window_title, &hotkey.to_string(), &data);
 
     #[cfg(windows)]
     if check_clipboard {

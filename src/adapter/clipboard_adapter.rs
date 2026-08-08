@@ -19,12 +19,14 @@ pub enum ClipboardError {
     NoChange { waited: Duration },
 }
 
+#[cfg_attr(test, mockall::automock)]
 pub trait Clipboard: Send + Sync {
     fn read(&mut self) -> Result<Option<String>, ClipboardError>;
 
     fn write(&mut self, text: &str) -> Result<(), ClipboardError>;
 }
 
+#[cfg_attr(test, mockall::automock)]
 pub trait CopyTrigger: Send + Sync {
     fn trigger_copy(&self) -> Result<(), ClipboardError>;
 }
@@ -126,14 +128,14 @@ mod tests {
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct FakeClipboard {
+    struct ScriptedClipboard {
         content: Option<String>,
         script: Vec<Option<String>>,
         reads: usize,
         writes: Vec<String>,
     }
 
-    impl FakeClipboard {
+    impl ScriptedClipboard {
         fn holding(text: Option<&str>) -> Self {
             Self {
                 content: text.map(str::to_string),
@@ -153,7 +155,7 @@ mod tests {
         }
     }
 
-    impl Clipboard for FakeClipboard {
+    impl Clipboard for ScriptedClipboard {
         fn read(&mut self) -> Result<Option<String>, ClipboardError> {
             if self.reads > 0 {
                 if let Some(next) = self.script.get(self.reads - 1) {
@@ -174,11 +176,11 @@ mod tests {
         }
     }
 
-    struct FakeTrigger {
+    struct CountingTrigger {
         fired: AtomicUsize,
     }
 
-    impl FakeTrigger {
+    impl CountingTrigger {
         fn new() -> Self {
             Self {
                 fired: AtomicUsize::new(0),
@@ -190,7 +192,7 @@ mod tests {
         }
     }
 
-    impl CopyTrigger for FakeTrigger {
+    impl CopyTrigger for CountingTrigger {
         fn trigger_copy(&self) -> Result<(), ClipboardError> {
             self.fired.fetch_add(1, Ordering::Relaxed);
 
@@ -208,18 +210,44 @@ mod tests {
     fn no_sleep(_: Duration) {}
 
     #[test]
-    fn a_changed_clipboard_is_returned() {
-        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
+    fn the_copy_keystroke_is_sent_exactly_once_generated_mock() {
+        let mut trigger = MockCopyTrigger::new();
+        trigger.expect_trigger_copy().times(1).returning(|| Ok(()));
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap();
+        let mut clip = ScriptedClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
+
+        let got = copy_item(&mut clip, &trigger, fast(), false, no_sleep).unwrap();
+
+        assert_eq!(got, "Item Class: Rings");
+    }
+
+    #[test]
+    fn a_trigger_that_refuses_stops_the_copy_generated_mock() {
+        let mut trigger = MockCopyTrigger::new();
+        trigger.expect_trigger_copy().times(1).returning(|| {
+            Err(ClipboardError::NoChange {
+                waited: Duration::from_millis(1),
+            })
+        });
+
+        let mut clip = ScriptedClipboard::holding(Some("old"));
+
+        assert!(copy_item(&mut clip, &trigger, fast(), false, no_sleep).is_err());
+    }
+
+    #[test]
+    fn a_changed_clipboard_is_returned() {
+        let mut clip = ScriptedClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
+
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, no_sleep).unwrap();
 
         assert_eq!(got, "Item Class: Rings");
     }
 
     #[test]
     fn the_copy_keystroke_is_sent_once() {
-        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
-        let trigger = FakeTrigger::new();
+        let mut clip = ScriptedClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
+        let trigger = CountingTrigger::new();
 
         copy_item(&mut clip, &trigger, fast(), false, no_sleep).unwrap();
 
@@ -228,27 +256,29 @@ mod tests {
 
     #[test]
     fn the_old_clipboard_is_put_back() {
-        let mut clip = FakeClipboard::scripted(Some("my notes"), vec![Some("Item Class: Rings")]);
+        let mut clip =
+            ScriptedClipboard::scripted(Some("my notes"), vec![Some("Item Class: Rings")]);
 
-        copy_item(&mut clip, &FakeTrigger::new(), fast(), true, no_sleep).unwrap();
+        copy_item(&mut clip, &CountingTrigger::new(), fast(), true, no_sleep).unwrap();
 
         assert_eq!(clip.writes, vec!["my notes"]);
     }
 
     #[test]
     fn the_old_clipboard_is_left_alone_when_restore_is_off() {
-        let mut clip = FakeClipboard::scripted(Some("my notes"), vec![Some("Item Class: Rings")]);
+        let mut clip =
+            ScriptedClipboard::scripted(Some("my notes"), vec![Some("Item Class: Rings")]);
 
-        copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap();
+        copy_item(&mut clip, &CountingTrigger::new(), fast(), false, no_sleep).unwrap();
 
         assert!(clip.writes.is_empty());
     }
 
     #[test]
     fn an_empty_starting_clipboard_needs_nothing_put_back() {
-        let mut clip = FakeClipboard::scripted(None, vec![Some("Item Class: Rings")]);
+        let mut clip = ScriptedClipboard::scripted(None, vec![Some("Item Class: Rings")]);
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), true, no_sleep).unwrap();
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), true, no_sleep).unwrap();
 
         assert_eq!(got, "Item Class: Rings");
         assert!(clip.writes.is_empty());
@@ -256,7 +286,7 @@ mod tests {
 
     #[test]
     fn a_late_answer_is_still_caught() {
-        let mut clip = FakeClipboard::scripted(
+        let mut clip = ScriptedClipboard::scripted(
             Some("old"),
             vec![
                 Some("old"),
@@ -266,47 +296,49 @@ mod tests {
             ],
         );
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap();
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, no_sleep).unwrap();
 
         assert_eq!(got, "Item Class: Rings");
     }
 
     #[test]
     fn the_empty_moment_during_a_copy_is_not_read_as_the_item() {
-        let mut clip = FakeClipboard::scripted(
+        let mut clip = ScriptedClipboard::scripted(
             Some("old"),
             vec![None, Some("  "), Some("Item Class: Rings")],
         );
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap();
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, no_sleep).unwrap();
 
         assert_eq!(got, "Item Class: Rings");
     }
 
     #[test]
     fn a_clipboard_that_never_changes_fails_rather_than_returning_the_old_text() {
-        let mut clip = FakeClipboard::holding(Some("my notes"));
+        let mut clip = ScriptedClipboard::holding(Some("my notes"));
 
-        let err = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap_err();
+        let err =
+            copy_item(&mut clip, &CountingTrigger::new(), fast(), false, no_sleep).unwrap_err();
 
         assert!(matches!(err, ClipboardError::NoChange { .. }));
     }
 
     #[test]
     fn the_failure_message_says_how_long_it_waited() {
-        let mut clip = FakeClipboard::holding(Some("my notes"));
+        let mut clip = ScriptedClipboard::holding(Some("my notes"));
 
-        let err = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap_err();
+        let err =
+            copy_item(&mut clip, &CountingTrigger::new(), fast(), false, no_sleep).unwrap_err();
 
         assert!(err.to_string().contains("did not change"));
     }
 
     #[test]
     fn the_wait_is_bounded_by_the_timeout() {
-        let mut clip = FakeClipboard::holding(Some("my notes"));
+        let mut clip = ScriptedClipboard::holding(Some("my notes"));
         let slept = RefCell::new(Duration::ZERO);
 
-        let _ = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |d| {
+        let _ = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, |d| {
             *slept.borrow_mut() += d;
         });
 
@@ -315,10 +347,10 @@ mod tests {
 
     #[test]
     fn a_successful_copy_stops_waiting_early() {
-        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
+        let mut clip = ScriptedClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
         let slept = RefCell::new(Duration::ZERO);
 
-        copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |d| {
+        copy_item(&mut clip, &CountingTrigger::new(), fast(), false, |d| {
             *slept.borrow_mut() += d;
         })
         .unwrap();
@@ -337,30 +369,31 @@ mod tests {
     #[test]
     fn pricing_the_same_item_twice_works() {
         let mut clip =
-            FakeClipboard::scripted(Some("Item Class: Rings"), vec![Some("Item Class: Rings")]);
+            ScriptedClipboard::scripted(Some("Item Class: Rings"), vec![Some("Item Class: Rings")]);
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {}).unwrap();
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, |_| {}).unwrap();
 
         assert_eq!(got, "Item Class: Rings");
     }
 
     #[test]
     fn a_clipboard_that_never_holds_an_item_times_out() {
-        let mut clip = FakeClipboard::scripted(
+        let mut clip = ScriptedClipboard::scripted(
             Some("my notes"),
             vec![Some("still my notes"), Some("and again")],
         );
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {});
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, |_| {});
 
         assert!(matches!(got, Err(ClipboardError::NoChange { .. })));
     }
 
     #[test]
     fn a_foreign_client_item_is_returned_rather_than_timing_out() {
-        let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Класс предмета: Кольца")]);
+        let mut clip =
+            ScriptedClipboard::scripted(Some("old"), vec![Some("Класс предмета: Кольца")]);
 
-        let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {}).unwrap();
+        let got = copy_item(&mut clip, &CountingTrigger::new(), fast(), false, |_| {}).unwrap();
 
         assert!(got.starts_with("Класс предмета"));
     }

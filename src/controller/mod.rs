@@ -5,5 +5,7 @@ pub mod overlay_controller;
 pub mod panel_health_controller;
 pub mod price_check_controller;
 pub mod price_check_loop;
+pub mod session_controller;
+pub mod startup_controller;
 
 pub use price_check_controller::{PriceCheckController, PriceCheckError, SearchResult};

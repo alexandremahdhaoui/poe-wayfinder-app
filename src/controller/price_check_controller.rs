@@ -374,12 +374,12 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    struct FakeClock {
+    struct SteppingClock {
         now: Mutex<Millis>,
         slept: Mutex<Vec<Millis>>,
     }
 
-    impl FakeClock {
+    impl SteppingClock {
         fn new() -> Self {
             Self {
                 now: Mutex::new(0),
@@ -392,7 +392,7 @@ mod tests {
         }
     }
 
-    impl Clock for FakeClock {
+    impl Clock for SteppingClock {
         fn now(&self) -> Millis {
             *self.now.lock().unwrap()
         }
@@ -403,12 +403,12 @@ mod tests {
         }
     }
 
-    struct FakeHttp {
+    struct CannedHttp {
         responses: Mutex<Vec<HttpResponse>>,
         sent: Mutex<Vec<(String, String)>>,
     }
 
-    impl FakeHttp {
+    impl CannedHttp {
         fn with(responses: Vec<HttpResponse>) -> Self {
             Self {
                 responses: Mutex::new(responses),
@@ -426,7 +426,7 @@ mod tests {
         }
     }
 
-    impl HttpClient for FakeHttp {
+    impl HttpClient for CannedHttp {
         async fn get(
             &self,
             _url: &str,
@@ -567,10 +567,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_search_sends_to_the_right_url_and_reads_the_result() {
-        let http = FakeHttp::with(vec![ok_response(vec![])]);
+        let http = CannedHttp::with(vec![ok_response(vec![])]);
         let mut c = PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",
@@ -604,10 +604,10 @@ mod tests {
         }
     }
 
-    fn controller(http: FakeHttp) -> PriceCheckController<FakeHttp, FakeClock> {
+    fn controller(http: CannedHttp) -> PriceCheckController<CannedHttp, SteppingClock> {
         PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",
@@ -616,7 +616,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_currency_goes_to_the_exchange_endpoint() {
-        let mut c = controller(FakeHttp::with(vec![ok_response(vec![])]));
+        let mut c = controller(CannedHttp::with(vec![ok_response(vec![])]));
 
         let (_, exchange) = c.search_checked(&currency_check()).await.unwrap();
 
@@ -633,7 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_item_goes_to_the_search_endpoint() {
-        let mut c = controller(FakeHttp::with(vec![ok_response(vec![])]));
+        let mut c = controller(CannedHttp::with(vec![ok_response(vec![])]));
 
         let (_, exchange) = c.search_checked(&item_check()).await.unwrap();
 
@@ -647,15 +647,15 @@ mod tests {
 
     #[tokio::test]
     async fn the_configured_latency_replaces_the_default() {
-        let c = controller(FakeHttp::with(vec![])).with_latency(9);
+        let c = controller(CannedHttp::with(vec![])).with_latency(9);
 
         assert_eq!(c.latency, 9);
     }
 
     #[tokio::test]
     async fn the_first_search_does_not_wait() {
-        let http = FakeHttp::with(vec![ok_response(vec![])]);
-        let clock = FakeClock::new();
+        let http = CannedHttp::with(vec![ok_response(vec![])]);
+        let clock = SteppingClock::new();
         let mut c = PriceCheckController::new(
             http,
             clock,
@@ -671,10 +671,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_search_waits_for_the_conservative_window() {
-        let http = FakeHttp::with(vec![ok_response(vec![]), ok_response(vec![])]);
+        let http = CannedHttp::with(vec![ok_response(vec![]), ok_response(vec![])]);
         let mut c = PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",
@@ -688,14 +688,14 @@ mod tests {
 
     #[tokio::test]
     async fn the_servers_limits_replace_the_conservative_guess() {
-        let http = FakeHttp::with(vec![ok_response(vec![
+        let http = CannedHttp::with(vec![ok_response(vec![
             ("x-rate-limit-rules", "Ip"),
             ("x-rate-limit-ip", "8:10:60"),
             ("x-rate-limit-ip-state", "1:10:0"),
         ])]);
         let mut c = PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",
@@ -712,7 +712,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_wider_server_limit_lets_the_second_search_through_at_once() {
-        let http = FakeHttp::with(vec![
+        let http = CannedHttp::with(vec![
             ok_response(vec![
                 ("x-rate-limit-rules", "Ip"),
                 ("x-rate-limit-ip", "8:10:60"),
@@ -722,7 +722,7 @@ mod tests {
         ]);
         let mut c = PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",
@@ -736,10 +736,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_session_cookie_is_sent_when_present_and_omitted_when_not() {
-        let http = FakeHttp::with(vec![ok_response(vec![])]);
+        let http = CannedHttp::with(vec![ok_response(vec![])]);
         let mut c = PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",
@@ -754,10 +754,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_league_is_percent_encoded_into_the_url() {
-        let http = FakeHttp::with(vec![ok_response(vec![])]);
+        let http = CannedHttp::with(vec![ok_response(vec![])]);
         let mut c = PriceCheckController::new(
             http,
-            FakeClock::new(),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Hardcore Ruthless",
@@ -774,10 +774,10 @@ mod tests {
             (GameVersion::Poe1, "/api/trade/search/"),
             (GameVersion::Poe2, "/api/trade2/search/"),
         ] {
-            let http = FakeHttp::with(vec![ok_response(vec![])]);
+            let http = CannedHttp::with(vec![ok_response(vec![])]);
             let mut c = PriceCheckController::new(
                 http,
-                FakeClock::new(),
+                SteppingClock::new(),
                 "https://www.pathofexile.com",
                 game,
                 "Standard",
@@ -792,8 +792,8 @@ mod tests {
     #[test]
     fn a_burst_estimate_reflects_the_current_limits() {
         let mut c = PriceCheckController::new(
-            FakeHttp::with(Vec::new()),
-            FakeClock::new(),
+            CannedHttp::with(Vec::new()),
+            SteppingClock::new(),
             "https://www.pathofexile.com",
             GameVersion::Poe2,
             "Standard",

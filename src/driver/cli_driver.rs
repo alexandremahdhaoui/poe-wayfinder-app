@@ -626,3 +626,143 @@ pub fn report_input(log: &Logger) {
         );
     }
 }
+
+#[cfg(windows)]
+pub fn report_startup(
+    log: &Logger,
+    game: GameVersion,
+    window_title: &str,
+    hotkey: &str,
+    data: &GameTables,
+) {
+    log.info(
+        "startup",
+        &[
+            ("game", Value::Str(game.as_str().to_string())),
+            ("window_title", Value::Str(window_title.to_string())),
+            ("hotkey", Value::Str(hotkey.to_string())),
+            ("stats", Value::Int(data.stat_count() as i64)),
+            ("item_names", Value::Int(data.item_name_count() as i64)),
+        ],
+    );
+
+    let game_config = crate::adapter::game_config_adapter::read(
+        std::path::Path::new(&documents_dir()),
+        game,
+        crate::adapter::game_config_adapter::load_from_disk,
+    );
+
+    log.info(
+        "game configuration",
+        &[
+            (
+                "path",
+                Value::Str(
+                    game_config
+                        .path
+                        .as_ref()
+                        .map_or_else(|| "not found".to_string(), |p| p.display().to_string()),
+                ),
+            ),
+            (
+                "show_mods_key",
+                Value::Str(game_config.show_mods_key.clone()),
+            ),
+            ("read", Value::Bool(game_config.read)),
+        ],
+    );
+}
+
+pub fn run_subcommand(args: &[String]) -> Option<ExitCode> {
+    if args.iter().any(|a| a == "--list-windows") {
+        return Some(list_windows());
+    }
+
+    if args.first().map(String::as_str) == Some("--fake-game") {
+        let title = args
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "Path of Exile 2".into());
+        let seconds = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
+
+        let Some(path) = args.get(3) else {
+            eprintln!("usage: --fake-game <title> <seconds> <item-file>");
+
+            return Some(ExitCode::FAILURE);
+        };
+
+        let item = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) => {
+                eprintln!("poe-trader: reading {path}: {err}");
+
+                return Some(ExitCode::FAILURE);
+            }
+        };
+
+        return Some(fake_game(&title, seconds, &item));
+    }
+
+    if args.iter().any(|a| a == "--self-test-hook") {
+        return Some(self_test_hook());
+    }
+
+    if args.iter().any(|a| a == "--self-test-hotkey") {
+        return Some(self_test_hotkey());
+    }
+
+    None
+}
+
+#[cfg(not(windows))]
+pub fn report_startup(
+    _log: &crate::logging::Logger,
+    _game: poe_trader_core::types::GameVersion,
+    _window_title: &str,
+    _hotkey: &str,
+    _data: &crate::adapter::game_data_adapter::GameTables,
+) {
+}
+
+pub fn build_http(
+    cfg: &crate::config::PoeTraderConfig,
+    log: &crate::logging::Logger,
+) -> Option<crate::adapter::http_adapter::HttpAdapter> {
+    use crate::adapter::http_adapter::{HttpAdapter, NetworkPolicy};
+    use crate::logging::Value;
+    use std::time::Duration;
+
+    let policy = NetworkPolicy::new(
+        cfg.network_enabled,
+        cfg.block_unlisted_hosts,
+        &cfg.allowed_hosts,
+    );
+
+    log.info(
+        "network policy",
+        &[
+            ("enabled", Value::Bool(cfg.network_enabled)),
+            ("block_unlisted", Value::Bool(cfg.block_unlisted_hosts)),
+            ("hosts", Value::Str(policy.allowed_hosts().join(","))),
+        ],
+    );
+
+    log.info(
+        "session",
+        &[("poesessid_present", Value::Bool(!cfg.poesessid.is_empty()))],
+    );
+
+    let http = match HttpAdapter::new(policy, Duration::from_secs(30)) {
+        Ok(http) => http,
+        Err(err) => {
+            log.error(
+                "building http client",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return None;
+        }
+    };
+
+    Some(http)
+}

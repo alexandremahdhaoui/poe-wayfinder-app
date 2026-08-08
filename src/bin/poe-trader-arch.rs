@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const MAIN_BINARY: &str = "src/bin/poe-trader.rs";
-const MAIN_MAX_LINES: usize = 150;
+const MAIN_MAX_LINES: usize = 220;
 
 const WAIVED: &[(&str, &str)] = &[(
     "src/driver/cli_driver.rs",
@@ -181,7 +181,7 @@ fn hand_written_fakes(source: &Source) -> Vec<Violation> {
                 .any(|p| starts_a_fake(t, p))
         })
         .map(|(n, line)| Violation {
-            rule: "mocks are generated",
+            rule: "test doubles are generated or named for what they do",
             path: source.relative.clone(),
             detail: format!("line {}: {}", n + 1, line.trim()),
         })

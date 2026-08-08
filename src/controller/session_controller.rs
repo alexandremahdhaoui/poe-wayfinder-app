@@ -119,7 +119,9 @@ mod tests {
     }
 
     fn trade_whisper(league: &str) -> LogEvent {
-        whisper(&format!("Hi, I would like to buy your item listed for 5 divine in {league}"))
+        whisper(&format!(
+            "Hi, I would like to buy your item listed for 5 divine in {league}"
+        ))
     }
 
     #[test]
@@ -139,7 +141,10 @@ mod tests {
 
     #[test]
     fn a_configured_league_is_trimmed() {
-        assert_eq!(Session::from_config("  Standard  ").league(), Some("Standard"));
+        assert_eq!(
+            Session::from_config("  Standard  ").league(),
+            Some("Standard")
+        );
     }
 
     #[test]
