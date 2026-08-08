@@ -229,6 +229,14 @@ fn run_overlay(
     http: HttpAdapter,
     log: Logger,
 ) -> ExitCode {
+    use poe_trader_app::adapter::clipboard_adapter::{CopyTiming, SystemClipboard};
+    use poe_trader_app::adapter::clock_adapter::SystemClock;
+    use poe_trader_app::adapter::game_window_adapter::{GameWindowAdapter, KeyboardCopyTrigger};
+    use poe_trader_app::adapter::window_probe_adapter::SystemWindowProbe;
+    use poe_trader_app::controller::copy_controller::CopyController;
+    use poe_trader_app::controller::game_state_controller::GameStateController;
+    use poe_trader_app::controller::panel_health_controller::PanelHealthController;
+    use poe_trader_app::controller::price_check_controller::PriceCheckController;
     use poe_trader_app::driver::overlay_loop::{OverlayLoopDriver, OverlaySettings};
 
     let settings = OverlaySettings {
@@ -242,12 +250,50 @@ fn run_overlay(
         restore_clipboard: cfg.restore_clipboard,
     };
 
+    let window = GameStateController::new(GameWindowAdapter::new(&cfg.window_title));
+
+    let clipboard = match SystemClipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(err) => {
+            log.error(
+                "opening the clipboard",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let copier = CopyController::new(
+        clipboard,
+        KeyboardCopyTrigger::new(),
+        CopyTiming::default(),
+        cfg.restore_clipboard,
+    );
+
+    let prices = PriceCheckController::new(
+        http,
+        SystemClock::new(),
+        &cfg.trade_base_url,
+        game,
+        &cfg.league,
+    )
+    .with_session(&cfg.poesessid)
+    .with_latency(settings.latency);
+
+    let health = PanelHealthController::new(SystemWindowProbe::new());
+    let stats = data.stat_count();
+
     let driver = match OverlayLoopDriver::new(
         settings,
         game,
         data,
+        stats,
         &hotkey,
-        http,
+        window,
+        copier,
+        prices,
+        health,
         Logger::new(&cfg.log_level, "poe-trader"),
     ) {
         Ok(driver) => driver,

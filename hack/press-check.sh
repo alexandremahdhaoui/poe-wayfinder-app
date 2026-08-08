@@ -56,13 +56,32 @@ sleep 5
 (timeout 80 "$exe" --data-dir "$data" --game "$game" --log-level debug >"$log" 2>&1 &)
 sleep 12
 
-"$exe" --data-dir "$data" --game "$game" --press-hotkey || {
-    echo "FAIL: the keys were not accepted."
-    exit 1
-}
+pressed=0
+
+for attempt in 1 2 3; do
+    "$exe" --data-dir "$data" --game "$game" --press-hotkey || {
+        echo "FAIL: the keys were not accepted."
+        exit 1
+    }
+
+    # Injected input is occasionally swallowed before any window sees it, which
+    # looks exactly like a broken hotkey. Retrying separates the two.
+    for _ in 1 2 3 4 5 6; do
+        sleep 1
+
+        if grep -q '"msg":"price check hotkey pressed"' "$log"; then
+            pressed=1
+            break
+        fi
+    done
+
+    [ "$pressed" -eq 1 ] && break
+
+    echo "note: press $attempt did not land, retrying"
+done
 
 # The search is paced by the rate limiter, which is not optional.
-sleep 50
+sleep 45
 
 fail=0
 

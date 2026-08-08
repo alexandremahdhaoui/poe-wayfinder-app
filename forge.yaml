@@ -156,7 +156,7 @@ test:
         - -c
         - >-
           cargo run --quiet --release --bin poe-trader-arch --
-          --root . --max 12
+          --root . --max 6
 
   - name: datacheck
     runner: go://generic-test-runner

@@ -42,6 +42,14 @@ pub trait Clock: Send + Sync {
     async fn sleep(&self, millis: Millis);
 }
 
+#[allow(async_fn_in_trait)]
+pub trait Prices {
+    async fn search_checked(
+        &mut self,
+        checked: &PriceCheck,
+    ) -> Result<(SearchResult, bool), PriceCheckError>;
+}
+
 pub struct PriceCheckController<H: HttpClient, C: Clock> {
     http: H,
     clock: C,
@@ -90,12 +98,12 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         options: PriceCheckOptions,
     ) -> Result<(PriceCheck, SearchResult), PriceCheckError> {
         let checked = price_check(clipboard, data, options).map_err(PriceCheckError::Parse)?;
-        let (result, _) = self.search_checked(&checked).await?;
+        let (result, _) = self.run_search(&checked).await?;
 
         Ok((checked, result))
     }
 
-    pub async fn search_checked(
+    async fn run_search(
         &mut self,
         checked: &PriceCheck,
     ) -> Result<(SearchResult, bool), PriceCheckError> {
@@ -159,6 +167,15 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
             .estimate_time(count, self.clock.now(), false);
 
         Duration::from_millis(millis)
+    }
+}
+
+impl<H: HttpClient, C: Clock> Prices for PriceCheckController<H, C> {
+    async fn search_checked(
+        &mut self,
+        checked: &PriceCheck,
+    ) -> Result<(SearchResult, bool), PriceCheckError> {
+        self.run_search(checked).await
     }
 }
 

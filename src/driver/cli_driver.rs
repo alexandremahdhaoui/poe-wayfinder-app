@@ -609,3 +609,20 @@ pub fn documents_dir() -> String {
 
     std::env::var("HOME").map_or_else(|_| String::new(), |home| format!("{home}/Documents"))
 }
+
+#[cfg(windows)]
+pub fn report_input(log: &Logger) {
+    let sent = crate::adapter::game_window_adapter::self_test_send_input();
+
+    if sent == 2 {
+        log.info(
+            "keyboard input works",
+            &[("events_accepted", Value::Int(2))],
+        );
+    } else {
+        log.error(
+            "keyboard input is not working, a price check will not be able to copy the item",
+            &[("events_accepted", Value::Int(i64::from(sent)))],
+        );
+    }
+}

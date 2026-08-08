@@ -5,16 +5,11 @@ use eframe::egui;
 use super::search::SearchOutcome;
 use super::{OverlayLoopError, OverlaySettings};
 
-use crate::adapter::clipboard_adapter::{copy_item, CopyTiming, SystemClipboard};
-use crate::adapter::clock_adapter::SystemClock;
-use crate::adapter::game_data_adapter::GameTables;
-use crate::adapter::game_window_adapter::{
-    self, GameWindowAdapter, GameWindowSource, KeyboardCopyTrigger,
-};
-use crate::adapter::http_adapter::HttpAdapter;
-use crate::adapter::window_probe_adapter;
+use crate::controller::copy_controller::Copier;
+use crate::controller::game_state_controller::GameState;
 use crate::controller::overlay_controller::{Frame, OverlayModel};
-use crate::controller::price_check_controller::PriceCheckController;
+use crate::controller::panel_health_controller::PanelHealth;
+use crate::controller::price_check_controller::Prices;
 use crate::controller::price_check_loop;
 use crate::driver::hook_driver::HookDriver;
 use crate::driver::hotkey_driver::HotkeyDriver;
@@ -26,7 +21,7 @@ use crate::types::overlay::OverlayGeometry;
 use crate::types::Hotkey;
 use crate::util::error_chain::render;
 
-use poe_trader_core::controller::panel_visible::{explain, visibility};
+use poe_trader_core::adapter::data_adapter::GameData;
 use poe_trader_core::controller::press_coalesce;
 use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 use poe_trader_core::types::GameVersion;
@@ -35,23 +30,29 @@ const PANEL_WINDOW_TITLE: &str = "poe-trader";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 100;
 
-pub struct OverlayLoopDriver {
-    window: GameWindowAdapter,
-    clipboard: SystemClipboard,
-    trigger: KeyboardCopyTrigger,
+pub struct OverlayLoopDriver<W, C, P, H, D>
+where
+    W: GameState + 'static,
+    C: Copier + 'static,
+    P: Prices + 'static,
+    H: PanelHealth + 'static,
+    D: GameData + 'static,
+{
+    window: W,
+    copier: C,
+    health: H,
     hotkeys: Option<HotkeyDriver>,
     hook: Option<HookDriver>,
     tray: Option<TrayIcon>,
     tray_state: TrayState,
     model: OverlayModel,
     runtime: tokio::runtime::Runtime,
-    prices: PriceCheckController<HttpAdapter, SystemClock>,
+    prices: P,
     log: Logger,
     settings: OverlaySettings,
     game: GameVersion,
-    data: GameTables,
+    data: D,
     options: PriceCheckOptions,
-    timing: CopyTiming,
     frames: i64,
     started: bool,
     last_press: Option<Instant>,
@@ -62,36 +63,42 @@ pub struct OverlayLoopDriver {
     pending: Vec<UiEvent>,
 }
 
-impl OverlayLoopDriver {
+impl<W, C, P, H, D> OverlayLoopDriver<W, C, P, H, D>
+where
+    W: GameState + 'static,
+    C: Copier + 'static,
+    P: Prices + 'static,
+    H: PanelHealth + 'static,
+    D: GameData + 'static,
+{
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         settings: OverlaySettings,
         game: GameVersion,
-        data: GameTables,
+        data: D,
+        stats: usize,
         hotkey: &Hotkey,
-        http: HttpAdapter,
+        window: W,
+        copier: C,
+        prices: P,
+        health: H,
         log: Logger,
     ) -> Result<Self, OverlayLoopError> {
-        let window = GameWindowAdapter::new(&settings.window_title);
-
         report_window(&window, &log);
-        crate::driver::cli_driver::report_hotkey_outlook(&window, &log);
-        report_input(&log);
+        crate::driver::cli_driver::report_input(&log);
 
         let hotkeys = start_registration(hotkey, &log);
         let hook = start_hook(hotkey, &log);
 
         let tray_state = TrayState {
-            game_found: window.find().is_ok(),
+            game_found: window.window().is_some(),
             paused: false,
             has_search: false,
             league: Some(settings.league.clone()),
-            stat_count: data.stat_count(),
+            stat_count: stats,
         };
 
         let tray = start_tray(&tray_state, game, hotkey, &log);
-
-        let clipboard =
-            SystemClipboard::new().map_err(|source| OverlayLoopError::Clipboard { source })?;
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -105,22 +112,12 @@ impl OverlayLoopDriver {
             "Ready. Press {hotkey} with the cursor over an item."
         ));
 
-        let prices = PriceCheckController::new(
-            http,
-            SystemClock::new(),
-            &settings.site_url,
-            game,
-            &settings.league,
-        )
-        .with_session(&settings.session)
-        .with_latency(settings.latency);
-
-        let window_was_found = window.find().is_ok();
+        let window_was_found = window.window().is_some();
 
         Ok(Self {
             window,
-            clipboard,
-            trigger: KeyboardCopyTrigger::new(),
+            copier,
+            health,
             hotkeys,
             hook,
             tray,
@@ -133,7 +130,6 @@ impl OverlayLoopDriver {
             game,
             data,
             options: PriceCheckOptions::new(game),
-            timing: CopyTiming::default(),
             frames: 0,
             started: false,
             last_press: None,
@@ -148,7 +144,7 @@ impl OverlayLoopDriver {
     pub fn run(mut self) -> Result<(), OverlayLoopError> {
         let first = self
             .model
-            .frame_scaled(self.window.find().ok(), self.window.scale());
+            .frame_scaled(self.window.window(), self.window.scale());
 
         let native_options = eframe::NativeOptions {
             viewport: overlay_viewport(&first),
@@ -179,7 +175,7 @@ impl OverlayLoopDriver {
             self.run_price_check();
         }
 
-        let found = self.window.find().ok();
+        let found = self.window.window();
 
         self.refresh_tray(found.is_some());
         self.report_window_change(found.is_some(), found);
@@ -382,9 +378,7 @@ impl OverlayLoopDriver {
 
         let Self {
             model,
-            clipboard,
-            trigger,
-            timing,
+            copier,
             settings,
             data,
             options,
@@ -395,17 +389,12 @@ impl OverlayLoopDriver {
             ..
         } = self;
 
-        let timing = *timing;
         let options = *options;
-        let restore = settings.restore_clipboard;
 
         let outcome = price_check_loop::run(
             model,
             cursor,
-            || {
-                copy_item(clipboard, trigger, timing, restore, std::thread::sleep)
-                    .map_err(|e| render(&e))
-            },
+            || copier.copy(),
             |text| price_check(text, data, options).map_err(|e| render(&e)),
             |checked| {
                 let (result, exchange) = runtime
@@ -524,20 +513,17 @@ impl OverlayLoopDriver {
     }
 
     fn probe_panel(&self) {
-        let measured =
-            match window_probe_adapter::measure(PANEL_WINDOW_TITLE, &self.settings.window_title) {
-                Ok(measured) => measured,
-                Err(err) => {
-                    self.log.debug(
-                        "could not measure the panel window",
-                        &[("error", Value::Str(err.to_string()))],
-                    );
+        let Some(health) = self
+            .health
+            .check(PANEL_WINDOW_TITLE, &self.settings.window_title)
+        else {
+            self.log.debug("could not measure the panel window", &[]);
 
-                    return;
-                }
-            };
+            return;
+        };
 
-        let verdict = visibility(measured);
+        let measured = health.measured;
+        let verdict = health.verdict;
 
         let fields = [
             ("verdict", Value::Str(format!("{verdict:?}"))),
@@ -546,7 +532,7 @@ impl OverlayLoopDriver {
             ("above_game", Value::Bool(measured.above_game)),
         ];
 
-        match explain(verdict) {
+        match health.advice {
             None => self.log.info("the panel is where it should be", &fields),
             Some(why) => self.log.error(why, &fields),
         }
@@ -582,7 +568,14 @@ impl OverlayLoopDriver {
     }
 }
 
-impl Drop for OverlayLoopDriver {
+impl<W, C, P, H, D> Drop for OverlayLoopDriver<W, C, P, H, D>
+where
+    W: GameState + 'static,
+    C: Copier + 'static,
+    P: Prices + 'static,
+    H: PanelHealth + 'static,
+    D: GameData + 'static,
+{
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {
             hook.stop();
@@ -594,9 +587,9 @@ fn rect_text(rect: poe_trader_core::controller::panel_visible::Rect) -> String {
     format!("{}x{} at {},{}", rect.width, rect.height, rect.x, rect.y)
 }
 
-fn report_window(window: &GameWindowAdapter, log: &Logger) {
-    match window.find() {
-        Ok(found) => log.info(
+fn report_window<W: GameState>(window: &W, log: &Logger) {
+    match window.window() {
+        Some(found) => log.info(
             "found the game window",
             &[
                 ("width", Value::Int(i64::from(found.rect.width))),
@@ -605,26 +598,7 @@ fn report_window(window: &GameWindowAdapter, log: &Logger) {
                 ("scale", Value::Str(format!("{:.2}", window.scale()))),
             ],
         ),
-        Err(err) => log.warn(
-            "the game window is not open yet",
-            &[("error", Value::Str(err.to_string()))],
-        ),
-    }
-}
-
-fn report_input(log: &Logger) {
-    let sent = game_window_adapter::self_test_send_input();
-
-    if sent == 2 {
-        log.info(
-            "keyboard input works",
-            &[("events_accepted", Value::Int(2))],
-        );
-    } else {
-        log.error(
-            "keyboard input is not working, a price check will not be able to copy the item",
-            &[("events_accepted", Value::Int(i64::from(sent)))],
-        );
+        None => log.warn("the game window is not open yet", &[]),
     }
 }
 

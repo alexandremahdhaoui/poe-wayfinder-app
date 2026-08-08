@@ -1,5 +1,30 @@
 use poe_trader_core::controller::panel_visible::{Measured, Rect};
 
+#[cfg_attr(test, mockall::automock)]
+pub trait WindowProbe: Send + Sync {
+    fn measure(&self, panel_title: &str, game_title: &str) -> Result<Measured, ProbeError>;
+}
+
+pub struct SystemWindowProbe;
+
+impl SystemWindowProbe {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SystemWindowProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WindowProbe for SystemWindowProbe {
+    fn measure(&self, panel_title: &str, game_title: &str) -> Result<Measured, ProbeError> {
+        measure(panel_title, game_title)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
     #[error("no window titled {title:?} is open")]
