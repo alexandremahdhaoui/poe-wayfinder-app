@@ -1,26 +1,9 @@
-//! Finding and watching the game window.
-//!
-//! The overlay has to know where the game is, whether it is in front, and
-//! where the cursor sits. All three come from the Windows API.
-//!
-//! # Why the title is config and not a constant
-//!
-//! The window title changes between game versions and between regional
-//! clients. A hardcoded title is the single most likely reason a user reports
-//! that the overlay never appears.
-
 use thiserror::Error;
 
 use crate::types::overlay::WindowRect;
 
-/// Why a window operation failed.
 #[derive(Debug, Error)]
 pub enum WindowError {
-    /// No window with that title exists.
-    ///
-    /// Usually means the game is not running. It is not fatal: the overlay
-    /// waits and tries again, because starting the tool before the game is the
-    /// normal order.
     #[error("no window titled {title:?} is open")]
     NotFound { title: String },
 
@@ -31,43 +14,23 @@ pub enum WindowError {
     SendInput,
 }
 
-/// What the overlay needs to know about the game.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GameWindow {
     pub rect: WindowRect,
-    /// Whether the game is the window with focus.
-    ///
-    /// The overlay hides when it is not. Drawing over another application is
-    /// the fastest way to make a tool feel broken.
     pub is_foreground: bool,
 }
 
-/// Looking at the game window.
-///
-/// Declared here because this module implements it. A test supplies one with
-/// fixed answers, so the overlay controller is testable with no window.
 pub trait GameWindowSource: Send + Sync {
-    /// Find the game window.
     fn find(&self) -> Result<GameWindow, WindowError>;
 
-    /// The cursor position, in physical screen pixels.
     fn cursor(&self) -> (i32, i32);
 
-    /// The display scale factor where the game is.
     fn scale(&self) -> f32;
 }
 
-/// Whether the overlay should be drawn for this window.
-///
-/// Three conditions, all required. Any one failing means the overlay would be
-/// drawn somewhere the user is not looking.
 pub fn should_draw(window: &GameWindow) -> bool {
     window.is_foreground && window.rect.is_visible()
 }
-
-// ---------------------------------------------------------------------------
-// The real implementation
-// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod win {
@@ -86,24 +49,17 @@ mod win {
         FindWindowW, GetCursorPos, GetForegroundWindow, GetWindowRect,
     };
 
-    /// The game window, found by title.
     pub struct GameWindowAdapter {
         title: String,
     }
 
     impl GameWindowAdapter {
-        /// Watch for a window with this exact title.
         pub fn new(title: &str) -> Self {
             Self {
                 title: title.to_string(),
             }
         }
 
-        /// The raw window handle, for callers that need to ask Windows about
-        /// the process behind it.
-        ///
-        /// A plain integer, so nothing outside this module has to name a
-        /// Windows type.
         pub fn raw_handle(&self) -> Option<isize> {
             self.handle().ok().map(|h| h.0 as isize)
         }
@@ -111,8 +67,6 @@ mod win {
         fn handle(&self) -> Result<HWND, WindowError> {
             let title = HSTRING::from(self.title.as_str());
 
-            // SAFETY: FindWindowW takes two optional wide strings and returns
-            // a handle or an error. Both arguments are valid for the call.
             let handle = unsafe { FindWindowW(None, &title) };
 
             match handle {
@@ -130,13 +84,10 @@ mod win {
 
             let mut rect = RECT::default();
 
-            // SAFETY: `rect` is a live, correctly sized RECT and `handle` came
-            // from FindWindowW and was checked for validity.
             unsafe { GetWindowRect(handle, &mut rect) }.map_err(|_| WindowError::Rect {
                 title: self.title.clone(),
             })?;
 
-            // SAFETY: no arguments and no failure mode.
             let foreground = unsafe { GetForegroundWindow() };
 
             Ok(GameWindow {
@@ -153,11 +104,7 @@ mod win {
         fn cursor(&self) -> (i32, i32) {
             let mut point = POINT::default();
 
-            // SAFETY: `point` is a live, correctly sized POINT.
             if unsafe { GetCursorPos(&mut point) }.is_err() {
-                // The cursor is always somewhere. A failure here means the
-                // desktop is locked, and the origin is as good an answer as
-                // any for a frame nobody can see.
                 return (0, 0);
             }
 
@@ -169,22 +116,16 @@ mod win {
                 return 1.0;
             };
 
-            // SAFETY: `handle` was checked for validity.
             let dpi = unsafe { GetDpiForWindow(handle) };
 
             if dpi == 0 {
                 return 1.0;
             }
 
-            // 96 is one hundred percent scaling on Windows.
             dpi as f32 / 96.0
         }
     }
 
-    /// Sends Ctrl+C to whatever has focus.
-    ///
-    /// The game has no API. Sending the keystroke is the only way to make it
-    /// write the item under the cursor to the clipboard.
     pub struct KeyboardCopyTrigger;
 
     impl KeyboardCopyTrigger {
@@ -201,19 +142,12 @@ mod win {
 
     impl crate::adapter::clipboard_adapter::CopyTrigger for KeyboardCopyTrigger {
         fn trigger_copy(&self) -> Result<(), crate::adapter::clipboard_adapter::ClipboardError> {
-            // The sequence itself is decided in the domain crate and tested
-            // there, because the order is the whole of the correctness and it
-            // cannot be checked from here. This turns it into Windows events
-            // and nothing else.
             let events: Vec<INPUT> = copy_key_sequence()
                 .iter()
                 .filter_map(|stroke| {
                     let key = match stroke.key.as_str() {
                         "Ctrl" => VK_CONTROL,
                         "C" => VK_C,
-                        // A key this adapter cannot send is dropped rather
-                        // than guessed. Sending the wrong scan code types a
-                        // character into the game.
                         _ => return None,
                     };
 
@@ -221,8 +155,6 @@ mod win {
                 })
                 .collect();
 
-            // SAFETY: `events` is a live, correctly sized array of INPUT and
-            // the size argument matches INPUT exactly.
             let sent = unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) };
 
             if sent as usize != events.len() {
@@ -235,26 +167,12 @@ mod win {
         }
     }
 
-    /// Every visible window title on the desktop.
-    ///
-    /// # Why this exists
-    ///
-    /// The overlay attaches to a window by its exact title, and a title that
-    /// does not match produces an overlay that starts perfectly, logs nothing
-    /// wrong and never draws. There is no way to guess the right string from
-    /// the outside: it changes between game versions, between the Steam and
-    /// standalone clients, and between regional builds.
-    ///
-    /// So the tool lists what is actually on screen and the user copies one.
     pub fn visible_window_titles() -> Vec<String> {
         use windows::Win32::Foundation::LPARAM;
         use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
 
         let mut out: Vec<String> = Vec::new();
 
-        // SAFETY: `collect` matches the WNDENUMPROC signature and `out` lives
-        // for the whole call. EnumWindows is synchronous, so the pointer
-        // cannot outlive it.
         unsafe {
             let _ = EnumWindows(Some(collect), LPARAM(&mut out as *mut Vec<String> as isize));
         }
@@ -265,12 +183,6 @@ mod win {
         out
     }
 
-    /// The callback `EnumWindows` calls once per top level window.
-    ///
-    /// # Safety
-    ///
-    /// `lparam` must be a live `*mut Vec<String>`, which is what
-    /// `visible_window_titles` passes and nothing else calls this.
     unsafe extern "system" fn collect(
         handle: HWND,
         lparam: windows::Win32::Foundation::LPARAM,
@@ -279,11 +191,8 @@ mod win {
             GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
         };
 
-        // Always true. Returning false stops the enumeration early and would
-        // silently truncate the list.
         let keep_going = windows::core::BOOL(1);
 
-        // A hidden window cannot be the game and there are hundreds of them.
         if !IsWindowVisible(handle).as_bool() {
             return keep_going;
         }
@@ -307,18 +216,6 @@ mod win {
         keep_going
     }
 
-    /// Press and release a hotkey combination, for the self test.
-    ///
-    /// # Why this is safe to fire
-    ///
-    /// The caller picks a combination nothing else binds. It goes to whatever
-    /// has focus, like any synthetic key, so the combination has to be one no
-    /// application reacts to. `Ctrl+Alt+Shift+F24` is the one the self test
-    /// uses.
-    ///
-    /// Modifiers go down in order and up in reverse, which is what a real
-    /// keyboard produces. Releasing them in the same order leaves Windows
-    /// believing a modifier is still held.
     pub fn press_combination(modifiers: &[u16], key: u16) -> u32 {
         let mut events: Vec<INPUT> = Vec::new();
 
@@ -333,38 +230,14 @@ mod win {
             events.push(key_event(VIRTUAL_KEY(*code), true));
         }
 
-        // SAFETY: `events` is a live, correctly sized array of INPUT and the
-        // size argument matches INPUT exactly.
         unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) }
     }
 
-    /// Prove `SendInput` works, without touching anything the user owns.
-    ///
-    /// # Why this exists
-    ///
-    /// `SendInput` was the one Windows call in this build that no check
-    /// reached. It fires only on a hotkey press and types into whatever has
-    /// focus, so exercising it the ordinary way means pressing Ctrl+C on the
-    /// user's desktop and overwriting their clipboard. That is their state.
-    ///
-    /// So this sends `VK_NONAME` instead. Windows documents it as reserved
-    /// and it carries no character, no command and no binding. Every part of
-    /// the call is the same as a real copy: the same struct, the same size
-    /// argument, the same up and down pair, the same return check. Only the
-    /// key differs, and that key does nothing anywhere.
-    ///
-    /// What it proves is the call itself. Whether Windows then delivers a
-    /// Ctrl+C to the game is Windows' job, and the key order it would deliver
-    /// is decided and tested in `poe_trader_core::controller::overlay`.
-    ///
-    /// Returns how many events Windows accepted. Two is success.
     pub fn self_test_send_input() -> u32 {
         use windows::Win32::UI::Input::KeyboardAndMouse::VK_NONAME;
 
         let events = [key_event(VK_NONAME, false), key_event(VK_NONAME, true)];
 
-        // SAFETY: the same contract as trigger_copy. A live, correctly sized
-        // array of INPUT and a size argument that matches INPUT exactly.
         unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) }
     }
 
@@ -410,31 +283,22 @@ mod tests {
 
     #[test]
     fn a_background_window_is_not_drawn_over() {
-        // Drawing over another application is the fastest way to make a tool
-        // feel broken.
         assert!(!should_draw(&window(0, 0, 1920, 1080, false)));
     }
 
     #[test]
     fn a_minimised_window_is_not_drawn_over() {
-        // Windows reports a zero size for one, and drawing into it wastes a
-        // frame every tick.
         assert!(!should_draw(&window(0, 0, 0, 0, true)));
         assert!(!should_draw(&window(0, 0, 1920, 0, true)));
     }
 
     #[test]
     fn a_window_at_a_negative_origin_is_still_drawn_over() {
-        // A second monitor to the left of the primary one has negative
-        // coordinates. Treating that as invalid would break a dual monitor
-        // setup, which is most of the audience.
         assert!(should_draw(&window(-1920, 0, 1920, 1080, true)));
     }
 
     #[test]
     fn a_missing_window_names_the_title_it_looked_for() {
-        // The title is config precisely because it changes between versions,
-        // so the message has to say which one was tried.
         let err = WindowError::NotFound {
             title: "Path of Exile 2".into(),
         };

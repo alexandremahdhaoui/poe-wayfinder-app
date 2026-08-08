@@ -1,50 +1,21 @@
-//! The global hotkey.
-//!
-//! Registers the price check hotkey with Windows and reports when it fires.
-//!
-//! # Why RegisterHotKey and not a keyboard hook
-//!
-//! A low level keyboard hook sees every keystroke in the system, including
-//! passwords typed into other applications. That is a lot of trust to ask for
-//! when all the tool needs is one key combination.
-//!
-//! `RegisterHotKey` asks Windows for exactly one combination and sees nothing
-//! else. It also cannot be blamed for input lag, which a slow hook can.
-//!
-//! The cost is that a combination already claimed by another application
-//! cannot be registered. That is reported at startup rather than silently
-//! never firing.
-
 use thiserror::Error;
 
 use crate::types::hotkey::{Hotkey, Key, Modifier};
 
-/// Why a hotkey could not be registered.
 #[derive(Debug, Error)]
 pub enum HotkeyDriverError {
-    /// Windows refused the registration.
-    ///
-    /// Almost always means another application already owns the combination.
     #[error("registering {hotkey}. Another application may already use it.")]
     AlreadyTaken { hotkey: String },
 
-    /// The key has no Windows virtual key code.
     #[error("{key} cannot be registered as a global hotkey")]
     Unsupported { key: String },
 }
 
-/// The Windows virtual key code for a key.
-///
-/// Returns None for anything Windows has no code for, so the caller reports it
-/// at startup rather than registering something that can never fire.
 pub fn virtual_key_code(key: &Key) -> Option<u16> {
     let code = match key {
-        // Letters and digits use their ASCII value as their virtual key code.
-        // This is a documented quirk of the Windows API and not a coincidence.
         Key::Char(c) if c.is_ascii_uppercase() || c.is_ascii_digit() => *c as u16,
         Key::Char(_) => return None,
 
-        // VK_F1 is 0x70 and they run consecutively to F24.
         Key::Function(n) if (1..=24).contains(n) => 0x6F + u16::from(*n),
         Key::Function(_) => return None,
 
@@ -68,11 +39,6 @@ pub fn virtual_key_code(key: &Key) -> Option<u16> {
     Some(code)
 }
 
-/// The Windows modifier bitmask for a hotkey.
-///
-/// `MOD_NOREPEAT` is always set. Without it, holding the key fires a price
-/// check every few milliseconds, which would hit the rate limiter instantly
-/// and could get the account banned.
 pub fn modifier_mask(modifiers: &[Modifier]) -> u32 {
     const MOD_ALT: u32 = 0x0001;
     const MOD_CONTROL: u32 = 0x0002;
@@ -94,10 +60,6 @@ pub fn modifier_mask(modifiers: &[Modifier]) -> u32 {
     mask
 }
 
-/// Check a hotkey can be registered before trying.
-///
-/// Called at startup so an impossible hotkey is reported with a message rather
-/// than silently never firing.
 pub fn check_registrable(hotkey: &Hotkey) -> Result<(), HotkeyDriverError> {
     if virtual_key_code(hotkey.key()).is_none() {
         return Err(HotkeyDriverError::Unsupported {
@@ -107,10 +69,6 @@ pub fn check_registrable(hotkey: &Hotkey) -> Result<(), HotkeyDriverError> {
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// The real registration
-// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod win {
@@ -128,25 +86,14 @@ mod win {
         GetMessageW, PostThreadMessageW, MSG, WM_HOTKEY,
     };
 
-    /// Our id for the price check hotkey.
     const PRICE_CHECK_ID: i32 = 1;
 
-    /// Listens for the price check hotkey.
-    ///
-    /// Registration and the message pump both happen on a dedicated thread,
-    /// because Windows delivers `WM_HOTKEY` to the thread that registered it
-    /// and the UI thread is busy drawing.
     pub struct HotkeyDriver {
         presses: Receiver<()>,
-        /// The thread Windows delivers `WM_HOTKEY` to.
-        ///
-        /// Kept so a self test can post the same message this thread waits
-        /// for. See `simulate_press`.
         thread_id: u32,
     }
 
     impl HotkeyDriver {
-        /// Register the hotkey and start listening.
         pub fn start(hotkey: &Hotkey) -> Result<Self, HotkeyDriverError> {
             check_registrable(hotkey)?;
 
@@ -159,12 +106,8 @@ mod win {
             let (id_tx, id_rx) = mpsc::channel();
 
             std::thread::spawn(move || {
-                // SAFETY: no arguments and no failure mode.
                 let _ = id_tx.send(unsafe { GetCurrentThreadId() });
 
-                // SAFETY: a null window handle registers the hotkey against
-                // this thread, which is exactly what the message loop below
-                // reads from.
                 let registered = unsafe {
                     RegisterHotKey(
                         None,
@@ -184,19 +127,14 @@ mod win {
 
                 let mut message = MSG::default();
 
-                // SAFETY: `message` is a live, correctly sized MSG. A null
-                // window handle reads messages for the whole thread, which is
-                // where WM_HOTKEY lands.
                 while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
                     if message.message == WM_HOTKEY && message.wParam.0 as i32 == PRICE_CHECK_ID {
-                        // A closed channel means the app is shutting down.
                         if press_tx.send(()).is_err() {
                             break;
                         }
                     }
                 }
 
-                // SAFETY: unregistering the id this thread registered.
                 let _ = unsafe { UnregisterHotKey(None, PRICE_CHECK_ID) };
             });
 
@@ -209,20 +147,7 @@ mod win {
             }
         }
 
-        /// Post the message Windows would post, for a self test.
-        ///
-        /// # What this proves and what it cannot
-        ///
-        /// It proves the half this program owns: the message loop is running,
-        /// `WM_HOTKEY` with our id is recognised, the channel carries it, and
-        /// `fired` reports it.
-        ///
-        /// It cannot prove Windows delivers a real key press, and nothing can.
-        /// Input injected with `SendInput` is marked `LLKHF_INJECTED` and the
-        /// hotkey machinery ignores it, so a synthetic press never fires a
-        /// registered hotkey. Only a finger on a key does.
         pub fn simulate_press(&self) -> bool {
-            // SAFETY: posting a thread message to a thread this struct owns.
             unsafe {
                 PostThreadMessageW(
                     self.thread_id,
@@ -234,11 +159,6 @@ mod win {
             .is_ok()
         }
 
-        /// Whether the hotkey fired since the last check.
-        ///
-        /// Drains every pending press and reports whether there was at least
-        /// one. Queuing them would run a price check per press after a
-        /// stutter, which is exactly what the rate limiter exists to prevent.
         pub fn fired(&self) -> bool {
             let mut any = false;
 
@@ -266,7 +186,6 @@ mod tests {
 
     #[test]
     fn a_letter_uses_its_ascii_value() {
-        // A documented quirk of the Windows API and not a coincidence.
         assert_eq!(virtual_key_code(&Key::Char('D')), Some(0x44));
         assert_eq!(virtual_key_code(&Key::Char('A')), Some(0x41));
         assert_eq!(virtual_key_code(&Key::Char('Z')), Some(0x5A));
@@ -280,8 +199,6 @@ mod tests {
 
     #[test]
     fn a_lower_case_letter_has_no_code() {
-        // The parser upper cases every letter, so a lower case one here means
-        // something built a Key by hand and got it wrong.
         assert_eq!(virtual_key_code(&Key::Char('d')), None);
     }
 
@@ -323,7 +240,6 @@ mod tests {
 
     #[test]
     fn every_named_key_has_a_distinct_code() {
-        // Two keys sharing a code would register the wrong one silently.
         let keys = [
             Key::Escape,
             Key::Space,
@@ -352,8 +268,6 @@ mod tests {
 
     #[test]
     fn the_arrow_keys_are_in_the_windows_order() {
-        // Left, up, right, down and not the reading order. Getting this wrong
-        // registers a different arrow than the user asked for.
         assert_eq!(virtual_key_code(&Key::Left), Some(0x25));
         assert_eq!(virtual_key_code(&Key::Up), Some(0x26));
         assert_eq!(virtual_key_code(&Key::Right), Some(0x27));
@@ -362,9 +276,6 @@ mod tests {
 
     #[test]
     fn no_repeat_is_always_set() {
-        // Without it, holding the key fires a price check every few
-        // milliseconds, which hits the rate limiter instantly and could get
-        // the account banned.
         assert_eq!(modifier_mask(&[]) & MOD_NOREPEAT, MOD_NOREPEAT);
         assert_eq!(
             modifier_mask(&[Modifier::Ctrl]) & MOD_NOREPEAT,
@@ -408,7 +319,6 @@ mod tests {
 
     #[test]
     fn the_startup_check_names_the_key_it_cannot_register() {
-        // Reported at startup rather than silently never firing.
         let err = check_registrable(&Hotkey::parse("Ctrl+D").unwrap());
         assert!(err.is_ok());
 
@@ -421,7 +331,6 @@ mod tests {
 
     #[test]
     fn a_taken_hotkey_says_what_probably_took_it() {
-        // A bare "registration failed" leaves the user with nothing to try.
         let err = HotkeyDriverError::AlreadyTaken {
             hotkey: "Ctrl+D".to_string(),
         };
@@ -434,8 +343,6 @@ mod tests {
 
     #[test]
     fn every_hotkey_the_parser_accepts_can_be_registered() {
-        // A hotkey that parses and then cannot register is a gap the user
-        // falls into. There is no such gap.
         for text in [
             "Ctrl+D",
             "Alt+1",

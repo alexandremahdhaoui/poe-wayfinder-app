@@ -1,9 +1,3 @@
-//! Builds data/*.ndjson.
-//!
-//! This replaces the reference data pipeline, which is 7623 lines of Python.
-//! It pulls the trade stat and item tables from the official API and joins
-//! them against the extracted game tables.
-
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -18,8 +12,6 @@ use poe_trader_app::logging::{Logger, Value};
 use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
-    // The builder is one sequential pass over two endpoints. A single threaded
-    // runtime keeps the binary small and the ordering obvious.
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -105,8 +97,6 @@ async fn run() -> ExitCode {
 
     let urls = TradeUrls::new(&cfg.trade_base_url, game);
 
-    // Two tables, fetched one after the other. There is no rate limit on the
-    // data endpoints, and doing them in order keeps a failure obvious.
     let stats_body = match fetch(&http, &urls.data("stats"), &log).await {
         Some(body) => body,
         None => return ExitCode::FAILURE,
@@ -117,10 +107,6 @@ async fn run() -> ExitCode {
         None => return ExitCode::FAILURE,
     };
 
-    // The bulk trading tags. The exchange endpoint knows a currency by a short
-    // id rather than by its name, and without this every currency price check
-    // goes to the search endpoint and returns the few individual listings
-    // instead of the market rate.
     let static_body = match fetch(&http, &urls.data("static"), &log).await {
         Some(body) => body,
         None => return ExitCode::FAILURE,
@@ -178,8 +164,6 @@ async fn run() -> ExitCode {
         ("items.ndjson", &items_lines),
     ] {
         let path = out_dir.join(name);
-        // A trailing newline so the file ends cleanly. The loader skips blank
-        // lines, so this costs nothing and every text tool expects it.
         let body = format!("{}\n", lines.join("\n"));
 
         if let Err(err) = std::fs::write(&path, body) {
@@ -213,11 +197,6 @@ async fn run() -> ExitCode {
         ],
     );
 
-    // Said plainly rather than left for a user to discover. The trade API
-    // groups items as accessory, armour and weapon, so only the groups that
-    // are already one category resolve, plus accessories, whose names are
-    // completely regular. Weapon and armour categories, roll ranges, quality
-    // scaling and modifier tiers all come from the game's own data bundles.
     log.warn(
         "weapon and armour categories, roll ranges and modifier tiers are not built here. They come from the game bundles and are vendored in poe-trader-data/tables.",
         &[],
@@ -226,7 +205,6 @@ async fn run() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Fetch one table, logging what failed.
 async fn fetch(http: &HttpAdapter, url: &str, log: &Logger) -> Option<String> {
     let response = match http.get(url, &[("accept", "application/json")]).await {
         Ok(response) => response,

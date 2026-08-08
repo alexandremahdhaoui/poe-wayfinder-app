@@ -1,49 +1,22 @@
-//! Drawing the overlay.
-//!
-//! Takes the frame the controller decided on and puts pixels on screen. It
-//! makes no decisions of its own, which is why the controller is testable and
-//! this is not.
-//!
-//! # What makes this an overlay and not a window
-//!
-//! Four things, and missing any one of them makes it a normal window sitting
-//! rudely on top of the game.
-//!
-//! - No decorations. A title bar over the game is absurd.
-//! - Transparent. Only the panel is drawn, not a grey rectangle.
-//! - Always on top. Otherwise the game covers it the moment it redraws.
-//! - No taskbar entry. It is not an application the user switches to.
-
 use crate::controller::overlay_controller::{Frame, OverlayModel};
 use crate::types::overlay::OverlayState;
 
-/// What the user did to the overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiEvent {
-    /// Close the panel.
     Dismiss,
-    /// Run the search on the trade site.
     OpenInBrowser,
-    /// Turn one stat filter on or off.
     ToggleFilter(usize),
-    /// Search again with the current filters.
     Research,
 }
 
-/// The lines the panel shows for a frame.
-///
-/// Built here rather than inside the paint call so the text is testable. Every
-/// string a user reads should be checkable without a display.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelText {
     pub title: String,
     pub subtitle: Option<String>,
     pub body: Vec<String>,
-    /// Shown in a warning colour.
     pub warnings: Vec<String>,
 }
 
-/// Work out what the panel says.
 pub fn panel_text(model: &OverlayModel) -> PanelText {
     match model.state() {
         OverlayState::Hidden => PanelText {
@@ -76,8 +49,6 @@ pub fn panel_text(model: &OverlayModel) -> PanelText {
 
 fn showing_text(model: &OverlayModel) -> PanelText {
     let Some(check) = model.result() else {
-        // Showing with no result should not happen, and a blank panel with no
-        // explanation is worse than an honest one.
         return PanelText {
             title: "No result".into(),
             subtitle: None,
@@ -88,7 +59,6 @@ fn showing_text(model: &OverlayModel) -> PanelText {
 
     let item = &check.item;
 
-    // The base type is what the user recognises. A rare's own name is random.
     let title = if item.info.reference_name.is_empty() {
         item.info.name.clone()
     } else {
@@ -120,9 +90,6 @@ fn showing_text(model: &OverlayModel) -> PanelText {
 
     let mut warnings = Vec::new();
 
-    // An unknown modifier means our data is older than the game. A price built
-    // from a partly understood item is wrong in a way the user cannot see, so
-    // the panel has to say so.
     for unknown in &item.unknown_modifiers {
         warnings.push(format!("Not recognised: {}", unknown.text));
     }
@@ -139,16 +106,9 @@ fn showing_text(model: &OverlayModel) -> PanelText {
     }
 }
 
-/// Whether the frame should be painted at all.
-///
-/// One check for the driver rather than three.
 pub fn should_paint(frame: &Frame) -> bool {
     frame.rect.is_some()
 }
-
-// ---------------------------------------------------------------------------
-// The real window
-// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod win {
@@ -156,19 +116,11 @@ mod win {
 
     use eframe::egui;
 
-    /// Build the window options for an overlay.
-    ///
-    /// Missing any one of these makes it a normal window sitting rudely on top
-    /// of the game.
     pub fn overlay_viewport(frame: &Frame) -> egui::ViewportBuilder {
         let mut builder = egui::ViewportBuilder::default()
-            // A title bar over the game is absurd.
             .with_decorations(false)
-            // Only the panel is drawn, not a grey rectangle.
             .with_transparent(true)
-            // Otherwise the game covers it the moment it redraws.
             .with_always_on_top()
-            // It is not an application the user switches to.
             .with_taskbar(false)
             .with_resizable(false);
 
@@ -178,13 +130,9 @@ mod win {
                 .with_inner_size(egui::vec2(rect.width as f32, rect.height as f32));
         }
 
-        // A frame that takes no clicks passes them through to the game. This
-        // is what stops the loading panel swallowing a click the user meant
-        // for the game.
         builder.with_mouse_passthrough(!frame.takes_input)
     }
 
-    /// Paint one frame and report what the user did.
     pub fn paint(ctx: &egui::Context, model: &OverlayModel) -> Vec<UiEvent> {
         let text = panel_text(model);
         let mut events = Vec::new();
@@ -245,9 +193,13 @@ mod win {
                 });
             });
 
-        // Escape closes it. Every overlay in every game does, and a user will
-        // press it without thinking.
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            events.push(UiEvent::Dismiss);
+        }
+
+        let clicked_off = ctx.input(|i| i.pointer.any_click()) && !ctx.is_pointer_over_area();
+
+        if clicked_off {
             events.push(UiEvent::Dismiss);
         }
 
@@ -310,7 +262,6 @@ mod tests {
 
     #[test]
     fn a_loading_overlay_says_it_is_working() {
-        // A blank panel reads as broken.
         let mut m = OverlayModel::new(OverlayGeometry::default());
         m.start((0, 0));
 
@@ -330,8 +281,6 @@ mod tests {
 
     #[test]
     fn a_result_is_titled_with_the_base_type() {
-        // A rare's own name is random. The base type is what the user
-        // recognises and what the search actually used.
         let t = panel_text(&showing(ring(), 57));
 
         assert_eq!(t.title, "Sapphire Ring");
@@ -363,8 +312,6 @@ mod tests {
 
     #[test]
     fn no_listings_is_said_plainly_and_not_as_zero() {
-        // "0 listings" reads like a bug. "No listings match" reads like an
-        // answer, which it is.
         assert_eq!(
             panel_text(&showing(ring(), 0)).subtitle.as_deref(),
             Some("No listings match")
@@ -402,8 +349,6 @@ mod tests {
 
     #[test]
     fn an_unrecognised_modifier_is_warned_about() {
-        // A price built from a partly understood item is wrong in a way the
-        // user cannot see, so the panel has to say so.
         let item = ParsedItem {
             unknown_modifiers: vec![UnknownModifier {
                 text: "Grants Sudden Enlightenment".into(),
@@ -444,18 +389,14 @@ mod tests {
 
     #[test]
     fn a_showing_state_with_no_result_says_so_rather_than_going_blank() {
-        // Should not happen. A blank panel with no explanation is worse than
-        // an honest one.
         let mut m = OverlayModel::new(OverlayGeometry::default());
         m.start((0, 0));
         m.finish(check(ring()), 1);
         m.fail("x");
-        // Force the impossible state the guard exists for.
         m.start((0, 0));
 
         let t = panel_text(&m);
 
-        // Start puts it in Loading, which is its own message.
         assert_eq!(t.title, "Checking price");
     }
 

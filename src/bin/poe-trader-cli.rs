@@ -1,8 +1,3 @@
-//! Headless price check. Same core as the overlay, no window.
-//!
-//! It exists so the parser and the trade query can be exercised without a
-//! game, a display or a hotkey. Every conformance test runs through it.
-
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -16,9 +11,6 @@ use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 use poe_trader_core::types::GameVersion;
 
 fn main() -> ExitCode {
-    // Taken out before the config loader sees it. The loader is generated from
-    // the spec and refuses a flag it does not know, and this one is a switch
-    // for this binary rather than a configuration value.
     let should_send = std::env::args().any(|a| a == "--send");
 
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--send").collect();
@@ -157,8 +149,6 @@ fn main() -> ExitCode {
         ],
     );
 
-    // An unknown modifier means our data is older than the game. A price built
-    // from a partly understood item is wrong in a way the user cannot see.
     for unknown in &item.unknown_modifiers {
         log.warn(
             "modifier not recognised",
@@ -166,12 +156,9 @@ fn main() -> ExitCode {
         );
     }
 
-    // A currency goes to the exchange endpoint, which takes a different body
-    // shape. Printing the search body for one would show a request the overlay
-    // is not going to send.
     let body = match (checked.endpoint, &checked.trade_tag) {
         (Endpoint::Exchange, Some(tag)) => to_exchange_json(tag, &[], checked.query.status),
-        _ => to_json(&checked.query),
+        _ => to_json(&checked.query, game),
     };
 
     match serde_json::to_string_pretty(&body) {
@@ -186,12 +173,6 @@ fn main() -> ExitCode {
         }
     }
 
-    // Printing the body proves the query was built. It does not prove the
-    // trade site accepts it, and a query the site rejects looks identical from
-    // here.
-    //
-    // Off by default because it is a real request against GGG's servers, and
-    // every run of the test suite firing one would be rude at best.
     if !should_send {
         return ExitCode::SUCCESS;
     }
@@ -221,11 +202,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Run the search for real and report what came back.
-///
-/// The whole chain the overlay runs, minus the clipboard: rate limiter, the
-/// one allowed socket, the search, the fetch and the price. The clipboard is
-/// the only part that needs a game.
 async fn send(
     cfg: &PoeTraderCliConfig,
     game: GameVersion,
@@ -259,8 +235,6 @@ async fn send(
 
     let text = serde_json::to_string(body).map_err(|e| format!("serialising the body: {e}"))?;
 
-    // The limiter is not optional. GGG bans for violations, and this is a real
-    // request to their servers.
     let wait = limits.wait_for(now_millis());
 
     if wait > 0 {
@@ -273,8 +247,6 @@ async fn send(
 
     limits.borrow(now_millis());
 
-    // No cookie. The search endpoint answers an unauthenticated request, which
-    // is why the overlay no longer demands a session.
     let headers = [("accept", "application/json")];
 
     let response = http
@@ -299,8 +271,6 @@ async fn send(
         ],
     );
 
-    // The exchange endpoint already sent the listings. Only the search
-    // endpoint answers with ids that have to be fetched.
     if checked.endpoint == Endpoint::Exchange {
         let listings = read_exchange_listings(&response).map_err(|e| format!("{e}"))?;
 
@@ -320,8 +290,6 @@ async fn send(
         return Ok(());
     }
 
-    // Only the first batch. A price is the median of the cheapest few and
-    // fetching every page would spend the rate limit for no better answer.
     let batch: Vec<String> = found.result.iter().take(10).cloned().collect();
 
     let wait = limits.wait_for(now_millis());
@@ -349,7 +317,6 @@ async fn send(
     Ok(())
 }
 
-/// Log what the listings suggest.
 fn report_price(
     listings: &[poe_trader_app::controller::price_check_controller::Listing],
     log: &Logger,
@@ -362,8 +329,6 @@ fn report_price(
         return;
     };
 
-    // Rounded before it is shown. The raw rate for a Divine in Mirrors comes
-    // out as 0.0007201155913700063, which is true and unreadable.
     let shown = poe_trader_core::controller::money::price(amount, &currency);
 
     let mut fields = vec![
@@ -371,8 +336,6 @@ fn report_price(
         ("currency", Value::Str(shown.currency)),
     ];
 
-    // A rate below a hundredth is quoted the other way up, which is how the
-    // game's economy is actually spoken about.
     if let Some(inverted) = shown.inverted {
         fields.push(("also", Value::Str(inverted)));
     }
@@ -380,7 +343,6 @@ fn report_price(
     log.info("suggested price", &fields);
 }
 
-/// Milliseconds since the process started.
 fn now_millis() -> u64 {
     use std::sync::OnceLock;
     use std::time::Instant;

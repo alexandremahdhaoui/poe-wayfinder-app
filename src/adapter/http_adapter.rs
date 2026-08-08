@@ -1,42 +1,23 @@
-//! The only socket in the project.
-//!
-//! Every outbound request passes through here. Nothing else in the workspace
-//! builds an HTTP client, so the allowlist has exactly one place to live and
-//! one place to audit.
-//!
-//! The reference does the same thing in an Electron session handler, but the
-//! host list is a hardcoded array in `main/src/proxy.ts`. Here it is config.
-//! A user can see it, narrow it or turn the network off entirely.
-
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use thiserror::Error;
 
-/// Why a request was refused.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyError {
-    /// The master switch is off.
     #[error("network is disabled")]
     NetworkDisabled,
 
-    /// The host is not in the allowlist.
     #[error("host {host:?} is not allowed")]
     HostNotAllowed { host: String },
 
-    /// The URL did not parse or carried no host.
     #[error("url {url:?} has no host")]
     NoHost { url: String },
 
-    /// The scheme was not http or https.
     #[error("url {url:?} uses scheme {scheme:?}")]
     BadScheme { url: String, scheme: String },
 }
 
-/// What the app is allowed to reach.
-///
-/// Built from config once at startup and then never changed. A policy that can
-/// be edited at runtime is a policy that can be edited by a bug.
 #[derive(Debug, Clone)]
 pub struct NetworkPolicy {
     enabled: bool,
@@ -45,11 +26,6 @@ pub struct NetworkPolicy {
 }
 
 impl NetworkPolicy {
-    /// Build a policy from the generated config values.
-    ///
-    /// `allowed_hosts` is comma separated because golden-configgen has no list
-    /// type. Blank entries are dropped and each host is lowercased, so
-    /// `WWW.PathOfExile.com` and a stray trailing comma both behave.
     pub fn new(enabled: bool, block_unlisted: bool, allowed_hosts: &str) -> Self {
         let allowed_hosts = allowed_hosts
             .split(',')
@@ -64,17 +40,11 @@ impl NetworkPolicy {
         }
     }
 
-    /// Decide whether a URL may be requested.
-    ///
-    /// Pure. This is the whole security boundary and it is testable with no
-    /// socket, so there is no excuse for it to be under tested.
     pub fn check(&self, url: &str) -> Result<(), PolicyError> {
         if !self.enabled {
             return Err(PolicyError::NetworkDisabled);
         }
 
-        // Scheme first. `file:///etc/passwd` has no host, and reporting that
-        // as a missing host hides the fact that the scheme was never valid.
         let scheme = scheme_of(url)?;
 
         if scheme != "http" && scheme != "https" {
@@ -97,16 +67,11 @@ impl NetworkPolicy {
         Err(PolicyError::HostNotAllowed { host })
     }
 
-    /// The hosts this policy permits, sorted.
-    ///
-    /// Used at startup to log what the app may reach. An operator should never
-    /// have to read the source to answer that question.
     pub fn allowed_hosts(&self) -> Vec<&str> {
         self.allowed_hosts.iter().map(String::as_str).collect()
     }
 }
 
-/// Pull the lowercased scheme out of a URL.
 fn scheme_of(url: &str) -> Result<String, PolicyError> {
     let no_host = || PolicyError::NoHost {
         url: url.to_string(),
@@ -121,11 +86,6 @@ fn scheme_of(url: &str) -> Result<String, PolicyError> {
     Ok(scheme.to_ascii_lowercase())
 }
 
-/// Pull the lowercased host out of a URL.
-///
-/// Hand written rather than pulled from the `url` crate, because the policy
-/// must reject anything it cannot fully understand. A parser that is lenient
-/// here turns into a bypass.
 fn host_of(url: &str) -> Result<String, PolicyError> {
     let no_host = || PolicyError::NoHost {
         url: url.to_string(),
@@ -133,20 +93,16 @@ fn host_of(url: &str) -> Result<String, PolicyError> {
 
     let (_, rest) = url.split_once("://").ok_or_else(no_host)?;
 
-    // Authority ends at the first /, ? or #.
     let authority = rest
         .split(['/', '?', '#'])
         .next()
         .expect("split always yields one element");
 
-    // Drop userinfo. `https://www.pathofexile.com@evil.example/` points at
-    // evil.example and reads like the real thing.
     let hostport = match authority.rsplit_once('@') {
         Some((_, after)) => after,
         None => authority,
     };
 
-    // Drop the port. An IPv6 literal keeps its brackets.
     let host = if let Some(end) = hostport.strip_prefix('[') {
         match end.split_once(']') {
             Some((inner, _)) => inner,
@@ -166,7 +122,6 @@ fn host_of(url: &str) -> Result<String, PolicyError> {
     Ok(host.to_ascii_lowercase())
 }
 
-/// One HTTP response, reduced to what callers need.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
@@ -175,10 +130,6 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
-    /// First value of a header, matched case insensitively.
-    ///
-    /// The rate limiter reads `x-rate-limit-rules` and friends, and header
-    /// casing is not guaranteed by anything.
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
@@ -187,20 +138,14 @@ impl HttpResponse {
     }
 }
 
-/// What a caller may ask of the network.
-///
-/// Declared here because this module implements it. Callers take the trait so
-/// tests never open a socket.
 #[allow(async_fn_in_trait)]
 pub trait HttpClient: Send + Sync {
-    /// Send a GET, subject to the policy.
     async fn get(
         &self,
         url: &str,
         headers: &[(&str, &str)],
     ) -> Result<HttpResponse, HttpAdapterError>;
 
-    /// Send a POST with a JSON body, subject to the policy.
     async fn post_json(
         &self,
         url: &str,
@@ -209,10 +154,8 @@ pub trait HttpClient: Send + Sync {
     ) -> Result<HttpResponse, HttpAdapterError>;
 }
 
-/// Anything that can go wrong on the way out.
 #[derive(Debug, Error)]
 pub enum HttpAdapterError {
-    /// The policy refused the request. No socket was opened.
     #[error("checking policy for {url:?}")]
     Policy {
         url: String,
@@ -220,7 +163,6 @@ pub enum HttpAdapterError {
         source: PolicyError,
     },
 
-    /// The request was sent and failed.
     #[error("requesting {url:?}")]
     Request {
         url: String,
@@ -228,7 +170,6 @@ pub enum HttpAdapterError {
         source: reqwest::Error,
     },
 
-    /// The response arrived but the body could not be read.
     #[error("reading response body from {url:?}")]
     Body {
         url: String,
@@ -237,33 +178,18 @@ pub enum HttpAdapterError {
     },
 }
 
-/// The User-Agent sent when config supplies none.
-///
-/// GGG answers 403 to a request with no User-Agent, and their API policy asks
-/// for a descriptive one carrying contact details. The default names the tool
-/// and its version. A user who wants to add contact details sets the config
-/// key, and doing so is good manners rather than a requirement.
 pub const DEFAULT_USER_AGENT: &str = concat!("poe-trader/", env!("CARGO_PKG_VERSION"));
 
-/// The real client.
 pub struct HttpAdapter {
     policy: NetworkPolicy,
     client: reqwest::Client,
 }
 
 impl HttpAdapter {
-    /// Build the client.
-    ///
-    /// The cookie store is on because the trade API needs POESESSID. The
-    /// timeout is here and not per call so no caller can forget it.
     pub fn new(policy: NetworkPolicy, timeout: Duration) -> Result<Self, reqwest::Error> {
         Self::with_user_agent(policy, timeout, DEFAULT_USER_AGENT)
     }
 
-    /// Build the client with a specific User-Agent.
-    ///
-    /// GGG answers 403 to a request that carries none, and reqwest sends none
-    /// by default. This is not optional.
     pub fn with_user_agent(
         policy: NetworkPolicy,
         timeout: Duration,
@@ -275,13 +201,6 @@ impl HttpAdapter {
             user_agent
         };
 
-        // The allowlist has to be re-checked on every redirect hop.
-        //
-        // Guarding only the initial URL leaves the whole policy bypassable by
-        // any host that can answer one request: it replies 302 to wherever it
-        // likes and the client follows. reqwest follows up to ten hops by
-        // default, so without this the allowlist stops the first request and
-        // nothing after it.
         let redirect_policy = policy.clone();
 
         let client = reqwest::Client::builder()
@@ -293,8 +212,6 @@ impl HttpAdapter {
                     return attempt.stop();
                 }
 
-                // Ten is reqwest's own default. A redirect loop inside the
-                // allowlist is still a loop.
                 if attempt.previous().len() >= 10 {
                     return attempt.stop();
                 }
@@ -306,12 +223,10 @@ impl HttpAdapter {
         Ok(Self { policy, client })
     }
 
-    /// The policy this adapter enforces.
     pub fn policy(&self) -> &NetworkPolicy {
         &self.policy
     }
 
-    /// Refuse before building a request, so a blocked URL never reaches DNS.
     fn guard(&self, url: &str) -> Result<(), HttpAdapterError> {
         self.policy
             .check(url)
@@ -442,8 +357,6 @@ mod tests {
     fn a_subdomain_of_an_allowed_host_is_not_allowed() {
         let p = default_policy();
 
-        // Matching by suffix would let evil.www.pathofexile.com.attacker.test
-        // through. The check is exact.
         assert!(p
             .check("https://evil.www.pathofexile.com.attacker.test/")
             .is_err());
@@ -453,7 +366,6 @@ mod tests {
     fn userinfo_cannot_disguise_the_real_host() {
         let p = default_policy();
 
-        // Reads like the real site. Resolves to attacker.test.
         assert_eq!(
             p.check("https://www.pathofexile.com@attacker.test/api"),
             Err(PolicyError::HostNotAllowed {
@@ -591,15 +503,12 @@ mod tests {
 
     #[test]
     fn the_default_user_agent_names_the_tool_and_its_version() {
-        // GGG answers 403 to a request with no User-Agent, and reqwest sends
-        // none by default. An empty one is the same as none.
         assert!(DEFAULT_USER_AGENT.starts_with("poe-trader/"));
         assert!(DEFAULT_USER_AGENT.len() > "poe-trader/".len());
     }
 
     #[test]
     fn a_blank_configured_user_agent_falls_back_to_the_default() {
-        // An empty header is the same as no header, which is a 403.
         let adapter =
             HttpAdapter::with_user_agent(default_policy(), Duration::from_secs(5), "   ").unwrap();
 
@@ -611,8 +520,6 @@ mod tests {
 
     #[test]
     fn the_policy_is_the_same_one_a_redirect_would_be_checked_against() {
-        // The redirect policy holds a clone. If the two ever diverged, a
-        // redirect could reach a host the initial request could not.
         let policy = default_policy();
         let adapter = HttpAdapter::new(policy.clone(), Duration::from_secs(5)).unwrap();
 
@@ -625,8 +532,6 @@ mod tests {
 
     #[test]
     fn a_redirect_target_is_judged_by_the_same_rules_as_a_first_request() {
-        // The redirect closure calls exactly this. A host refused here is
-        // refused as a redirect target too.
         let p = default_policy();
 
         assert!(p

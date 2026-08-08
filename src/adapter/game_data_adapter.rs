@@ -1,20 +1,3 @@
-//! Loading the stat and item tables from ndjson.
-//!
-//! Implements the `StatLookup` and `ItemLookup` traits `poe-trader-core`
-//! declares. The domain states what it needs and this supplies it, which is
-//! why the parser is testable with no file on disk.
-//!
-//! # Why ndjson
-//!
-//! One record per line. A diff shows which stat changed rather than that the
-//! file changed. A 3.6 MB JSON array shows the second thing.
-//!
-//! # Why every lookup is a hash map
-//!
-//! The stat table holds about 8000 stats and the matcher tries up to 17
-//! templates per stat line. A linear scan would be 136000 string compares for
-//! one modifier, and an item can carry a dozen.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +9,6 @@ use poe_trader_core::types::ItemCategory;
 use serde::Deserialize;
 use thiserror::Error;
 
-/// Why the tables could not be loaded.
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("reading {path}")]
@@ -36,10 +18,6 @@ pub enum LoadError {
         source: std::io::Error,
     },
 
-    /// One line failed to parse.
-    ///
-    /// The line number is carried because a 20000 line file with one bad
-    /// record is otherwise impossible to fix.
     #[error("parsing {path} line {line}")]
     Parse {
         path: PathBuf,
@@ -48,14 +26,6 @@ pub enum LoadError {
         source: serde_json::Error,
     },
 }
-
-// ---------------------------------------------------------------------------
-// Wire shapes
-//
-// These mirror the ndjson exactly and are mapped to the domain types at the
-// boundary. Letting the file's shape into the domain would make every future
-// data format change a change to the parser.
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct WireMatcher {
@@ -76,12 +46,6 @@ struct WireTrade {
     option: bool,
     #[serde(default)]
     count: bool,
-    /// Optional AND nullable.
-    ///
-    /// The reference writes `"ids": null` for stats that exist in the game but
-    /// have no trade filter, such as a logbook faction name. A plain
-    /// `#[serde(default)]` handles a missing key and rejects an explicit null,
-    /// so the real data file fails to load without this.
     #[serde(default)]
     ids: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
@@ -123,34 +87,20 @@ struct WireItem {
     trade_tag: Option<String>,
     #[serde(default)]
     craftable: Option<WireCraftable>,
-    /// The category, written at the top level.
-    ///
-    /// The reference nests it inside `craftable`, which loses it for anything
-    /// not craftable. Currency is not craftable and is very much a category.
-    /// Read from here first and from the nested field as a fallback, so a data
-    /// file in either shape loads.
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
     map: Option<WireMap>,
 }
 
-/// The stat and item tables for one game.
 #[derive(Debug, Default)]
 pub struct GameTables {
     stats: Vec<Stat>,
-    /// Matcher template to (stat index, matcher index).
-    ///
-    /// The first stat to claim a template keeps it. A duplicate template in
-    /// the data is a data bug, and picking the later one would make the answer
-    /// depend on file order.
     by_matcher: HashMap<String, (usize, usize)>,
-    /// Lowercased name plus namespace to every item with that name.
     by_name: HashMap<(String, Namespace), Vec<BaseInfo>>,
 }
 
 impl GameTables {
-    /// Load from a directory holding `stats.ndjson` and `items.ndjson`.
     pub fn load(dir: &Path) -> Result<Self, LoadError> {
         let stats = read_lines::<WireStat>(&dir.join("stats.ndjson"))?;
         let items = read_lines::<WireItem>(&dir.join("items.ndjson"))?;
@@ -191,8 +141,6 @@ impl GameTables {
                     .entry(matcher.string.clone())
                     .or_insert((stat_idx, matcher_idx));
 
-                // The Advanced Item Description form is a second way to write
-                // the same stat, so it has to reach the same entry.
                 if let Some(advanced) = &matcher.advanced {
                     out.by_matcher
                         .entry(advanced.clone())
@@ -205,8 +153,6 @@ impl GameTables {
 
         for w in wire_items {
             let Some(namespace) = Namespace::parse(&w.namespace) else {
-                // An unknown namespace means our reader is older than the data.
-                // Skipping the record beats refusing to start.
                 continue;
             };
 
@@ -225,11 +171,7 @@ impl GameTables {
                 craftable: w.craftable.is_some(),
                 map_tier: w.map.and_then(|m| m.tier),
                 category,
-                // Roll ranges come from the game bundles and not from the
-                // trade API, so they stay absent until those are vendored.
                 armour_bounds: poe_trader_core::types::item::ArmourBounds::default(),
-                // The data file does not carry a unique's base. The parser
-                // fills this from the base type line the game prints.
                 unique_base: None,
             };
 
@@ -242,26 +184,14 @@ impl GameTables {
         out
     }
 
-    /// How many stats were loaded.
     pub fn stat_count(&self) -> usize {
         self.stats.len()
     }
 
-    /// How many distinct item names were loaded.
     pub fn item_name_count(&self) -> usize {
         self.by_name.len()
     }
 
-    /// Every stat reference paired with each of its matcher templates.
-    ///
-    /// Exists for `poe-trader-datacheck`, which renders a game line from every
-    /// template and checks the parser reads it back. Nothing in the overlay
-    /// needs this, and a coverage number that is not measured is a guess.
-    /// Every base, with the table it was filed in.
-    ///
-    /// For `poe-trader-datacheck`, which builds a clipboard from each one and
-    /// checks the query comes back naming it. 873 gems were filed in the wrong
-    /// table and every one of their queries was untyped, which nothing caught.
     pub fn items(&self) -> impl Iterator<Item = (Namespace, &BaseInfo)> {
         self.by_name
             .iter()
@@ -297,9 +227,6 @@ impl ItemLookup for GameTables {
     }
 }
 
-/// Read an ndjson file into a vector.
-///
-/// Blank lines are skipped, so a file ending in a newline loads cleanly.
 fn read_lines<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>, LoadError> {
     let text = std::fs::read_to_string(path).map_err(|source| LoadError::Read {
         path: path.to_path_buf(),
@@ -367,8 +294,6 @@ mod tests {
 
     #[test]
     fn the_real_data_shape_loads() {
-        // Both records are copied verbatim out of the reference's English
-        // output, so this proves the wire types match the real file.
         let t = tables();
 
         assert_eq!(t.stat_count(), 3);
@@ -387,7 +312,6 @@ mod tests {
 
     #[test]
     fn a_second_matcher_reaches_the_same_stat() {
-        // "# Charm Slot" and "# Charm Slots" are one stat printed two ways.
         let t = tables();
 
         let plural = t.stat_by_matcher("# Charm Slots").unwrap();
@@ -398,7 +322,6 @@ mod tests {
 
     #[test]
     fn a_matcher_carries_its_baked_value() {
-        // "# Charm Slot" only ever means one, and the data says so.
         let t = tables();
 
         let hit = t.stat_by_matcher("# Charm Slot").unwrap();
@@ -425,7 +348,6 @@ mod tests {
 
     #[test]
     fn matching_is_exact_and_not_fuzzy() {
-        // A near match is a different stat with a different trade id.
         let t = tables();
 
         assert!(t.stat_by_matcher("# to maximum life").is_none());
@@ -447,9 +369,6 @@ mod tests {
 
     #[test]
     fn a_stat_with_null_trade_ids_loads() {
-        // The reference writes "ids": null for a stat that exists in the game
-        // and has no trade filter. serde(default) alone rejects an explicit
-        // null, so the real 1936 line file failed to load without this.
         let dir = tempdir().join("nullids");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -480,7 +399,6 @@ mod tests {
 
     #[test]
     fn item_lookup_ignores_case() {
-        // Clipboard text casing is not guaranteed across game versions.
         let t = tables();
 
         assert_eq!(
@@ -492,8 +410,6 @@ mod tests {
 
     #[test]
     fn an_item_in_another_namespace_is_not_returned() {
-        // The same name can exist in two tables. Returning the wrong one makes
-        // the price check silently wrong.
         let t = tables();
 
         assert!(t
@@ -503,7 +419,6 @@ mod tests {
 
     #[test]
     fn a_map_base_carries_its_tier() {
-        // A PoE2 waystone prints no tier, so the parser reads it from here.
         let t = tables();
 
         let got = t.items_by_name("Waystone of Chaos", Namespace::Item, GameVersion::Poe2);
@@ -524,8 +439,6 @@ mod tests {
 
     #[test]
     fn a_base_carries_the_category_the_data_file_gives_it() {
-        // The item text names an item class, not a trade category, and the two
-        // do not line up. The data file holds the mapping.
         let t = tables();
 
         let got = t.items_by_name("Kaom's Heart", Namespace::Unique, GameVersion::Poe2);
@@ -535,8 +448,6 @@ mod tests {
 
     #[test]
     fn a_base_with_an_unknown_category_reports_none() {
-        // Newer data than our reader. Reporting a wrong category would send
-        // the search to the wrong part of the trade site.
         let dir = tempdir().join("cat");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -567,8 +478,6 @@ mod tests {
 
     #[test]
     fn two_bases_with_one_name_are_both_returned() {
-        // A Two-Stone Ring is fire and cold or fire and lightning, and only
-        // the implicit tells them apart. Returning one would pick at random.
         let dir = tempdir().join("dup");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -592,7 +501,6 @@ mod tests {
 
     #[test]
     fn an_unknown_namespace_is_skipped_rather_than_fatal() {
-        // Newer data than our reader is not a reason to refuse to start.
         let dir = tempdir().join("ns");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -627,7 +535,6 @@ mod tests {
 
     #[test]
     fn a_malformed_line_names_its_file_and_line_number() {
-        // A 20000 line file with one bad record is otherwise impossible to fix.
         let dir = tempdir().join("bad");
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -650,8 +557,6 @@ mod tests {
 
     #[test]
     fn the_first_stat_to_claim_a_template_keeps_it() {
-        // A duplicate template is a data bug. Picking the later one would make
-        // the answer depend on file order.
         let dir = tempdir().join("dupstat");
         std::fs::create_dir_all(&dir).unwrap();
 

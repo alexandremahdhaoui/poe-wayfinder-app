@@ -1,31 +1,7 @@
-//! Measures how much of the reference is ported.
-//!
-//! Exists because eyeballing parity with ad-hoc greps produced confident wrong
-//! answers. This reads both trees and reports a number, so "is it done" has an
-//! answer nobody has to take on trust.
-//!
-//! # What it measures
-//!
-//! Two things, separately, because they fail differently.
-//!
-//! - **Function parity.** Every top level function in the reference parser and
-//!   filter layer, and whether a function of the same name exists here. A
-//!   missing function is a feature that silently does nothing.
-//! - **File parity.** Every reference source file and roughly how much of it
-//!   is accounted for. A file with no counterpart is a whole subsystem
-//!   missing.
-//!
-//! # What it cannot measure
-//!
-//! Whether a ported function is correct. Only tests do that. A high parity
-//! score with failing tests means nothing, which is why the report prints the
-//! test count alongside.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// One reference file and what it holds.
 #[derive(Debug, Clone)]
 struct RefFile {
     path: PathBuf,
@@ -33,20 +9,13 @@ struct RefFile {
     functions: Vec<String>,
 }
 
-/// The verdict for one reference function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Status {
-    /// A function of the same name exists here.
     Ported,
-    /// Deliberately not ported, with a reason.
     Waived,
-    /// Missing.
     Missing,
 }
 
-/// Functions we will never port, and why.
-///
-/// Each needs a reason. Without one this list becomes a place to hide work.
 const WAIVED: &[(&str, &str)] = &[
     (
         "noSourcePseudoToFilter",
@@ -142,13 +111,7 @@ const WAIVED: &[(&str, &str)] = &[
     ),
 ];
 
-/// Reference names we ported under a different Rust name.
-///
-/// A rename is a decision, and this table is where those decisions are
-/// recorded. Without it the tracker under-reports and stops being trusted,
-/// which is worse than no tracker at all.
 const ALIASES: &[(&str, &str)] = &[
-    // The overlay runtime, from Awakened PoE Trade's Electron shell.
     ("isPoeItem", "clipboard_kind"),
     ("isPointInsideRect", "point_in_rect"),
     ("isStashArea", "is_stash_area"),
@@ -160,7 +123,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("readConfig", "parse_ini"),
     ("finalFilterTweaks", "final_filter_tweaks"),
     ("createNewStatFilter", "preview_filters"),
-    // The last of the filter and parser helpers.
     ("translateStatWithRoll", "wording_for"),
     ("buildMageBloodNotFilter", "duplicates_filter"),
     ("buildFilterWithValue", "duplicates_filter"),
@@ -170,54 +132,40 @@ const ALIASES: &[(&str, &str)] = &[
         "try_secondary_parse_translation",
     ),
     ("createVirtualItem", "virtual_item"),
-    // The PoE1 heist rules. `applyHeistRules` is the pair of them run one
-    // after the other, which is `apply_heist_rules` in price_check.
     ("applyContractRules", "contract_filters"),
     ("applyBlueprintRules", "blueprint_exclusion"),
-    // The PoE1 exclusion rules.
     ("applyFlaskHybridMod", "flask_excludes_increased_effect"),
     ("filterMemoryStrands", "memory_strands_filter"),
     ("statToNotFilter", "not_group"),
-    // The reference merges namespaces on every lookup. Ours merges once, in
-    // the builder, so the loaded table is already merged.
     ("_mergeTradeIdsInto", "merge_trade_ids_into"),
     ("calculatedStatToFilter", "build_one"),
     ("initUiModFilters", "build_stat_group"),
-    // Building the request body.
     ("createTradeRequest", "build_query"),
     ("nameToQuery", "new"),
     ("tradeIdToQuery", "stat_filter_to_json"),
     ("parseMods", "mod_block"),
-    // Recalculating an item after a preview edit.
     ("applyEleAugment", "apply_elemental_rune"),
     ("recalculateItemProperties", "rescale"),
-    // Which stats a rune preview rebuilds.
     ("refEffectsPseudos", "affects_pseudo"),
     ("translatedEffectsPseudos", "signs_match"),
-    // Filter bounds and negation.
     ("shortRollToFilter", "short_roll_to_filter"),
     ("filterAdjustmentForNegate", "negate"),
     ("getMinMax", "for_trade"),
-    // PoE2 modifier splitting.
     ("parseModifiersPoe2", "read_modifier_section_poe2"),
-    // Map and base percentile properties.
     ("mapProps", "map_filters"),
     ("filterBasePercentile", "base_percentile_filter"),
     ("removeUsedStats", "remove_used_stats"),
-    // Routing between the search and exchange endpoints.
     ("apiToSatisfySearch", "endpoint_for"),
     ("tradeTag", "trade_tag"),
     ("preventQueueCreation", "queue_wait"),
     ("toPricingResult", "seller_status"),
     ("adjustRateLimits", "adjust"),
     ("_adjustRateLimits", "parse_rate_limit_headers"),
-    // Roll rounding and the item editors.
     ("decimalPlaces", "decimal_places"),
     ("roundRoll", "round_roll"),
     ("percentRoll", "percent_roll"),
     ("percentRollDelta", "percent_roll_delta"),
     ("getItemEditorType", "editor_kind"),
-    // Rendering a trade site listing.
     ("parseAffixStrings", "parse_affix_strings"),
     ("getTier", "tier_at"),
     ("getTierV2", "tier_of"),
@@ -225,19 +173,16 @@ const ALIASES: &[(&str, &str)] = &[
     ("buildItemProps", "item_properties"),
     ("buildGrantSkillBlock", "granted_skills"),
     ("buildNameBlock", "item_tags"),
-    // Magic name and modifier identity.
     ("magicBasetype", "magic_base_type"),
     ("replaceHashWithValues", "fill_placeholders"),
     ("modsEqual", "mods_equal"),
     ("applyIncr", "apply_incr"),
     ("maxUsefulItemLevel", "max_useful_item_level"),
     ("enableAllFilters", "enable_all"),
-    // Rune preview edits.
     ("selectAugmentEffectByItemCategory", "effect_for_category"),
     ("getAugmentNameByRef", "augment_name"),
     ("handleApplyItemEdits", "apply"),
     ("handleRemoveItemEdits", "remove"),
-    // The Rust name says what it does rather than how it is called.
     ("itemTextToSections", "text_to_sections"),
     ("markupConditionParser", "strip_markup"),
     ("itemIsModifiable", "is_modifiable"),
@@ -247,46 +192,36 @@ const ALIASES: &[(&str, &str)] = &[
     ("linesToStatStrings", "match_stat_lines"),
     ("_statPlaceholderGenerator", "candidates"),
     ("findAndResolveTranslation", "try_parse_translation"),
-    // calc-q20 reads better as what it does to the scaling.
     ("calcFlat", "strip_scaling"),
     ("calcIncreased", "apply_scaling"),
     ("calcPropPercentile", "prop_percentile"),
     ("propAt20Quality", "prop_at_20_quality"),
-    // Aggregation.
     ("sumStatsByModType", "sum_stats_by_type"),
     ("statSourcesTotal", "combine"),
-    // calc-base says what it produces rather than what it is called.
     ("calcPropBase", "contributions"),
     ("calcBase", "base_value"),
     ("calcTotal", "total_value"),
-    // The filter rules say what they decide.
     ("enableGoodRolledFilters", "should_enable"),
     ("hideNotVariableStat", "hidden_reason"),
     ("filterFillMinMax", "fill_ends"),
-    // Filters.
     ("createFilters", "build_query"),
     ("createExactStatFilters", "build_stat_group"),
     ("filterPseudo", "pseudo_totals"),
-    // Item property filters say which property they pick.
     ("isSingleAttrArmour", "is_single_defence_armour"),
     ("armourProps", "armour_filters"),
     ("weaponProps", "weapon_filters"),
     ("filterItemProp", "build_stat_group_for"),
-    // Presets say which handful of filters a kind of item needs.
     ("createPresets", "preset_for"),
     ("createGemFilters", "gem_level_filter"),
     ("createTrialsFilters", "trials_filter"),
     ("createUncutGemFilters", "apply_gem_filters"),
-    // The fetch endpoint.
     ("requestResults", "read_listings"),
     ("parseFetchResult", "read_listing"),
-    // Unique, anointment and incursion rules.
     ("createUniquePresets", "unique_search"),
     ("createMagebloodFilters", "link_filter"),
     ("applyAnointmentRules", "anointment"),
     ("decodeOils", "anointment"),
     ("applyRules", "valuable_rooms"),
-    // Slot counting and the per category rules.
     ("explicitModifierCount", "explicit_modifier_count"),
     ("itemBaseMaxModifiersOfType", "max_modifiers_of_type"),
     ("itemMaxModifiersBySlot", "max_modifiers_of_type"),
@@ -326,9 +261,6 @@ fn main() -> ExitCode {
         .cloned()
         .unwrap_or_else(|| "..".to_string());
 
-    // Which subtrees of the reference to measure. Configurable so a second
-    // reference with a different layout can be measured by the same tool
-    // rather than by a second one that drifts from this.
     let subdirs: Vec<String> = args
         .iter()
         .position(|a| a == "--subdirs")
@@ -343,7 +275,6 @@ fn main() -> ExitCode {
             |v| v.split(',').map(|s| s.trim().to_string()).collect(),
         );
 
-    // A floor to fail below, so parity can only go up.
     let floor: f64 = args
         .iter()
         .position(|a| a == "--min")
@@ -357,7 +288,6 @@ fn main() -> ExitCode {
         eprintln!("parity: no reference checkout at {}", reference.display());
         eprintln!("parity: clone it or pass --reference");
 
-        // Not a failure. A machine without the reference can still build.
         return ExitCode::SUCCESS;
     }
 
@@ -367,16 +297,9 @@ fn main() -> ExitCode {
     report(&ref_files, &our_source, floor)
 }
 
-/// Read every reference source file worth tracking.
 fn collect_reference(root: &Path, subdirs: &[String]) -> Vec<RefFile> {
     let mut out = Vec::new();
 
-    // Only the parts we are porting. The Vue components are replaced rather
-    // than ported, so counting them would report a gap that is not one.
-    //
-    // The Electron shell used to be waved off the same way. That was wrong:
-    // its shortcut and host file modules hold real logic, and skipping them
-    // hid the fact that the overlay could not whisper a seller at all.
     for sub in subdirs {
         collect_ts(&root.join(sub), &mut out);
     }
@@ -404,7 +327,6 @@ fn collect_ts(dir: &Path, out: &mut Vec<RefFile>) {
             continue;
         }
 
-        // Type declarations hold no logic to port.
         if path.file_name().is_some_and(|n| n == "interfaces.ts") {
             continue;
         }
@@ -421,13 +343,10 @@ fn collect_ts(dir: &Path, out: &mut Vec<RefFile>) {
     }
 }
 
-/// Every top level function name in a TypeScript file.
 fn top_level_functions(text: &str) -> Vec<String> {
     let mut out = Vec::new();
 
     for line in text.lines() {
-        // Top level only. An indented function is a closure or a method and
-        // porting it one for one is not meaningful.
         let rest = line
             .strip_prefix("export function ")
             .or_else(|| line.strip_prefix("function "))
@@ -454,11 +373,6 @@ fn top_level_functions(text: &str) -> Vec<String> {
     out
 }
 
-/// Every line of our own Rust source, concatenated.
-///
-/// One string rather than a per file map, because a reference function can
-/// legitimately land in a different file here and the question is whether it
-/// exists at all.
 fn collect_our_source(root: &Path) -> String {
     let mut out = String::new();
 
@@ -494,7 +408,6 @@ fn collect_rs(dir: &Path, out: &mut String) {
     }
 }
 
-/// Turn a TypeScript name into the Rust one it would have.
 fn to_snake_case(name: &str) -> String {
     let mut out = String::new();
 
@@ -513,7 +426,6 @@ fn to_snake_case(name: &str) -> String {
     out
 }
 
-/// Whether we have a function by this name.
 fn status_of(name: &str, our_source: &str) -> Status {
     if WAIVED.iter().any(|(waived, _)| *waived == name) {
         return Status::Waived;
@@ -532,7 +444,6 @@ fn status_of(name: &str, our_source: &str) -> Status {
     Status::Missing
 }
 
-/// Print the report and decide the exit code.
 fn report(ref_files: &[RefFile], our_source: &str, floor: f64) -> ExitCode {
     let mut ported = 0usize;
     let mut waived = 0usize;
@@ -558,7 +469,6 @@ fn report(ref_files: &[RefFile], our_source: &str, floor: f64) -> ExitCode {
     let missing_count: usize = missing.values().map(Vec::len).sum();
     let total = ported + waived + missing_count;
 
-    // Waived counts as done. It is a decision with a written reason, not a gap.
     let parity = if total == 0 {
         100.0
     } else {
@@ -614,7 +524,6 @@ fn report(ref_files: &[RefFile], our_source: &str, floor: f64) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The reference path, from `renderer/src` down.
 fn short_path(path: &Path) -> String {
     let text = path.display().to_string();
 
@@ -644,7 +553,6 @@ export function* linesToStatStrings() {}
 
     #[test]
     fn an_indented_function_is_not_top_level() {
-        // A closure or a method. Porting it one for one is not meaningful.
         let text = "  function inner() {}\n    function deeper() {}";
 
         assert!(top_level_functions(text).is_empty());
@@ -693,8 +601,6 @@ export function* linesToStatStrings() {}
 
     #[test]
     fn a_partial_name_does_not_count_as_ported() {
-        // "fn parse_foo_bar" must not satisfy "parseFoo". The trailing paren
-        // in the search is what stops it.
         let ours = "pub fn parse_foo_bar() {}";
 
         assert_eq!(status_of("parseFoo", ours), Status::Missing);
@@ -702,8 +608,6 @@ export function* linesToStatStrings() {}
 
     #[test]
     fn an_aliased_function_is_recognised() {
-        // A rename must not read as a gap, or the tracker under-reports and
-        // stops being trusted.
         let ours = "pub fn text_to_sections(text: &str) {}";
 
         assert_eq!(status_of("itemTextToSections", ours), Status::Ported);
@@ -716,8 +620,6 @@ export function* linesToStatStrings() {}
 
     #[test]
     fn no_function_is_both_aliased_and_waived() {
-        // It would be recorded twice and the reason would contradict the
-        // alias.
         for (name, _) in ALIASES {
             assert!(
                 !WAIVED.iter().any(|(waived, _)| waived == name),
@@ -743,7 +645,6 @@ export function* linesToStatStrings() {}
 
     #[test]
     fn every_waiver_carries_a_reason() {
-        // Without one this list becomes a place to hide work.
         for (name, reason) in WAIVED {
             assert!(!reason.trim().is_empty(), "{name} has no reason");
             assert!(

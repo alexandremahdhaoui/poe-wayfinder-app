@@ -1,5 +1,3 @@
-//! Plain data used across this crate's layers.
-
 pub mod hotkey;
 pub mod overlay;
 

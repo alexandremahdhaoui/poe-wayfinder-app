@@ -1,26 +1,3 @@
-//! How much of a data file the parser can actually read.
-//!
-//! # Why this exists
-//!
-//! The overlay looked finished and could not match 1072 PoE1 stats, because
-//! the trade data keys some stats with a leading `+` and the parser dropped
-//! it. Nothing failed. The filters were simply absent and the item priced
-//! against the whole market.
-//!
-//! A silent miss cannot be found by reading code. It can be counted.
-//!
-//! For every matcher template in a data file this renders the line the game
-//! would print, feeds it to the same matcher the parser uses, and checks the
-//! answer is the stat it came from. A template that does not come back is
-//! printed with its reference.
-//!
-//! ```sh
-//! cargo run --bin poe-trader-datacheck -- data-poe1
-//! ```
-//!
-//! Exit code is 1 when coverage is below the floor given by `--min`, so this
-//! runs as a forge stage rather than as something to remember to look at.
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -33,11 +10,6 @@ use poe_trader_core::types::category::ItemCategory;
 use poe_trader_core::types::item::BaseInfo;
 use poe_trader_core::types::GameVersion;
 
-/// The roll written into a rendered line.
-///
-/// Any value works. Seven is a whole number, so no template is accidentally
-/// tested against the decimal path, and it is not 0 or 1, which some matchers
-/// bake in as a literal.
 const ROLL: &str = "7";
 
 fn main() -> ExitCode {
@@ -126,12 +98,9 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// What a run found.
 struct Report {
     total: usize,
     hit: usize,
-    /// Reference, the template that was not read back, and the line rendered
-    /// from it.
     missed: Vec<(String, String, String)>,
 }
 
@@ -145,7 +114,6 @@ impl Report {
     }
 }
 
-/// Render every template and check it reads back as its own stat.
 fn check(tables: &GameTables) -> Report {
     let mut report = Report {
         total: 0,
@@ -158,9 +126,6 @@ fn check(tables: &GameTables) -> Report {
 
         report.total += 1;
 
-        // The reference is the identity being checked, not the template. Two
-        // matchers on one stat are two spellings of the same thing, and either
-        // one coming back is the right answer.
         let found = candidates(&rendered)
             .iter()
             .filter_map(|c| tables.stat_by_matcher(&c.template))
@@ -178,11 +143,6 @@ fn check(tables: &GameTables) -> Report {
     report
 }
 
-/// Which game a data directory holds.
-///
-/// Read from the directory name, because the file itself does not say. A
-/// wrong guess only changes which parser stages run, and both games are
-/// checked anyway.
 fn game_of(dir: &std::path::Path) -> GameVersion {
     if dir.to_string_lossy().contains("poe1") {
         GameVersion::Poe1
@@ -191,19 +151,9 @@ fn game_of(dir: &std::path::Path) -> GameVersion {
     }
 }
 
-/// Tables the parser looks in that hold nothing.
-///
-/// The check the base pass cannot make. Gems were filed under `ITEM`, so a
-/// gem-shaped clipboard still found them there and coverage read 100 percent
-/// while the gem table sat empty and every real gem lookup missed.
-///
-/// A table the parser reads and the builder never fills is a whole class of
-/// item that silently prices against the market.
 fn empty_tables(tables: &GameTables, game: GameVersion) -> Vec<&'static str> {
     let mut wanted = vec![Namespace::Item, Namespace::Unique, Namespace::Gem];
 
-    // PoE2 has no divination cards and no itemised monsters. Requiring them
-    // would fail on a correct build.
     if game == GameVersion::Poe1 {
         wanted.push(Namespace::DivinationCard);
         wanted.push(Namespace::CapturedBeast);
@@ -216,12 +166,6 @@ fn empty_tables(tables: &GameTables, game: GameVersion) -> Vec<&'static str> {
         .collect()
 }
 
-/// Build a clipboard for every base and check the parser names it back.
-///
-/// Uniques, cards and beasts are skipped. A unique needs its base type
-/// printed under it and the data file does not carry one, and a card and a
-/// beast are bulk traded and answer with a tag rather than a name. Those paths
-/// are covered by their own tests.
 fn check_items(tables: &GameTables, game: GameVersion) -> Report {
     let mut report = Report {
         total: 0,
@@ -252,25 +196,16 @@ fn check_items(tables: &GameTables, game: GameVersion) -> Report {
     report
 }
 
-/// The clipboard the game would print for a base of this kind.
-///
-/// Minimal on purpose. The question is whether the name resolves, and every
-/// extra line is another thing that could fail for its own reason.
 fn clipboard_for(namespace: Namespace, base: &BaseInfo) -> Option<String> {
     let name = &base.name;
 
     match namespace {
-        // Currency prints its own rarity. Printing it as Normal makes the
-        // parser strip the quality prefixes off `Exceptional Verisium` and
-        // `Blighted Delirium Orb`, which are whole item names and not prefixed
-        // versions of anything.
         Namespace::Item if base.category == Some(ItemCategory::Currency) => Some(format!(
             "Item Class: Stackable Currency\nRarity: Currency\n{name}\n--------\nStack Size: 1/10\n"
         )),
         Namespace::Item => Some(format!(
             "Item Class: Unknown\nRarity: Normal\n{name}\n--------\nItem Level: 80\n"
         )),
-        // The class line is what tells the parser to look in the gem table.
         Namespace::Gem => Some(format!(
             "Item Class: Skill Gems\nRarity: Gem\n{name}\n--------\nLevel: 20\n"
         )),
@@ -278,10 +213,6 @@ fn clipboard_for(namespace: Namespace, base: &BaseInfo) -> Option<String> {
     }
 }
 
-/// Turn a matcher template into the line the game would print.
-///
-/// The only substitution is the placeholder. Everything else in a template is
-/// literal text the game prints unchanged.
 fn render(template: &str) -> String {
     template.replace('#', ROLL)
 }
@@ -297,8 +228,6 @@ mod tests {
 
     #[test]
     fn the_sign_in_a_template_survives_rendering() {
-        // Rendering "+# to maximum Life" as "7 to maximum Life" would drop the
-        // very thing this tool was written to catch and report full coverage.
         assert_eq!(render("+# to maximum Life"), "+7 to maximum Life");
     }
 
@@ -336,9 +265,6 @@ mod tests {
 
     #[test]
     fn the_roll_is_not_a_value_matchers_bake_in() {
-        // A matcher can carry `"value": 1`, meaning the text has no number and
-        // the stat is worth one. Rendering with 1 would make those look like
-        // they matched a placeholder.
         assert_ne!(ROLL, "0");
         assert_ne!(ROLL, "1");
     }

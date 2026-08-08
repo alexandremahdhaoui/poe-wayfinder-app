@@ -1,47 +1,26 @@
-//! Deciding what the overlay shows and where.
-//!
-//! Pure. It takes the game window, the cursor and what the price check
-//! produced, and returns what to draw. The drawing itself is the driver's job.
-//!
-//! Splitting it this way is what makes the overlay's behaviour testable. Every
-//! rule below is one a user would notice, and none of them needs a window to
-//! check.
-
 use poe_trader_core::controller::price_check::PriceCheck;
 
 use crate::adapter::game_window_adapter::{should_draw, GameWindow};
 use crate::types::overlay::{OverlayGeometry, OverlayState, WindowRect};
 
-/// What the overlay is currently holding.
 #[derive(Debug, Clone, Default)]
 pub struct OverlayModel {
     state: OverlayState,
-    /// The last successful check.
     result: Option<PriceCheck>,
-    /// How many listings matched.
     total: Option<u64>,
-    /// The message to show in the error state.
     message: Option<String>,
     geometry: OverlayGeometry,
-    /// Where the cursor was when the check started.
-    ///
-    /// Frozen at that moment, so the panel does not chase the mouse while the
-    /// user is reading it.
     anchor_cursor: (i32, i32),
 }
 
-/// What the driver should draw this frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     pub state: OverlayState,
-    /// Where to put the window. None means draw nothing.
     pub rect: Option<WindowRect>,
-    /// Whether the window should take mouse input.
     pub takes_input: bool,
 }
 
 impl OverlayModel {
-    /// A hidden overlay.
     pub fn new(geometry: OverlayGeometry) -> Self {
         Self {
             geometry,
@@ -49,40 +28,28 @@ impl OverlayModel {
         }
     }
 
-    /// What it is showing.
     pub fn state(&self) -> OverlayState {
         self.state
     }
 
-    /// The last successful check.
     pub fn result(&self) -> Option<&PriceCheck> {
         self.result.as_ref()
     }
 
-    /// How many listings matched.
     pub fn total(&self) -> Option<u64> {
         self.total
     }
 
-    /// The error message.
     pub fn message(&self) -> Option<&str> {
         self.message.as_deref()
     }
 
-    /// A price check has started.
-    ///
-    /// The cursor is frozen here, so the panel does not chase the mouse while
-    /// the user reads it.
     pub fn start(&mut self, cursor: (i32, i32)) {
         self.state = OverlayState::Loading;
         self.anchor_cursor = cursor;
         self.message = None;
-
-        // The old result is kept until the new one lands. Clearing it makes
-        // the panel flash empty on every check.
     }
 
-    /// A price check finished.
     pub fn finish(&mut self, result: PriceCheck, total: u64) {
         self.state = OverlayState::Showing;
         self.result = Some(result);
@@ -90,44 +57,24 @@ impl OverlayModel {
         self.message = None;
     }
 
-    /// A price check failed.
     pub fn fail(&mut self, message: &str) {
         self.state = OverlayState::Error;
         self.message = Some(message.to_string());
 
-        // The stale result is dropped. Showing an old price next to an error
-        // reads as if the old price were the answer.
         self.result = None;
         self.total = None;
     }
 
-    /// The item was read but the price was not.
-    ///
-    /// Keeps the result and shows the message beside it. Distinct from `fail`
-    /// because the two cases differ in what the user can act on: a failed
-    /// parse leaves them nothing, and a failed search still tells them their
-    /// modifiers were read correctly, which is most of what the panel is for.
-    ///
-    /// The stale result rule in `fail` does not apply here. This result is not
-    /// stale, it is the item that was just parsed.
     pub fn warn(&mut self, message: &str) {
-        // The state stays Showing so the item is drawn. Only the message is
-        // added, and a panel showing an item plus a warning is exactly what
-        // happened.
         self.state = OverlayState::Showing;
         self.message = Some(message.to_string());
     }
 
-    /// The user dismissed the overlay.
     pub fn hide(&mut self) {
         self.state = OverlayState::Hidden;
         self.message = None;
     }
 
-    /// Work out what to draw.
-    ///
-    /// Returns a frame with no rectangle when nothing should be drawn, so the
-    /// driver has one thing to check rather than three.
     pub fn frame(&self, window: Option<GameWindow>) -> Frame {
         let hidden = Frame {
             state: self.state,
@@ -139,8 +86,6 @@ impl OverlayModel {
             return hidden;
         }
 
-        // No game window means the game closed or minimised while the panel
-        // was up. Drawing over the desktop is worse than showing nothing.
         let Some(window) = window else {
             return hidden;
         };
@@ -156,7 +101,6 @@ impl OverlayModel {
         }
     }
 
-    /// Work out what to draw at a given display scale.
     pub fn frame_scaled(&self, window: Option<GameWindow>, scale: f32) -> Frame {
         let mut frame = self.frame(window);
 
@@ -204,8 +148,6 @@ mod tests {
 
     #[test]
     fn a_new_overlay_is_hidden_and_draws_nothing() {
-        // Anything else covers the game before the user has asked for
-        // anything.
         let m = model();
 
         assert_eq!(m.state(), OverlayState::Hidden);
@@ -224,8 +166,6 @@ mod tests {
 
     #[test]
     fn the_loading_overlay_takes_no_clicks() {
-        // Taking them would swallow a click meant for the game, which is what
-        // the user is actually playing.
         let mut m = model();
         m.start((500, 400));
 
@@ -248,7 +188,6 @@ mod tests {
 
     #[test]
     fn the_old_result_survives_until_the_new_one_lands() {
-        // Clearing it on start makes the panel flash empty on every check.
         let mut m = model();
         m.start((0, 0));
         m.finish(check(), 57);
@@ -261,8 +200,6 @@ mod tests {
 
     #[test]
     fn a_failure_drops_the_stale_result() {
-        // Showing an old price next to an error reads as if the old price were
-        // the answer.
         let mut m = model();
         m.start((0, 0));
         m.finish(check(), 57);
@@ -307,8 +244,6 @@ mod tests {
 
     #[test]
     fn nothing_is_drawn_when_the_game_is_in_the_background() {
-        // The user alt tabbed. Drawing over another application is the fastest
-        // way to make a tool feel broken.
         let mut m = model();
         m.start((0, 0));
         m.finish(check(), 1);
@@ -318,8 +253,6 @@ mod tests {
 
     #[test]
     fn nothing_is_drawn_when_the_game_window_is_gone() {
-        // The game closed or minimised while the panel was up. Drawing over
-        // the desktop is worse than showing nothing.
         let mut m = model();
         m.start((0, 0));
         m.finish(check(), 1);
@@ -329,8 +262,6 @@ mod tests {
 
     #[test]
     fn the_state_is_still_reported_when_nothing_is_drawn() {
-        // The driver needs to know the panel is still logically up, so it
-        // reappears when the user alt tabs back.
         let mut m = model();
         m.start((0, 0));
         m.finish(check(), 1);
@@ -340,7 +271,6 @@ mod tests {
 
     #[test]
     fn the_panel_stays_where_the_check_started() {
-        // Chasing the mouse while the user reads it makes the panel unusable.
         let mut m = model();
         m.start((500, 400));
         m.finish(check(), 1);
@@ -375,8 +305,6 @@ mod tests {
             is_foreground: true,
         };
 
-        // The cursor was at 100,100 which is outside the moved window, so the
-        // panel is clamped back inside it.
         let rect = m.frame(Some(moved)).rect.unwrap();
 
         assert!(rect.x >= 2000);

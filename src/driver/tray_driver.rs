@@ -1,38 +1,16 @@
-//! The system tray menu.
-//!
-//! The overlay has no window a user can click to reach settings, because a
-//! window like that would sit over the game. The tray is where the app lives
-//! when it is not showing a price.
-//!
-//! # Why the menu is a pure model
-//!
-//! What the menu offers depends on state: it cannot say "search again" with no
-//! previous search, and it should say whether the game was found. That logic
-//! is testable and the drawing is not, so they are separated the same way the
-//! overlay is.
-
-/// What the user picked from the tray.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
-    /// Run the last search again.
     Research,
-    /// Open the last search on the trade site.
     OpenInBrowser,
-    /// Stop reacting to the hotkey without quitting.
     TogglePaused,
-    /// Rebuild the game data.
     RebuildData,
-    /// Quit.
     Quit,
 }
 
-/// One row in the tray menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub label: String,
-    /// None for a row that only reports state.
     pub action: Option<TrayAction>,
-    /// Shown but not clickable.
     pub enabled: bool,
 }
 
@@ -54,30 +32,18 @@ impl MenuItem {
     }
 }
 
-/// What the tray needs to know to build its menu.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrayState {
-    /// The game window was found.
     pub game_found: bool,
-    /// The hotkey is being ignored.
     pub paused: bool,
-    /// A search has run this session.
     pub has_search: bool,
-    /// The league being searched.
     pub league: Option<String>,
-    /// How many stats are loaded.
     pub stat_count: usize,
 }
 
-/// Build the menu for a state.
-///
-/// The status rows come first, because the question a user opens the tray to
-/// answer is usually "why is nothing happening".
 pub fn menu(state: &TrayState) -> Vec<MenuItem> {
     let mut out = Vec::new();
 
-    // The most common reason nothing happens is that the game is not running
-    // or the window title is wrong. Saying so here saves a support round trip.
     out.push(MenuItem::status(if state.game_found {
         "Game found".to_string()
     } else {
@@ -90,8 +56,6 @@ pub fn menu(state: &TrayState) -> Vec<MenuItem> {
     }));
 
     if state.stat_count == 0 {
-        // Nothing will ever match without data, and the failure would
-        // otherwise show up as every modifier being unknown.
         out.push(MenuItem::status("No game data loaded".to_string()));
     }
 
@@ -101,7 +65,6 @@ pub fn menu(state: &TrayState) -> Vec<MenuItem> {
         true,
     ));
 
-    // Both need a previous search to act on.
     out.push(MenuItem::action(
         "Search again",
         TrayAction::Research,
@@ -125,7 +88,6 @@ pub fn menu(state: &TrayState) -> Vec<MenuItem> {
     out
 }
 
-/// Whether the hotkey should be acted on.
 pub fn accepts_hotkey(state: &TrayState) -> bool {
     !state.paused && state.game_found && state.stat_count > 0
 }
@@ -157,8 +119,6 @@ mod tests {
 
     #[test]
     fn the_menu_says_whether_the_game_was_found() {
-        // The most common reason nothing happens is that the game is not
-        // running or the window title is wrong.
         assert!(labels(&ready()).contains(&"Game found".to_string()));
 
         let missing = TrayState {
@@ -171,8 +131,6 @@ mod tests {
 
     #[test]
     fn the_menu_says_which_league_it_will_search() {
-        // A wrong league returns nothing rather than an error, so seeing it is
-        // worth a row.
         assert!(labels(&ready()).contains(&"League: Standard".to_string()));
 
         let unset = TrayState {
@@ -185,8 +143,6 @@ mod tests {
 
     #[test]
     fn missing_data_gets_its_own_row() {
-        // Nothing will ever match without it, and the failure would otherwise
-        // show up as every modifier being unknown.
         let empty = TrayState {
             stat_count: 0,
             ..ready()
@@ -202,8 +158,6 @@ mod tests {
 
     #[test]
     fn the_status_rows_come_first() {
-        // The question a user opens the tray to answer is usually why nothing
-        // is happening.
         let rows = menu(&ready());
 
         assert!(rows[0].action.is_none());
@@ -233,7 +187,6 @@ mod tests {
 
     #[test]
     fn the_search_actions_need_a_previous_search() {
-        // Offering them with nothing to act on is a click that does nothing.
         let fresh = ready();
 
         assert!(!item(&fresh, TrayAction::Research).enabled);
@@ -250,7 +203,6 @@ mod tests {
 
     #[test]
     fn quit_and_rebuild_are_always_available() {
-        // A user must always be able to leave, whatever state the app is in.
         for state in [
             ready(),
             TrayState {
@@ -267,7 +219,6 @@ mod tests {
 
     #[test]
     fn every_action_appears_exactly_once() {
-        // A duplicate row would fire twice or confuse which one was clicked.
         let actions: Vec<TrayAction> = menu(&ready())
             .into_iter()
             .filter_map(|i| i.action)
@@ -295,8 +246,6 @@ mod tests {
 
     #[test]
     fn the_hotkey_is_ignored_when_the_game_is_gone() {
-        // Copying from whatever has focus would take text from another
-        // application and try to price it.
         assert!(!accepts_hotkey(&TrayState {
             game_found: false,
             ..ready()
@@ -305,7 +254,6 @@ mod tests {
 
     #[test]
     fn the_hotkey_is_ignored_with_no_data() {
-        // Every modifier would be unknown and the price would be meaningless.
         assert!(!accepts_hotkey(&TrayState {
             stat_count: 0,
             ..ready()
@@ -313,19 +261,6 @@ mod tests {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The renderer
-//
-// Everything above is a pure model and was written first. Nothing drew it, so
-// there was never an icon: the menu existed only in its own tests, and a
-// running overlay was indistinguishable from one that never started.
-// ---------------------------------------------------------------------------
-
-/// The tooltip shown on hover.
-///
-/// The only text the tool gets to show without the user clicking anything, so
-/// it answers the two questions that bring someone to the tray: is it working,
-/// and what key do I press.
 pub fn tooltip(state: &TrayState, game: &str, hotkey: &str) -> String {
     let status = if state.paused {
         "paused"
@@ -340,7 +275,6 @@ pub fn tooltip(state: &TrayState, game: &str, hotkey: &str) -> String {
     format!("poe-trader — {game} — {status}")
 }
 
-/// Why the tray icon could not be created.
 #[derive(Debug, thiserror::Error)]
 pub enum TrayError {
     #[error("registering the tray window class")]
@@ -376,34 +310,20 @@ mod win {
         WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WNDCLASSW,
     };
 
-    /// Our id for the icon. One tray icon per process.
     const TRAY_ID: u32 = 1;
 
-    /// The message Windows posts to us when the icon is clicked.
     const WM_TRAY: u32 = WM_APP + 1;
 
-    /// The first menu command id. Rows are numbered from here in order.
     const MENU_BASE: usize = 100;
 
-    /// What the window procedure needs.
-    ///
-    /// A static because `window_proc` is a bare function pointer with nowhere
-    /// to hang state, and there is exactly one tray icon per process. The
-    /// `Sender` is behind a mutex only to make the whole thing `Sync`.
     struct Context {
         state: Arc<Mutex<TrayState>>,
         actions: Mutex<Sender<TrayAction>>,
-        /// What each menu row does, by position. Rebuilt on every open,
-        /// because the model decides the rows from the current state.
         rows: Mutex<Vec<Option<TrayAction>>>,
     }
 
     static CONTEXT: OnceLock<Context> = OnceLock::new();
 
-    /// The live tray icon.
-    ///
-    /// Owns nothing Windows side. The icon belongs to the thread started in
-    /// `start`, which removes it when the message loop ends.
     pub struct TrayIcon {
         actions: Receiver<TrayAction>,
         state: Arc<Mutex<TrayState>>,
@@ -413,16 +333,11 @@ mod win {
     }
 
     impl TrayIcon {
-        /// Add the icon and start listening.
-        ///
-        /// `game` and `hotkey` only ever appear in the tooltip.
         pub fn start(state: TrayState, game: &str, hotkey: &str) -> Result<Self, TrayError> {
             let shared = Arc::new(Mutex::new(state));
             let (action_tx, action_rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::channel();
 
-            // Set before the thread starts, so a click that arrives during
-            // startup finds a context rather than dropping.
             let _ = CONTEXT.set(Context {
                 state: Arc::clone(&shared),
                 actions: Mutex::new(action_tx),
@@ -435,8 +350,6 @@ mod win {
             let thread_window = Arc::clone(&window);
 
             std::thread::spawn(move || {
-                // A failure after the ready signal has nowhere useful to go.
-                // The overlay prices items perfectly well with no icon.
                 let _ = run(&tip, &ready_tx, &thread_window);
             });
 
@@ -453,10 +366,6 @@ mod win {
             }
         }
 
-        /// Everything clicked since the last call.
-        ///
-        /// Drained rather than queued. Two Quits are one Quit, and a stutter
-        /// must not run four price checks.
         pub fn actions(&self) -> Vec<TrayAction> {
             let mut out = Vec::new();
 
@@ -469,10 +378,6 @@ mod win {
             out
         }
 
-        /// Tell the tray what the app is doing now.
-        ///
-        /// Cheap enough to call every frame. The tooltip is only rewritten
-        /// when it actually changes, because `NIM_MODIFY` is a syscall.
         pub fn update(&self, state: TrayState) {
             let changed = {
                 let mut held = self.state.lock().unwrap();
@@ -500,13 +405,10 @@ mod win {
 
             write_tip(&mut data.szTip, &changed);
 
-            // SAFETY: `data` is a live, correctly sized NOTIFYICONDATAW and
-            // the handle came from the tray thread's own window.
             let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
         }
     }
 
-    /// Create the window, add the icon, pump messages, remove the icon.
     fn run(
         tip: &str,
         ready: &Sender<Result<(), TrayError>>,
@@ -514,7 +416,6 @@ mod win {
     ) -> Result<(), TrayError> {
         let class_name = wide("poe_trader_tray");
 
-        // SAFETY: a null module handle is the current process.
         let instance = unsafe { GetModuleHandleW(None) }.map_err(|_| TrayError::WindowClass)?;
 
         let class = WNDCLASSW {
@@ -524,14 +425,12 @@ mod win {
             ..Default::default()
         };
 
-        // SAFETY: `class` is live and every pointer in it outlives the call.
         if unsafe { RegisterClassW(&class) } == 0 {
             let _ = ready.send(Err(TrayError::WindowClass));
 
             return Err(TrayError::WindowClass);
         }
 
-        // SAFETY: the class was just registered and every pointer is live.
         let window = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -552,16 +451,8 @@ mod win {
 
         *window_out.lock().unwrap() = Some(window.0 as isize);
 
-        // A drawn icon rather than the stock one. IDI_APPLICATION is the
-        // generic Windows program glyph: it is identical to every other
-        // unbranded app in the tray, and the first user to look for this one
-        // scanned straight past it.
-        //
-        // Falls back to the stock icon rather than failing. An ugly icon beats
-        // no tray at all.
         let icon = match draw_icon() {
             Some(icon) => icon,
-            // SAFETY: IDI_APPLICATION is built in and always present.
             None => unsafe { LoadIconW(None, IDI_APPLICATION) }.map_err(|_| TrayError::AddIcon)?,
         };
 
@@ -577,7 +468,6 @@ mod win {
 
         write_tip(&mut data.szTip, tip);
 
-        // SAFETY: `data` is live and its window handle was just created.
         if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
             let _ = ready.send(Err(TrayError::AddIcon));
 
@@ -588,8 +478,6 @@ mod win {
 
         let mut message = MSG::default();
 
-        // SAFETY: `message` is live. A null window handle reads every message
-        // for this thread, which is where the tray callback lands.
         while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
             unsafe {
                 let _ = TranslateMessage(&message);
@@ -597,18 +485,11 @@ mod win {
             }
         }
 
-        // SAFETY: removing the icon this thread added. Skipping it leaves a
-        // ghost icon in the tray until the user hovers over it.
         let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
 
         Ok(())
     }
 
-    /// Handle the tray's messages.
-    ///
-    /// # Safety
-    ///
-    /// Called by Windows with a valid window handle. Nothing else calls it.
     unsafe extern "system" fn window_proc(
         window: HWND,
         message: u32,
@@ -616,9 +497,6 @@ mod win {
         lparam: LPARAM,
     ) -> LRESULT {
         match message {
-            // Right click opens the menu. Left click deliberately does
-            // nothing: there is no main window to restore, so it would either
-            // do nothing or surprise the user.
             WM_TRAY if lparam.0 as u32 == WM_RBUTTONUP => {
                 show_menu(window);
 
@@ -633,8 +511,6 @@ mod win {
                         let _ = context.actions.lock().unwrap().send(action);
                     }
 
-                    // Quit also stops this thread, which removes the icon on
-                    // the way out.
                     if action == TrayAction::Quit {
                         PostQuitMessage(0);
                     }
@@ -653,7 +529,6 @@ mod win {
         }
     }
 
-    /// What a menu command id maps to.
     fn row_action(id: usize) -> Option<TrayAction> {
         let context = CONTEXT.get()?;
         let rows = context.rows.lock().unwrap();
@@ -661,11 +536,6 @@ mod win {
         rows.get(id.checked_sub(MENU_BASE)?).copied().flatten()
     }
 
-    /// Build and show the menu from the model.
-    ///
-    /// # Safety
-    ///
-    /// `window` must be live.
     unsafe fn show_menu(window: HWND) {
         let Some(context) = CONTEXT.get() else {
             return;
@@ -683,8 +553,6 @@ mod win {
         for (index, item) in items.iter().enumerate() {
             let label = wide(&item.label);
 
-            // A status row and a disabled action are both greyed. The model
-            // decides which; this only draws what it says.
             let flags = if item.enabled {
                 MF_STRING
             } else {
@@ -701,8 +569,6 @@ mod win {
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
 
-        // Windows only dismisses a tray menu when its owner is the foreground
-        // window. Without this the menu hangs around after a click elsewhere.
         let _ = SetForegroundWindow(window);
 
         let _ = TrackPopupMenu(
@@ -718,27 +584,9 @@ mod win {
         let _ = DestroyMenu(handle);
     }
 
-    /// The icon size Windows asks for in the notification area.
     const ICON: i32 = 32;
 
-    /// Draw the tray icon in memory.
-    ///
-    /// # Why drawn and not embedded
-    ///
-    /// An embedded `.ico` needs a resource file and a resource compiler in the
-    /// cross build, which is one more thing to keep in step with the binary.
-    /// A shape this simple is fewer moving parts drawn here.
-    ///
-    /// # What it looks like
-    ///
-    /// A filled amber diamond on transparent, the colour Path of Exile uses
-    /// for currency. The point is only to be unmistakably *not* the generic
-    /// grey window that every unbranded app shows.
-    ///
-    /// Returns None if any GDI call fails, and the caller falls back.
     fn draw_icon() -> Option<HICON> {
-        // Little endian, so a u32 of 0xAARRGGBB lands in memory as B, G, R, A,
-        // which is the order CreateBitmap wants for 32 bits per pixel.
         const AMBER: u32 = 0xFF_C8_A0_50;
         const EDGE: u32 = 0xFF_6B_50_20;
         const CLEAR: u32 = 0x00_00_00_00;
@@ -750,8 +598,6 @@ mod win {
 
         for y in 0..ICON {
             for x in 0..ICON {
-                // A diamond is the set of points whose distance along the axes
-                // adds up to less than the radius.
                 let distance = (x - centre).abs() + (y - centre).abs();
 
                 if distance > radius {
@@ -762,8 +608,6 @@ mod win {
             }
         }
 
-        // SAFETY: `pixels` holds exactly 32 by 32 four byte pixels and outlives
-        // the call, which copies them.
         let colour = unsafe {
             CreateBitmap(
                 ICON,
@@ -778,14 +622,9 @@ mod win {
             return None;
         }
 
-        // The mask is ignored for a 32 bit icon with an alpha channel, but
-        // CreateIconIndirect still requires one.
-        // SAFETY: a null pointer asks for an uninitialised bitmap, which is
-        // all this needs.
         let mask = unsafe { CreateBitmap(ICON, ICON, 1, 1, None) };
 
         if mask.is_invalid() {
-            // SAFETY: `colour` was created above and is not used again.
             unsafe {
                 let _ = DeleteObject(colour.into());
             }
@@ -800,11 +639,8 @@ mod win {
             ..Default::default()
         };
 
-        // SAFETY: `info` holds two live bitmaps of matching size.
         let icon = unsafe { CreateIconIndirect(&info) };
 
-        // The icon owns its own copy, so the bitmaps are ours to release.
-        // SAFETY: both were created here and are not used again.
         unsafe {
             let _ = DeleteObject(colour.into());
             let _ = DeleteObject(mask.into());
@@ -813,10 +649,6 @@ mod win {
         icon.ok()
     }
 
-    /// Copy a tooltip into the fixed buffer Windows expects.
-    ///
-    /// Truncated rather than refused. A tooltip too long to fit is still worth
-    /// showing, and 128 characters is far more than this needs.
     fn write_tip(buffer: &mut [u16; 128], text: &str) {
         let encoded: Vec<u16> = text.encode_utf16().take(buffer.len() - 1).collect();
 
@@ -824,7 +656,6 @@ mod win {
         buffer[encoded.len()] = 0;
     }
 
-    /// A null terminated wide string. The caller keeps it alive.
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
@@ -849,7 +680,6 @@ mod render_tests {
 
     #[test]
     fn the_tooltip_names_the_game_and_the_hotkey() {
-        // The two questions that bring somebody to the tray.
         let got = tooltip(&ready(), "poe2", "Ctrl+D");
 
         assert!(got.contains("poe2"), "{got}");
@@ -858,8 +688,6 @@ mod render_tests {
 
     #[test]
     fn a_paused_tooltip_says_so_instead_of_the_hotkey() {
-        // Pressing the hotkey while paused does nothing, so offering it would
-        // be a lie.
         let got = tooltip(
             &TrayState {
                 paused: true,
@@ -903,8 +731,6 @@ mod render_tests {
 
     #[test]
     fn paused_beats_every_other_reason() {
-        // A paused app with no game and no data is paused first. The user
-        // turned it off; that is the answer to give them.
         let got = tooltip(
             &TrayState {
                 paused: true,
@@ -921,9 +747,6 @@ mod render_tests {
 
     #[test]
     fn a_tooltip_always_fits_the_windows_buffer() {
-        // Windows takes 128 wide characters and no more. A longer one has to
-        // truncate rather than be refused, because the tray is the only place
-        // the tool can speak.
         let long = "x".repeat(500);
 
         let got = tooltip(&ready(), &long, &long);
@@ -936,9 +759,6 @@ mod render_tests {
 
     #[test]
     fn every_action_the_model_offers_is_one_this_file_can_dispatch() {
-        // The bug this whole file exists to close: an action declared in the
-        // menu and handled with `=> {}` somewhere else. Adding a variant to
-        // TrayAction without handling it fails to compile here.
         for item in menu(&ready()) {
             let Some(action) = item.action else {
                 continue;

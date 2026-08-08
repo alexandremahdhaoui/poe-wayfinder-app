@@ -1,15 +1,3 @@
-//! Running a price check against the live trade API.
-//!
-//! Orchestrates the adapters. It parses through `poe-trader-core`, sends
-//! through `http_adapter` so the allowlist applies, and paces itself through
-//! `rate_limit_adapter` so GGG's limits are respected.
-//!
-//! # The order is not negotiable
-//!
-//! Wait, send, then adjust. Adjusting before sending would use the previous
-//! response's limits for this one, and sending before waiting is the thing
-//! that gets an account banned.
-
 use std::time::Duration;
 
 use poe_trader_core::adapter::data_adapter::GameData;
@@ -22,7 +10,6 @@ use crate::adapter::query_json_adapter::to_json;
 use crate::adapter::rate_limit_adapter::{LimiterSet, Millis};
 use crate::adapter::trade_api_adapter::{error_in_body, Endpoint, TradeApiError, TradeUrls};
 
-/// Why a price check failed.
 #[derive(Debug, Error)]
 pub enum PriceCheckError {
     #[error("parsing the item")]
@@ -41,35 +28,20 @@ pub enum PriceCheckError {
     Decode(#[source] serde_json::Error),
 }
 
-/// What a search returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchResult {
-    /// The query id, needed to fetch any listing.
     pub id: String,
-    /// Result ids, most relevant first.
     pub result: Vec<String>,
-    /// How many listings matched in total.
     pub total: u64,
 }
 
-/// Pausing between requests.
-///
-/// Declared here because this controller consumes it. A test supplies one that
-/// records the wait instead of taking it, so no test sleeps.
-///
-/// The async method is allowed rather than boxed. Every implementation lives
-/// in this workspace, so the auto trait bounds clippy warns about cannot be
-/// surprised by a caller we do not control.
 #[allow(async_fn_in_trait)]
 pub trait Clock: Send + Sync {
-    /// Milliseconds since some fixed point.
     fn now(&self) -> Millis;
 
-    /// Wait this long.
     async fn sleep(&self, millis: Millis);
 }
 
-/// What the controller needs to run a check.
 pub struct PriceCheckController<H: HttpClient, C: Clock> {
     http: H,
     clock: C,
@@ -80,11 +52,6 @@ pub struct PriceCheckController<H: HttpClient, C: Clock> {
 }
 
 impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
-    /// Build the controller.
-    ///
-    /// The limiter starts conservative at one request per five seconds. The
-    /// server's real limits arrive with the first response, and guessing high
-    /// before then gets that first request throttled.
     pub fn new(http: H, clock: C, base_url: &str, game: GameVersion, league: &str) -> Self {
         Self {
             http,
@@ -96,22 +63,16 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         }
     }
 
-    /// Supply the session cookie.
-    ///
-    /// Search and fetch both need it. It is never logged and never written to
-    /// disk by this crate.
     pub fn with_session(mut self, session_id: &str) -> Self {
         self.session_id = session_id.to_string();
 
         self
     }
 
-    /// The limits currently mirrored for search.
     pub fn search_limits(&self) -> &LimiterSet {
         &self.search_limits
     }
 
-    /// Parse an item and search for it.
     pub async fn check(
         &mut self,
         clipboard: &str,
@@ -120,8 +81,8 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
     ) -> Result<(PriceCheck, SearchResult), PriceCheckError> {
         let checked = price_check(clipboard, data, options).map_err(PriceCheckError::Parse)?;
 
-        let body =
-            serde_json::to_string(&to_json(&checked.query)).map_err(PriceCheckError::Decode)?;
+        let body = serde_json::to_string(&to_json(&checked.query, options.game))
+            .map_err(PriceCheckError::Decode)?;
 
         let response = self.send_search(&body).await?;
         let result = read_search_result(&response)?;
@@ -129,17 +90,13 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         Ok((checked, result))
     }
 
-    /// Send one search, respecting the limits.
     async fn send_search(&mut self, body: &str) -> Result<HttpResponse, PriceCheckError> {
-        // 1. Wait until the limits allow it.
         let wait = self.search_limits.wait_for(self.clock.now());
 
         if wait > 0 {
             self.clock.sleep(wait).await;
         }
 
-        // 2. Take the slot, then send. Taking it after the send would let two
-        //    concurrent checks both see a free slot.
         self.search_limits.borrow(self.clock.now());
 
         let url = self.urls.search(&self.league);
@@ -157,18 +114,12 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
             .await
             .map_err(PriceCheckError::Request)?;
 
-        // 3. Adjust from what the server just said. Doing this before the send
-        //    would apply the previous response's limits to this one.
         self.search_limits
             .adjust(&response.headers, api_latency_seconds(), self.clock.now());
 
         Ok(response)
     }
 
-    /// How long a burst of `count` searches would take.
-    ///
-    /// Used to warn before a burst rather than silently queue one, because a
-    /// queued burst looks like the app has hung.
     pub fn estimate_burst(&mut self, count: u32) -> Duration {
         let millis = self
             .search_limits
@@ -178,20 +129,10 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
     }
 }
 
-/// The window padding, in seconds.
-///
-/// Two seconds, matching the reference default. Threading the configured value
-/// through is a later change; this constant makes the current behaviour
-/// explicit rather than hidden inside a call.
 fn api_latency_seconds() -> u32 {
     2
 }
 
-/// Read a search response.
-///
-/// Checks three things in order: the transport status, the API's own error
-/// body, then the shape. The API answers 200 with an error body, so skipping
-/// the middle step treats a failure as an empty result.
 pub fn read_search_result(response: &HttpResponse) -> Result<SearchResult, PriceCheckError> {
     if let Some(error) = error_in_body(&response.body) {
         return Err(PriceCheckError::Api(error));
@@ -229,29 +170,14 @@ pub fn read_search_result(response: &HttpResponse) -> Result<SearchResult, Price
     })
 }
 
-/// One listing, as the fetch endpoint returned it.
-///
-/// Only the fields a price needs. The API returns far more and carrying all of
-/// it would tie the UI to the API's shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listing {
-    /// What the seller is asking.
     pub amount: f64,
-    /// The currency they want, such as `divine`.
     pub currency: String,
-    /// Who is selling.
     pub account: String,
-    /// Whether they are online now.
     pub online: bool,
 }
 
-/// Read a fetch response into listings.
-///
-/// Ported from the result handling in `requestResults`.
-///
-/// A null entry is skipped rather than failing the batch. The API returns one
-/// for a listing that vanished between the search and the fetch, which happens
-/// constantly on a busy league.
 pub fn read_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheckError> {
     if let Some(error) = error_in_body(&response.body) {
         return Err(PriceCheckError::Api(error));
@@ -268,20 +194,16 @@ pub fn read_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheck
         serde_json::from_str(&response.body).map_err(PriceCheckError::Decode)?;
 
     let Some(results) = value.get("result").and_then(serde_json::Value::as_array) else {
-        // No result array at all is an empty page, not a failure.
         return Ok(Vec::new());
     };
 
     Ok(results.iter().filter_map(read_listing).collect())
 }
 
-/// Read one listing, or nothing when it is unpriced or gone.
 fn read_listing(entry: &serde_json::Value) -> Option<Listing> {
     let listing = entry.get("listing")?;
     let price = listing.get("price")?;
 
-    // A listing with no price is not for sale at a number. Showing it as free
-    // would be worse than not showing it.
     let amount = price.get("amount").and_then(serde_json::Value::as_f64)?;
     let currency = price.get("currency").and_then(serde_json::Value::as_str)?;
 
@@ -291,7 +213,6 @@ fn read_listing(entry: &serde_json::Value) -> Option<Listing> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    // The API marks online by the presence of an object, not by a boolean.
     let online = listing
         .get("account")
         .and_then(|a| a.get("online"))
@@ -305,28 +226,6 @@ fn read_listing(entry: &serde_json::Value) -> Option<Listing> {
     })
 }
 
-/// Read an exchange response into listings.
-///
-/// # Why the exchange endpoint needs its own reader
-///
-/// It answers in a different shape from the search endpoint, and the
-/// difference is easy to miss because both return `id`, `total` and
-/// `result`.
-///
-/// Search returns `result` as an array of ids, which then have to be fetched.
-/// Exchange returns `result` as an **object** with the listings already in it,
-/// and no fetch is needed or possible.
-///
-/// Reading an exchange response with the search reader finds no array, returns
-/// an empty list, and the tool reports "no listings matched" for a currency
-/// that has hundreds. That is what it did: every currency price check came
-/// back with no price at all.
-///
-/// # What the numbers mean
-///
-/// An offer says what the seller gives and what they want for it. Wanting one
-/// Fracturing Orb for ten Divine makes a Divine worth a tenth of a Fracturing
-/// Orb, so the rate is the exchange amount divided by the item amount.
 pub fn read_exchange_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheckError> {
     if let Some(error) = error_in_body(&response.body) {
         return Err(PriceCheckError::Api(error));
@@ -343,19 +242,15 @@ pub fn read_exchange_listings(response: &HttpResponse) -> Result<Vec<Listing>, P
         serde_json::from_str(&response.body).map_err(PriceCheckError::Decode)?;
 
     let Some(results) = value.get("result").and_then(serde_json::Value::as_object) else {
-        // No result object is an empty page, not a failure.
         return Ok(Vec::new());
     };
 
     Ok(results.values().filter_map(read_exchange_listing).collect())
 }
 
-/// Read one exchange offer, or nothing when it prices nothing.
 fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
     let listing = entry.get("listing")?;
 
-    // The first offer only. A seller can post several rates and the first is
-    // the one the site shows.
     let offer = listing.get("offers")?.as_array()?.first()?;
 
     let want = offer.get("exchange")?;
@@ -365,7 +260,6 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
     let give_amount = give.get("amount").and_then(serde_json::Value::as_f64)?;
     let currency = want.get("currency").and_then(serde_json::Value::as_str)?;
 
-    // A zero here would divide to infinity and poison the median.
     if give_amount == 0.0 {
         return None;
     }
@@ -389,18 +283,11 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
     })
 }
 
-/// The price a set of listings suggests.
-///
-/// The median and not the mean. One listing at a thousand divine drags a mean
-/// far above what anyone will pay, and those listings are common because
-/// people post them to bait.
 pub fn suggested_price(listings: &[Listing]) -> Option<(f64, String)> {
     if listings.is_empty() {
         return None;
     }
 
-    // Only the most common currency. Mixing divine and chaos into one median
-    // produces a number in no currency at all.
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
 
     for listing in listings {
@@ -428,10 +315,6 @@ pub fn suggested_price(listings: &[Listing]) -> Option<(f64, String)> {
     Some((median, currency.to_string()))
 }
 
-/// Which limiter set an endpoint belongs to.
-///
-/// Only search is wired today. Fetch and exchange get their own sets when
-/// they are, because the server limits all three separately.
 pub fn limiter_for(endpoint: Endpoint) -> &'static str {
     endpoint.as_str()
 }
@@ -441,7 +324,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// A clock that records every wait instead of taking it.
     struct FakeClock {
         now: Mutex<Millis>,
         slept: Mutex<Vec<Millis>>,
@@ -471,10 +353,6 @@ mod tests {
         }
     }
 
-    /// An HTTP client that returns canned responses.
-    ///
-    /// Mutex rather than RefCell, because `HttpClient` requires `Sync` and
-    /// asserting that by hand would be a lie waiting to become a data race.
     struct FakeHttp {
         responses: Mutex<Vec<HttpResponse>>,
         sent: Mutex<Vec<(String, String)>>,
@@ -550,8 +428,6 @@ mod tests {
 
     #[test]
     fn an_error_body_beats_a_two_hundred_status() {
-        // The API answers 200 with an error body, so skipping this check
-        // treats a failure as an empty result.
         let response = HttpResponse {
             status: 200,
             headers: Vec::new(),
@@ -566,8 +442,6 @@ mod tests {
 
     #[test]
     fn a_non_success_status_is_reported_with_its_body() {
-        // A bare status number tells the user nothing. Cloudflare returns HTML
-        // and GGG returns a reason.
         let response = HttpResponse {
             status: 503,
             headers: Vec::new(),
@@ -601,8 +475,6 @@ mod tests {
 
     #[test]
     fn a_response_missing_every_field_reads_as_an_empty_result() {
-        // An empty result is a real answer. Failing here would turn a search
-        // that legitimately found nothing into an error.
         let response = HttpResponse {
             status: 200,
             headers: Vec::new(),
@@ -683,8 +555,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_search_waits_for_the_conservative_window() {
-        // The limiter starts at one request per five seconds until the server
-        // says otherwise. Guessing high gets the first request throttled.
         let http = FakeHttp::with(vec![ok_response(vec![]), ok_response(vec![])]);
         let mut c = PriceCheckController::new(
             http,
@@ -721,7 +591,6 @@ mod tests {
 
         assert_eq!(limits.len(), 1);
         assert_eq!(limits[0].max, 8);
-        // Ten second window plus the two second latency pad.
         assert_eq!(limits[0].window_secs, 12);
     }
 
@@ -746,8 +615,6 @@ mod tests {
         c.send_search("{}").await.unwrap();
         c.send_search("{}").await.unwrap();
 
-        // The conservative one per five seconds was replaced by eight per
-        // twelve, so no wait was needed.
         assert_eq!(c.clock.total_slept(), 0);
     }
 
@@ -765,9 +632,6 @@ mod tests {
 
         c.send_search("{}").await.unwrap();
 
-        // The cookie never reaches a log or a file from this crate, so the
-        // test asserts on the request having been made rather than on the
-        // header text.
         assert_eq!(c.http.sent_urls().len(), 1);
         assert_eq!(c.session_id, "deadbeef");
     }
@@ -819,7 +683,6 @@ mod tests {
             "Standard",
         );
 
-        // One per five seconds. Three requests take two windows of waiting.
         assert_eq!(c.estimate_burst(1), Duration::from_secs(0));
         assert_eq!(c.estimate_burst(3), Duration::from_secs(10));
     }
@@ -857,7 +720,6 @@ mod tests {
 
     #[test]
     fn an_offline_seller_is_marked_as_such() {
-        // The API marks online by the presence of an object, not a boolean.
         let got = read_listings(&fetch_body(&listing(5.0, "divine", false))).unwrap();
 
         assert!(!got[0].online);
@@ -865,8 +727,6 @@ mod tests {
 
     #[test]
     fn a_null_entry_is_skipped_rather_than_failing_the_batch() {
-        // The API returns one for a listing that vanished between the search
-        // and the fetch, which happens constantly on a busy league.
         let entries = format!("null,{}", listing(5.0, "divine", true));
 
         assert_eq!(read_listings(&fetch_body(&entries)).unwrap().len(), 1);
@@ -874,7 +734,6 @@ mod tests {
 
     #[test]
     fn an_unpriced_listing_is_skipped() {
-        // Showing it as free would be worse than not showing it.
         let entries = "{\"listing\":{\"account\":{\"name\":\"Kaom\"}}}";
 
         assert!(read_listings(&fetch_body(entries)).unwrap().is_empty());
@@ -917,8 +776,6 @@ mod tests {
 
     #[test]
     fn the_suggested_price_is_the_median() {
-        // One listing at a thousand drags a mean far above what anyone pays,
-        // and those listings are common because people post them to bait.
         let listings = [
             priced(5.0, "divine"),
             priced(6.0, "divine"),
@@ -945,8 +802,6 @@ mod tests {
 
     #[test]
     fn only_the_most_common_currency_is_used() {
-        // Mixing divine and chaos into one median produces a number in no
-        // currency at all.
         let listings = [
             priced(5.0, "divine"),
             priced(6.0, "divine"),
@@ -974,8 +829,6 @@ mod tests {
 
     #[test]
     fn each_endpoint_names_its_own_limiter() {
-        // The server limits them separately, so sharing one set would throttle
-        // the client about three times harder than it needs to.
         assert_eq!(limiter_for(Endpoint::Search), "search");
         assert_eq!(limiter_for(Endpoint::Fetch), "fetch");
         assert_eq!(limiter_for(Endpoint::Exchange), "exchange");
@@ -986,12 +839,6 @@ mod tests {
 mod exchange_tests {
     use super::*;
 
-    /// One offer, exactly as the live exchange endpoint returns it.
-    ///
-    /// Taken from a real response, trimmed to the fields the reader touches.
-    /// The shape is the whole point: `result` is an object here and an array
-    /// on the search endpoint, and reading one with the other's reader finds
-    /// nothing and reports no listings.
     const REAL: &str = r#"{
       "id": "aL5D8Z77He",
       "complexity": null,
@@ -1023,8 +870,6 @@ mod exchange_tests {
 
     #[test]
     fn a_real_exchange_response_produces_a_listing() {
-        // The search reader finds no array here and returns nothing, which is
-        // why every currency price check came back with no price.
         let got = read_exchange_listings(&response(REAL)).unwrap();
 
         assert_eq!(got.len(), 1);
@@ -1032,9 +877,6 @@ mod exchange_tests {
 
     #[test]
     fn the_rate_is_what_is_wanted_over_what_is_given() {
-        // One Fracturing Orb for ten Divine makes a Divine worth a tenth of a
-        // Fracturing Orb. Reading the amounts the other way round reports a
-        // price ten times too high.
         let got = read_exchange_listings(&response(REAL)).unwrap();
 
         assert_eq!(got[0].amount, 0.1);
@@ -1051,8 +893,6 @@ mod exchange_tests {
 
     #[test]
     fn the_search_reader_finds_nothing_in_an_exchange_response() {
-        // The bug, pinned. Both endpoints answer with id, total and result,
-        // so the two are easy to confuse and the failure is silent.
         let got = read_listings(&response(REAL)).unwrap();
 
         assert!(got.is_empty());
@@ -1060,8 +900,6 @@ mod exchange_tests {
 
     #[test]
     fn an_offer_giving_nothing_is_skipped() {
-        // Dividing by it yields infinity, which poisons the median and prices
-        // the item at nothing anyone can read.
         let body = REAL.replace("\"amount\": 10", "\"amount\": 0");
 
         assert!(read_exchange_listings(&response(&body)).unwrap().is_empty());
@@ -1076,8 +914,6 @@ mod exchange_tests {
 
     #[test]
     fn a_failing_status_is_an_error_and_not_an_empty_page() {
-        // An empty page reads as "this item is worthless". A refused request
-        // has to say so.
         let mut bad = response(REAL);
         bad.status = 429;
 

@@ -1,27 +1,9 @@
-//! Reading the item under the cursor.
-//!
-//! The game has no API. The only way to read an item is to send Ctrl+C to the
-//! game window and read what lands on the clipboard.
-//!
-//! # Why the clipboard is put back
-//!
-//! The user was probably in the middle of copying something. Destroying their
-//! clipboard on every price check is the kind of small rudeness that makes a
-//! tool annoying to live with.
-//!
-//! # Why there is a wait
-//!
-//! The copy is asynchronous. The game receives the keypress, formats the item
-//! and writes the clipboard, and none of that is instant. Reading immediately
-//! returns the old contents, which reads as "the same item every time".
-
 use std::time::Duration;
 
 use poe_trader_core::controller::overlay::{clipboard_kind, ClipboardKind};
 
 use thiserror::Error;
 
-/// Why a clipboard read failed.
 #[derive(Debug, Error)]
 pub enum ClipboardError {
     #[error("opening the clipboard")]
@@ -33,58 +15,35 @@ pub enum ClipboardError {
     #[error("writing the clipboard")]
     Write(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    /// The clipboard never changed.
-    ///
-    /// Almost always means the cursor was not over an item. Saying so beats
-    /// pricing whatever happened to be on the clipboard already.
     #[error("the clipboard did not change within {waited:?}")]
     NoChange { waited: Duration },
 }
 
-/// Reading and writing the system clipboard.
-///
-/// Declared here because this module implements it. A test supplies one backed
-/// by a string, so the copy loop is testable with no windowing system.
 pub trait Clipboard: Send + Sync {
-    /// Current contents. None when the clipboard holds no text.
     fn read(&mut self) -> Result<Option<String>, ClipboardError>;
 
-    /// Replace the contents.
     fn write(&mut self, text: &str) -> Result<(), ClipboardError>;
 }
 
-/// Asking the game to copy the item under the cursor.
 pub trait CopyTrigger: Send + Sync {
-    /// Send the copy keystroke to the game.
     fn trigger_copy(&self) -> Result<(), ClipboardError>;
 }
 
-/// How long to wait for the game to answer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CopyTiming {
-    /// How long to wait in total.
     pub timeout: Duration,
-    /// How long between checks.
     pub poll_interval: Duration,
 }
 
 impl Default for CopyTiming {
     fn default() -> Self {
         Self {
-            // Generous. A stutter in the game is common and a failed price
-            // check is far more annoying than a slightly slow one.
             timeout: Duration::from_millis(600),
             poll_interval: Duration::from_millis(10),
         }
     }
 }
 
-/// Read the item under the cursor.
-///
-/// Sends the copy keystroke, waits for the clipboard to change, and puts the
-/// old contents back when asked.
-///
-/// `sleep` is injected so a test drives the wait without taking it.
 pub fn copy_item<F>(
     clipboard: &mut dyn Clipboard,
     trigger: &dyn CopyTrigger,
@@ -108,17 +67,6 @@ where
 
         let now = clipboard.read()?;
 
-        // Wait for item text, not for a change.
-        //
-        // Waiting for a change looks equivalent and is not. Pricing the same
-        // item twice leaves the clipboard already holding the game's answer,
-        // so nothing ever changes and the second press times out. A user who
-        // presses the key twice on one item is the most ordinary thing there
-        // is.
-        //
-        // Checking the content also rejects whatever the user had copied
-        // before. The game briefly empties the clipboard on the way, and a
-        // shopping list read at the wrong moment is priced as an item.
         if let Some(text) = now {
             if clipboard_kind(&text) != ClipboardKind::NotAnItem {
                 found = Some(text);
@@ -133,8 +81,6 @@ where
     };
 
     if restore {
-        // A failure here is not worth failing the price check over. The user
-        // asked for a price, not for clipboard hygiene.
         if let Some(old) = before {
             let _ = clipboard.write(&old);
         }
@@ -143,7 +89,6 @@ where
     Ok(text)
 }
 
-/// The real clipboard.
 #[cfg(windows)]
 pub struct SystemClipboard {
     inner: arboard::Clipboard,
@@ -151,7 +96,6 @@ pub struct SystemClipboard {
 
 #[cfg(windows)]
 impl SystemClipboard {
-    /// Open the system clipboard.
     pub fn new() -> Result<Self, ClipboardError> {
         let inner = arboard::Clipboard::new().map_err(|e| ClipboardError::Open(Box::new(e)))?;
 
@@ -164,8 +108,6 @@ impl Clipboard for SystemClipboard {
     fn read(&mut self) -> Result<Option<String>, ClipboardError> {
         match self.inner.get_text() {
             Ok(text) => Ok(Some(text)),
-            // An empty or non text clipboard is not an error. It is the normal
-            // state before the game has answered.
             Err(arboard::Error::ContentNotAvailable) => Ok(None),
             Err(e) => Err(ClipboardError::Read(Box::new(e))),
         }
@@ -184,11 +126,8 @@ mod tests {
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A clipboard backed by a string.
     struct FakeClipboard {
         content: Option<String>,
-        /// What each successive read returns, so a test can script the game
-        /// answering late.
         script: Vec<Option<String>>,
         reads: usize,
         writes: Vec<String>,
@@ -216,8 +155,6 @@ mod tests {
 
     impl Clipboard for FakeClipboard {
         fn read(&mut self) -> Result<Option<String>, ClipboardError> {
-            // The first read is the "before" snapshot and always sees the
-            // initial content. Every later read walks the script.
             if self.reads > 0 {
                 if let Some(next) = self.script.get(self.reads - 1) {
                     self.content = next.clone();
@@ -237,10 +174,6 @@ mod tests {
         }
     }
 
-    /// Counts the keystrokes it was asked to send.
-    ///
-    /// An atomic rather than a RefCell. `CopyTrigger` requires `Sync` and
-    /// asserting that by hand would be a lie waiting to become a data race.
     struct FakeTrigger {
         fired: AtomicUsize,
     }
@@ -295,8 +228,6 @@ mod tests {
 
     #[test]
     fn the_old_clipboard_is_put_back() {
-        // The user was probably mid copy. Destroying their clipboard on every
-        // price check makes the tool annoying to live with.
         let mut clip = FakeClipboard::scripted(Some("my notes"), vec![Some("Item Class: Rings")]);
 
         copy_item(&mut clip, &FakeTrigger::new(), fast(), true, no_sleep).unwrap();
@@ -325,9 +256,6 @@ mod tests {
 
     #[test]
     fn a_late_answer_is_still_caught() {
-        // The game formats the item and writes the clipboard, and none of that
-        // is instant. Giving up on the first check reads as "the same item
-        // every time".
         let mut clip = FakeClipboard::scripted(
             Some("old"),
             vec![
@@ -345,8 +273,6 @@ mod tests {
 
     #[test]
     fn the_empty_moment_during_a_copy_is_not_read_as_the_item() {
-        // The game briefly empties the clipboard on the way. Reading that
-        // moment yields nothing to parse.
         let mut clip = FakeClipboard::scripted(
             Some("old"),
             vec![None, Some("  "), Some("Item Class: Rings")],
@@ -359,8 +285,6 @@ mod tests {
 
     #[test]
     fn a_clipboard_that_never_changes_fails_rather_than_returning_the_old_text() {
-        // Almost always means the cursor was not over an item. Pricing the old
-        // clipboard would show a confident answer about the wrong thing.
         let mut clip = FakeClipboard::holding(Some("my notes"));
 
         let err = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, no_sleep).unwrap_err();
@@ -391,7 +315,6 @@ mod tests {
 
     #[test]
     fn a_successful_copy_stops_waiting_early() {
-        // A price check that always took the full timeout would feel broken.
         let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Item Class: Rings")]);
         let slept = RefCell::new(Duration::ZERO);
 
@@ -405,7 +328,6 @@ mod tests {
 
     #[test]
     fn the_default_timing_is_generous_enough_for_a_stutter() {
-        // A failed price check is far more annoying than a slightly slow one.
         let t = CopyTiming::default();
 
         assert!(t.timeout >= Duration::from_millis(500));
@@ -414,9 +336,6 @@ mod tests {
 
     #[test]
     fn pricing_the_same_item_twice_works() {
-        // The clipboard already holds the game's answer, so nothing changes.
-        // Waiting for a change times out here, and a user pressing the key
-        // twice on one item is the most ordinary thing there is.
         let mut clip =
             FakeClipboard::scripted(Some("Item Class: Rings"), vec![Some("Item Class: Rings")]);
 
@@ -427,8 +346,6 @@ mod tests {
 
     #[test]
     fn a_clipboard_that_never_holds_an_item_times_out() {
-        // The game did not answer. Returning the user's own clipboard would
-        // price their shopping list.
         let mut clip = FakeClipboard::scripted(
             Some("my notes"),
             vec![Some("still my notes"), Some("and again")],
@@ -441,8 +358,6 @@ mod tests {
 
     #[test]
     fn a_foreign_client_item_is_returned_rather_than_timing_out() {
-        // It is item text. The parser is what tells the user their client is
-        // not English, and a timeout here would blame the clipboard instead.
         let mut clip = FakeClipboard::scripted(Some("old"), vec![Some("Класс предмета: Кольца")]);
 
         let got = copy_item(&mut clip, &FakeTrigger::new(), fast(), false, |_| {}).unwrap();

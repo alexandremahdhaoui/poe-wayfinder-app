@@ -1,27 +1,8 @@
-//! Reading the game's own log.
-//!
-//! The game writes `Client.txt` as it plays. It is the only place the client
-//! says which area you entered, what level you are and what was whispered to
-//! you, and it is plain text that anyone can read.
-//!
-//! # Why tail and not read
-//!
-//! The file grows for the whole session and reaches tens of megabytes. Reading
-//! it from the start on every poll would burn a core for nothing. The watcher
-//! remembers where it stopped and reads only what is new.
-//!
-//! # Why the file can shrink
-//!
-//! The game truncates it when it gets too large. A watcher that only ever
-//! seeks forward goes silent for the rest of the session when that happens, so
-//! a file shorter than our position means start over.
-
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Why the log could not be read.
 #[derive(Debug, Error)]
 pub enum LogError {
     #[error("opening {path}")]
@@ -39,35 +20,23 @@ pub enum LogError {
     },
 }
 
-/// Something the game reported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogEvent {
-    /// The character entered an area.
-    EnteredArea { name: String },
-    /// A character levelled up.
-    ///
-    /// The only line that names the character, which is how the session
-    /// controller learns who is playing.
+    EnteredArea {
+        name: String,
+    },
     LevelUp {
         character: String,
         class: String,
         level: u32,
     },
-    /// Someone whispered.
-    ///
-    /// A buyer's whisper names the league and the item, which is how the
-    /// league can be learned without asking the user.
-    Whisper { from: String, body: String },
+    Whisper {
+        from: String,
+        body: String,
+    },
 }
 
-/// Read one log line into an event.
-///
-/// Returns nothing for the vast majority of lines, which are engine noise.
 pub fn parse_log_line(line: &str) -> Option<LogEvent> {
-    // Every interesting line has the same prefix shape: a timestamp, a thread
-    // id, a level and then the payload after a marker. The markers differ, so
-    // each is matched on its own rather than by splitting the prefix.
-
     if let Some(rest) = line.split_once("] : You have entered ") {
         let name = rest.1.trim().trim_end_matches('.');
 
@@ -87,7 +56,6 @@ pub fn parse_log_line(line: &str) -> Option<LogEvent> {
     parse_whisper(line)
 }
 
-/// `Kaom (Marauder) is now level 42`.
 fn parse_level_up(line: &str) -> Option<LogEvent> {
     let payload = line.split_once("] : ")?.1;
 
@@ -108,13 +76,11 @@ fn parse_level_up(line: &str) -> Option<LogEvent> {
     })
 }
 
-/// `@From Kaom: Hi, I would like to buy your ...`.
 fn parse_whisper(line: &str) -> Option<LogEvent> {
     let payload = line.split_once("] ")?.1;
 
     let rest = payload.strip_prefix("@From ")?;
 
-    // A guild tag comes first in angle brackets and is not part of the name.
     let rest = match rest.strip_prefix('<') {
         Some(after) => after.split_once("> ")?.1,
         None => rest,
@@ -132,15 +98,9 @@ fn parse_whisper(line: &str) -> Option<LogEvent> {
     })
 }
 
-/// Pull the league out of a buyer's whisper.
-///
-/// A trade whisper ends with `in <League>`, which is the only place the client
-/// states the league in plain text. Learning it here saves the user setting it
-/// and saves them the silent empty result a wrong league gives.
 pub fn league_from_whisper(body: &str) -> Option<String> {
     let (_, after) = body.rsplit_once(" in ")?;
 
-    // The league name runs to the end or to the next sentence.
     let league = after
         .split(&['(', ')'][..])
         .next()?
@@ -154,19 +114,13 @@ pub fn league_from_whisper(body: &str) -> Option<String> {
     Some(league.to_string())
 }
 
-/// Follows `Client.txt` and reports what is new.
 #[derive(Debug)]
 pub struct GameLogWatcher {
     path: PathBuf,
-    /// Where the last read stopped.
     position: u64,
 }
 
 impl GameLogWatcher {
-    /// Watch a log file.
-    ///
-    /// Starts at the end, so a session's worth of history does not arrive as a
-    /// burst of stale events the moment the tool opens.
     pub fn new(path: &Path) -> Self {
         let position = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
@@ -176,9 +130,6 @@ impl GameLogWatcher {
         }
     }
 
-    /// Watch from the very beginning.
-    ///
-    /// Only useful for a test or a one off scan.
     pub fn from_start(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
@@ -186,15 +137,10 @@ impl GameLogWatcher {
         }
     }
 
-    /// Where the next read will start.
     pub fn position(&self) -> u64 {
         self.position
     }
 
-    /// Read whatever has been written since the last call.
-    ///
-    /// A missing file is not an error. The game may not have started yet, and
-    /// starting the tool first is the normal order.
     pub fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
         let Ok(file) = std::fs::File::open(&self.path) else {
             return Ok(Vec::new());
@@ -208,8 +154,6 @@ impl GameLogWatcher {
             })?
             .len();
 
-        // The game truncates the log when it grows too large. Seeking forward
-        // past the end would go silent for the rest of the session.
         if length < self.position {
             self.position = 0;
         }
@@ -233,9 +177,6 @@ impl GameLogWatcher {
         for line in reader.lines() {
             let line = match line {
                 Ok(line) => line,
-                // The game writes in its own encoding and a partial write can
-                // land mid character. Stopping here and retrying next poll
-                // beats failing the whole read.
                 Err(_) => break,
             };
 
@@ -279,10 +220,6 @@ mod tests {
         "2026/08/04 12:00:00 123456 cffb0716 [INFO Client 1234] : Kaom (Marauder) is now level 42";
     const WHISPER: &str = "2026/08/04 12:00:00 123456 cffb0716 [INFO Client 1234] @From Kaom: Hi, I would like to buy your Sapphire Ring listed for 5 divine in Standard";
 
-    // -----------------------------------------------------------------
-    // Line parsing
-    // -----------------------------------------------------------------
-
     #[test]
     fn an_area_line_is_read() {
         assert_eq!(
@@ -305,8 +242,6 @@ mod tests {
 
     #[test]
     fn a_level_up_line_names_the_character_and_class() {
-        // The only line that names the character, which is how the session
-        // controller learns who is playing.
         assert_eq!(
             parse_log_line(LEVEL),
             Some(LogEvent::LevelUp {
@@ -356,8 +291,6 @@ mod tests {
 
     #[test]
     fn an_outgoing_whisper_is_not_read_as_incoming() {
-        // @To is the user talking. Reading it as a buyer would put the user's
-        // own name in the session.
         let line = "2026/08/04 12:00:00 1 a [INFO Client 1] @To Kaom: hello";
 
         assert_eq!(parse_log_line(line), None);
@@ -393,15 +326,8 @@ mod tests {
         assert_eq!(parse_log_line(line), None);
     }
 
-    // -----------------------------------------------------------------
-    // League from a whisper
-    // -----------------------------------------------------------------
-
     #[test]
     fn the_league_is_pulled_out_of_a_trade_whisper() {
-        // The only place the client states the league in plain text. A wrong
-        // league returns nothing rather than an error, which looks like the
-        // item is worthless.
         let body = "Hi, I would like to buy your Sapphire Ring listed for 5 divine in Standard";
 
         assert_eq!(league_from_whisper(body), Some("Standard".into()));
@@ -429,21 +355,13 @@ mod tests {
 
     #[test]
     fn an_absurdly_long_league_name_is_rejected() {
-        // A chat message can say anything. A forty character limit keeps a
-        // hostile whisper from setting the league to a paragraph.
         let body = format!("buying your item in {}", "x".repeat(100));
 
         assert_eq!(league_from_whisper(&body), None);
     }
 
-    // -----------------------------------------------------------------
-    // Tailing
-    // -----------------------------------------------------------------
-
     #[test]
     fn a_new_watcher_starts_at_the_end() {
-        // A session's history arriving as a burst of stale events the moment
-        // the tool opens would be worse than useless.
         let path = tempfile("start-at-end.txt");
         write(&path, &format!("{AREA}\n"));
 
@@ -479,8 +397,6 @@ mod tests {
 
     #[test]
     fn a_truncated_log_is_read_from_the_start_again() {
-        // The game truncates it when it grows too large. A watcher that only
-        // seeks forward goes silent for the rest of the session.
         let path = tempfile("truncate.txt");
         write(&path, &format!("{AREA}\n{AREA}\n{AREA}\n"));
 
@@ -497,7 +413,6 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_not_an_error() {
-        // Starting the tool before the game is the normal order.
         let mut w = GameLogWatcher::new(Path::new("/nonexistent/Client.txt"));
 
         assert!(w.poll().unwrap().is_empty());

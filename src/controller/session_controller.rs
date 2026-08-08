@@ -1,31 +1,11 @@
-//! What the app knows about the current play session.
-//!
-//! Which league, which character, which area. All three come from the game's
-//! own log, so the user never has to type them.
-//!
-//! # Why this matters more than it looks
-//!
-//! The trade site keeps a separate index per league. Searching the wrong one
-//! returns nothing rather than an error, which reads as "this item is
-//! worthless" when it means "you searched the wrong index". That is the worst
-//! kind of failure and it is entirely avoidable, because the game says which
-//! league it is in every trade whisper.
-
 use crate::adapter::game_log_adapter::{league_from_whisper, LogEvent};
 
-/// Where a piece of session state came from.
-///
-/// Configuration wins over anything learned, because a user who set a value
-/// meant it. A log line only fills in what was left blank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
-    /// The user set it.
     Config,
-    /// Learned from the game log.
     Log,
 }
 
-/// The current session.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Session {
     league: Option<(String, Source)>,
@@ -35,10 +15,6 @@ pub struct Session {
 }
 
 impl Session {
-    /// A session seeded from config.
-    ///
-    /// A blank league is treated as unset rather than as a league called "",
-    /// which would search an index that does not exist.
     pub fn from_config(league: &str) -> Self {
         let league = if league.trim().is_empty() {
             None
@@ -52,35 +28,26 @@ impl Session {
         }
     }
 
-    /// The league to search.
     pub fn league(&self) -> Option<&str> {
         self.league.as_ref().map(|(name, _)| name.as_str())
     }
 
-    /// Where the league came from.
     pub fn league_source(&self) -> Option<Source> {
         self.league.as_ref().map(|(_, source)| *source)
     }
 
-    /// The character being played.
     pub fn character(&self) -> Option<&str> {
         self.character.as_deref()
     }
 
-    /// The character's level.
     pub fn character_level(&self) -> Option<u32> {
         self.character_level
     }
 
-    /// The area the character is in.
     pub fn area(&self) -> Option<&str> {
         self.area.as_deref()
     }
 
-    /// Take in one log event.
-    ///
-    /// Returns whether anything changed, so a caller can log only the
-    /// transitions rather than every poll.
     pub fn apply(&mut self, event: &LogEvent) -> bool {
         match event {
             LogEvent::EnteredArea { name } => {
@@ -115,11 +82,6 @@ impl Session {
         }
     }
 
-    /// Record a league learned from the log.
-    ///
-    /// A configured league is never overwritten. The user set it and meant it,
-    /// and a stray whisper from a friend in another league must not silently
-    /// redirect every search.
     fn learn_league(&mut self, league: &str) -> bool {
         if self.league_source() == Some(Source::Config) {
             return false;
@@ -134,9 +96,6 @@ impl Session {
         true
     }
 
-    /// Take in a batch of events.
-    ///
-    /// Returns whether anything changed.
     pub fn apply_all(&mut self, events: &[LogEvent]) -> bool {
         let mut changed = false;
 
@@ -173,8 +132,6 @@ mod tests {
 
     #[test]
     fn a_blank_configured_league_is_treated_as_unset() {
-        // A league called "" searches an index that does not exist and returns
-        // nothing, which reads as the item being worthless.
         for text in ["", "   "] {
             assert_eq!(Session::from_config(text).league(), None, "{text:?}");
         }
@@ -187,8 +144,6 @@ mod tests {
 
     #[test]
     fn the_league_is_learned_from_a_trade_whisper() {
-        // The game says which league it is in every trade whisper, so the user
-        // never has to type it.
         let mut s = Session::from_config("");
 
         assert!(s.apply(&trade_whisper("Hardcore Ruthless")));
@@ -198,8 +153,6 @@ mod tests {
 
     #[test]
     fn a_configured_league_is_never_overwritten_by_the_log() {
-        // The user set it and meant it. A stray whisper from a friend in
-        // another league must not silently redirect every search.
         let mut s = Session::from_config("Standard");
 
         assert!(!s.apply(&trade_whisper("Hardcore")));
@@ -208,8 +161,6 @@ mod tests {
 
     #[test]
     fn a_learned_league_can_be_replaced_by_a_later_one() {
-        // The user changed league mid session. The most recent whisper is the
-        // better guess.
         let mut s = Session::from_config("");
         s.apply(&trade_whisper("Standard"));
 
@@ -219,8 +170,6 @@ mod tests {
 
     #[test]
     fn the_same_league_twice_is_not_a_change() {
-        // A caller logs only transitions, so repeating one would spam the log
-        // on every whisper.
         let mut s = Session::from_config("");
         s.apply(&trade_whisper("Standard"));
 

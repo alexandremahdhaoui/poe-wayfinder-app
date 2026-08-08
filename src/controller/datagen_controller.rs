@@ -1,34 +1,9 @@
-//! Building the game data files.
-//!
-//! Replaces the reference data pipeline, which is 7623 lines of Python.
-//!
-//! # What it does
-//!
-//! Pulls two tables from the official trade API and turns them into the ndjson
-//! the parser reads.
-//!
-//! - `/data/stats` gives every stat the trade site can filter on, keyed by the
-//!   text the game prints. That is exactly what the stat matcher needs.
-//! - `/data/items` gives every base type, grouped by trade category. That is
-//!   what the database lookup needs.
-//!
-//! # What it cannot do yet
-//!
-//! The trade API does not publish roll ranges, quality scaling or the modifier
-//! tier tables. Those come from the game's own data bundles, which need a
-//! bundle reader we have not ported. Until then those tables are vendored in
-//! `poe-trader-data/tables`.
-//!
-//! What this builds is enough to parse an item and query for it, which is the
-//! whole price check path.
-
 use std::collections::BTreeMap;
 
 use poe_trader_core::types::ItemCategory;
 use serde::Deserialize;
 use thiserror::Error;
 
-/// Why a build failed.
 #[derive(Debug, Error)]
 pub enum DatagenError {
     #[error("reading the {table} table")]
@@ -38,17 +13,9 @@ pub enum DatagenError {
         source: serde_json::Error,
     },
 
-    /// The response parsed and held nothing usable.
-    ///
-    /// Writing an empty file would leave the app unable to match any stat, and
-    /// the failure would surface as "every modifier is unknown" much later.
     #[error("the {table} table held no usable records")]
     Empty { table: &'static str },
 }
-
-// ---------------------------------------------------------------------------
-// Wire shapes, straight off the API
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct StatsResponse {
@@ -57,7 +24,6 @@ struct StatsResponse {
 
 #[derive(Debug, Deserialize)]
 struct StatGroupWire {
-    /// The namespace. `explicit`, `implicit`, `pseudo` and so on.
     id: String,
     entries: Vec<StatEntryWire>,
 }
@@ -72,12 +38,6 @@ struct StatEntryWire {
 
 #[derive(Debug, Deserialize)]
 struct OptionsWire {
-    /// Only the count is read.
-    ///
-    /// A non empty list means the stat takes an option and not a range, which
-    /// is all the filter builder needs today. The option ids themselves matter
-    /// for a filter that names a specific option, such as which passive an
-    /// Allocates modifier grants, and carrying them is a later change.
     #[serde(default)]
     options: Vec<serde_json::Value>,
 }
@@ -95,14 +55,12 @@ struct ItemGroupWire {
 
 #[derive(Debug, Deserialize)]
 struct ItemEntryWire {
-    /// The base type. Absent on a unique entry, which carries a name instead.
     #[serde(default, rename = "type")]
     type_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     disc: Option<String>,
-    /// Present on a unique.
     #[serde(default)]
     flags: Option<FlagsWire>,
 }
@@ -113,55 +71,24 @@ struct FlagsWire {
     unique: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Building
-// ---------------------------------------------------------------------------
-
-/// One stat record, ready to write.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StatRecord {
-    /// The canonical text, with `#` for each roll.
     pub reference: String,
-    /// Trade ids per namespace.
     pub trade_ids: BTreeMap<String, Vec<String>>,
-    /// Whether this stat takes an option rather than a range.
     pub option: bool,
 }
 
-/// One item record, ready to write.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ItemRecord {
     pub name: String,
     pub namespace: String,
     pub trade_discriminator: Option<String>,
     pub category: Option<String>,
-    /// Whether the base can carry rolled modifiers.
-    ///
-    /// Decided by the group the trade API lists it in, not by whether a fine
-    /// category could be worked out. Those are different questions and
-    /// conflating them left every weapon and armour base marked uncraftable.
     pub craftable: bool,
-    /// The tier a waystone always has.
-    ///
-    /// PoE2 prints no tier line on a waystone. The tier is part of the base
-    /// name, `Waystone (Tier 16)`, and the parser reads it from here.
     pub map_tier: Option<u32>,
-    /// The id the exchange endpoint knows this item by.
-    ///
-    /// Absent for anything not traded in bulk, which is most items. Its
-    /// absence is what routes a price check to the search endpoint.
     pub trade_tag: Option<String>,
 }
 
-/// Turn the static response into a map from item name to bulk trading tag.
-///
-/// # What the tag is for
-///
-/// The exchange endpoint knows a currency by a short id rather than by its
-/// name. `Divine Orb` is `divine` there, and sending the name finds nothing.
-///
-/// A name the table does not list is not traded in bulk, so it has no tag and
-/// its price check goes to the search endpoint instead.
 pub fn build_trade_tags(body: &str) -> Result<BTreeMap<String, String>, DatagenError> {
     let parsed: StaticResponse =
         serde_json::from_str(body).map_err(|source| DatagenError::Decode {
@@ -181,8 +108,6 @@ pub fn build_trade_tags(body: &str) -> Result<BTreeMap<String, String>, DatagenE
                 continue;
             }
 
-            // First wins. The table lists a few names twice across groups and
-            // the earlier group is the one the exchange endpoint accepts.
             out.entry(text).or_insert(id);
         }
     }
@@ -213,11 +138,6 @@ struct StaticEntry {
     text: Option<String>,
 }
 
-/// Turn the stats response into records.
-///
-/// One record per distinct text, merging the namespaces. The API lists the
-/// same stat once per namespace and the parser needs one record holding all of
-/// them, because a stat's id differs per namespace and its text does not.
 pub fn build_stats(body: &str) -> Result<Vec<StatRecord>, DatagenError> {
     let parsed: StatsResponse =
         serde_json::from_str(body).map_err(|source| DatagenError::Decode {
@@ -243,8 +163,6 @@ pub fn build_stats(body: &str) -> Result<Vec<StatRecord>, DatagenError> {
 
             merge_trade_ids_into(record, &group.id, &entry.id);
 
-            // A stat with a fixed option list takes an option and not a range.
-            // Sending a range on one returns nothing.
             if entry.option.as_ref().is_some_and(|o| !o.options.is_empty()) {
                 record.option = true;
             }
@@ -255,20 +173,9 @@ pub fn build_stats(body: &str) -> Result<Vec<StatRecord>, DatagenError> {
         return Err(DatagenError::Empty { table: "stats" });
     }
 
-    // Sorted by text. Two runs against the same input produce byte identical
-    // files, so a diff means the game data changed.
     Ok(by_text.into_values().collect())
 }
 
-/// Add one trade id to a stat, under its namespace.
-///
-/// Ported from `_mergeTradeIdsInto`. The reference does this at runtime, on
-/// every lookup, because its data file keeps the namespaces apart. Ours does
-/// it once here, so the loaded table is already merged.
-///
-/// A duplicate id is dropped. The API lists the same stat once per group it
-/// can appear in, and a repeated id would make the count group ask for the
-/// same thing twice.
 fn merge_trade_ids_into(record: &mut StatRecord, namespace: &str, id: &str) {
     let ids = record.trade_ids.entry(namespace.to_string()).or_default();
 
@@ -279,11 +186,6 @@ fn merge_trade_ids_into(record: &mut StatRecord, namespace: &str, id: &str) {
     ids.push(id.to_string());
 }
 
-/// Turn the items response into records.
-///
-/// A unique entry is filed under the unique namespace and everything else
-/// under the item namespace. Mixing them makes the database lookup return a
-/// unique when the parser asked for a base.
 pub fn build_items(
     body: &str,
     trade_tags: &BTreeMap<String, String>,
@@ -302,7 +204,6 @@ pub fn build_items(
         for entry in group.entries {
             let is_unique = entry.flags.as_ref().is_some_and(|f| f.unique);
 
-            // A unique is named by `name`. Everything else by `type`.
             let name = if is_unique {
                 entry.name.clone().or_else(|| entry.type_name.clone())
             } else {
@@ -337,24 +238,12 @@ pub fn build_items(
         return Err(DatagenError::Empty { table: "items" });
     }
 
-    // Sorted and deduplicated. The API lists a base once per category it can
-    // appear in, and a duplicate line makes the loaded table depend on order.
     out.sort();
     out.dedup();
 
     Ok(out)
 }
 
-/// The tier inside a base name like `Waystone (Tier 16)`.
-///
-/// # Why the name and not a field
-///
-/// PoE2 prints no tier line on a waystone. The trade API lists each tier as
-/// its own base, with the number in the name, and nothing else carries it.
-///
-/// Without this every waystone came out with no tier at all, so the map tier
-/// filter was never sent. Tier is the first thing anyone filters a waystone
-/// by, and a search without it prices a tier 16 against a tier 1.
 fn map_tier_in(name: &str) -> Option<u32> {
     let head = name.strip_suffix(')')?;
     let (_, digits) = head.rsplit_once(" (Tier ")?;
@@ -366,23 +255,6 @@ fn map_tier_in(name: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// Whether a group's bases can carry rolled modifiers.
-///
-/// # Why this is not "did we work out a category"
-///
-/// It used to be. The builder wrote `craftable` only when it could name a fine
-/// category, and it can only do that for a handful of groups. Every weapon and
-/// every armour base came out uncraftable, which is the field the parser reads
-/// to find a magic item's base type.
-///
-/// So `Pulsing Antler Focus` resolved to no base at all, the query searched for
-/// the whole rolled name, and the search returned nothing. An empty result
-/// reads as "this item is worthless". 810 of 3578 PoE2 bases were marked
-/// craftable; the reference marks the equipment.
-///
-/// Equipment rolls modifiers. Currency, cards, gems and itemised monsters do
-/// not, and marking one of those craftable would let a magic item's affix words
-/// match a currency name.
 fn is_craftable(group_id: &str) -> bool {
     matches!(
         group_id,
@@ -398,14 +270,6 @@ fn is_craftable(group_id: &str) -> bool {
     )
 }
 
-/// Which table an entry belongs in.
-///
-/// The parser asks for a gem in the gem table, a divination card in the card
-/// table and an itemised monster in the beast table. Filing all three under
-/// `ITEM` made every one of those lookups miss, so a gem's query carried no
-/// type at all and matched the whole market.
-///
-/// A unique wins over its group. A unique gem is still looked up by name.
 fn namespace_for(group_id: &str, is_unique: bool) -> &'static str {
     if is_unique {
         return "UNIQUE";
@@ -414,18 +278,11 @@ fn namespace_for(group_id: &str, is_unique: bool) -> &'static str {
     match group_id {
         "gem" => "GEM",
         "card" => "DIVINATION_CARD",
-        // The trade site calls them itemised monsters. The parser and the
-        // reference both call the table captured beasts.
         "monster" => "CAPTURED_BEAST",
         _ => "ITEM",
     }
 }
 
-/// Map an items group id to a category.
-///
-/// The trade API groups items far more coarsely than we model them. It gives
-/// `accessory`, `armour` and `weapon`, not `accessory.ring`. So only the
-/// groups that are already one category resolve here.
 fn category_for_group(group_id: &str) -> Option<ItemCategory> {
     match group_id {
         "flask" => Some(ItemCategory::Flask),
@@ -439,20 +296,7 @@ fn category_for_group(group_id: &str) -> Option<ItemCategory> {
     }
 }
 
-/// Work out a fine category from a base name's last word.
-///
-/// PoE base names end in their type. `Sapphire Ring` is a ring and
-/// `Gold Amulet` is an amulet. Accessories are completely regular this way,
-/// which is why they resolve and armour does not.
-///
-/// Armour and weapon names use dozens of synonyms. `Greathelm`, `Mask`,
-/// `Crown` and `Helm` are all helmets, and guessing that list would be wrong
-/// in ways nobody would notice until a search returned nothing. Those
-/// categories come from the game's own data bundles, which is what the
-/// vendored tables are for.
 fn category_from_name(group_id: &str, name: &str) -> Option<ItemCategory> {
-    // Only trusted inside a group that narrows the possibilities. A rare
-    // called "Doom Ring" is not a ring base.
     if group_id != "accessory" {
         return None;
     }
@@ -467,11 +311,6 @@ fn category_from_name(group_id: &str, name: &str) -> Option<ItemCategory> {
     }
 }
 
-/// Render a stat record as one ndjson line.
-///
-/// Written by hand rather than derived, so the key order is fixed. A derived
-/// order can change between serde versions and every line in the file would
-/// then differ for no reason.
 pub fn stat_to_ndjson(record: &StatRecord) -> String {
     let ids: BTreeMap<&String, &Vec<String>> = record.trade_ids.iter().collect();
 
@@ -488,7 +327,6 @@ pub fn stat_to_ndjson(record: &StatRecord) -> String {
     value.to_string()
 }
 
-/// Render an item record as one ndjson line.
 pub fn item_to_ndjson(record: &ItemRecord) -> String {
     let mut value = serde_json::json!({
         "name": record.name,
@@ -504,12 +342,6 @@ pub fn item_to_ndjson(record: &ItemRecord) -> String {
         value["tradeTag"] = serde_json::Value::String(tag.clone());
     }
 
-    // Two separate facts, two separate fields.
-    //
-    // Nesting the category inside `craftable`, which is the reference's shape,
-    // means a base that is not craftable loses its category. Currency is not
-    // craftable and is very much a category, and writing them together dropped
-    // it from every currency record.
     if record.craftable {
         value["craftable"] = match &record.category {
             Some(category) => serde_json::json!({ "category": category }),
@@ -532,7 +364,6 @@ pub fn item_to_ndjson(record: &ItemRecord) -> String {
 mod tests {
     use super::*;
 
-    // Copied from the live API response shape.
     const STATS: &str = r##"{"result":[
         {"id":"explicit","label":"Explicit","entries":[
             {"id":"explicit.stat_3299347043","text":"# to maximum Life","type":"explicit"},
@@ -586,9 +417,6 @@ mod tests {
 
     #[test]
     fn one_stat_merges_every_namespace_it_appears_in() {
-        // The API lists the same stat once per namespace. A stat's id differs
-        // per namespace and its text does not, so the parser needs one record
-        // holding all of them.
         let life = stats()
             .into_iter()
             .find(|s| s.reference == "# to maximum Life")
@@ -607,7 +435,6 @@ mod tests {
 
     #[test]
     fn a_stat_with_a_fixed_option_list_is_flagged() {
-        // Sending a range on one returns nothing.
         let allocates = stats()
             .into_iter()
             .find(|s| s.reference == "Allocates #")
@@ -628,8 +455,6 @@ mod tests {
 
     #[test]
     fn pseudo_stats_are_kept() {
-        // They are how a user searches for total resistance across modifiers,
-        // which is most rare jewellery searches.
         assert!(stats()
             .iter()
             .any(|s| s.reference.contains("total to Cold Resistance")));
@@ -646,8 +471,6 @@ mod tests {
 
     #[test]
     fn a_stat_with_empty_text_is_dropped() {
-        // It would match every line whose template is empty, which is none,
-        // and only bloats the file.
         let body = r##"{"result":[{"id":"explicit","entries":[
             {"id":"a","text":""},{"id":"b","text":"  "},{"id":"c","text":"# to maximum Life"}
         ]}]}"##;
@@ -665,8 +488,6 @@ mod tests {
 
     #[test]
     fn an_empty_stats_response_is_an_error_and_not_an_empty_file() {
-        // Writing an empty file leaves the app unable to match any stat, and
-        // the failure surfaces as "every modifier is unknown" much later.
         let err = build_stats(r#"{"result":[]}"#).unwrap_err();
 
         assert!(matches!(err, DatagenError::Empty { table: "stats" }));
@@ -690,10 +511,6 @@ mod tests {
 
     #[test]
     fn a_waystone_carries_the_tier_from_its_name() {
-        // PoE2 prints no tier line. The trade API lists each tier as its own
-        // base with the number in the name, and nothing else carries it, so
-        // without this every waystone had no tier and the map tier filter was
-        // never sent.
         assert_eq!(map_tier_in("Waystone (Tier 16)"), Some(16));
         assert_eq!(map_tier_in("Waystone (Tier 1)"), Some(1));
     }
@@ -706,8 +523,6 @@ mod tests {
 
     #[test]
     fn a_tier_that_is_not_a_number_is_not_a_tier() {
-        // A unique can be called anything. Reading "(Tier of Doom)" as a tier
-        // would put a wrong number on a filter nobody could explain.
         assert_eq!(map_tier_in("Thing (Tier of Doom)"), None);
         assert_eq!(map_tier_in("Thing (Tier )"), None);
     }
@@ -719,10 +534,6 @@ mod tests {
 
     #[test]
     fn a_weapon_base_is_craftable() {
-        // The bug: craftable was written only when a fine category could be
-        // named, and the builder can only name a few. Every weapon and armour
-        // base came out uncraftable, and that field is what the parser reads
-        // to find a magic item's base type.
         let bow = items().into_iter().find(|i| i.name == "Spine Bow").unwrap();
 
         assert!(bow.craftable);
@@ -740,8 +551,6 @@ mod tests {
 
     #[test]
     fn a_gem_is_not_craftable() {
-        // A gem carries no rolled modifiers. Marking one craftable would let a
-        // magic item's affix words match a gem name.
         let gem = items()
             .into_iter()
             .find(|i| i.name == "Awakened Fire Penetration Support")
@@ -762,8 +571,6 @@ mod tests {
 
     #[test]
     fn a_craftable_base_with_no_known_category_still_says_so() {
-        // The whole point. A weapon whose fine category the builder cannot
-        // name is still a base a magic item can be built on.
         let bow = items().into_iter().find(|i| i.name == "Spine Bow").unwrap();
 
         assert!(bow.category.is_none());
@@ -776,9 +583,6 @@ mod tests {
 
     #[test]
     fn a_gem_is_filed_in_the_gem_table() {
-        // The parser looks a gem up in the gem table. Filing it under ITEM
-        // made every gem lookup miss, so a gem query carried no type and
-        // priced against the whole market.
         let gem = items()
             .into_iter()
             .find(|i| i.name == "Awakened Fire Penetration Support")
@@ -799,8 +603,6 @@ mod tests {
 
     #[test]
     fn an_itemised_monster_is_filed_in_the_beast_table() {
-        // The trade site calls the group itemised monsters. The parser calls
-        // the table captured beasts.
         let beast = items()
             .into_iter()
             .find(|i| i.name == "Cave Beast")
@@ -811,8 +613,6 @@ mod tests {
 
     #[test]
     fn every_namespace_written_is_one_the_parser_reads() {
-        // A namespace the parser cannot parse is a table nothing ever looks
-        // in, which fails silently.
         for item in items() {
             assert!(
                 poe_trader_core::adapter::data_adapter::Namespace::parse(&item.namespace).is_some(),
@@ -832,8 +632,6 @@ mod tests {
 
     #[test]
     fn a_unique_is_filed_by_its_own_name_in_the_unique_namespace() {
-        // Mixing them makes the database lookup return a unique when the
-        // parser asked for a base.
         let unique = items()
             .into_iter()
             .find(|i| i.namespace == "UNIQUE")
@@ -844,8 +642,6 @@ mod tests {
 
     #[test]
     fn both_discriminated_variants_survive() {
-        // A Two-Stone Ring is fire and cold or fire and lightning, and only
-        // the implicit tells them apart.
         let discs: Vec<Option<String>> = items()
             .into_iter()
             .filter(|i| i.name == "Two-Stone Ring")
@@ -859,8 +655,6 @@ mod tests {
 
     #[test]
     fn an_unmapped_group_still_yields_its_bases() {
-        // A base with no category still prices by name. Dropping it would lose
-        // the item entirely.
         let mystery = items()
             .into_iter()
             .find(|i| i.name == "Mystery Thing")
@@ -871,8 +665,6 @@ mod tests {
 
     #[test]
     fn duplicate_entries_are_collapsed() {
-        // The API lists a base once per category it can appear in, and a
-        // duplicate line makes the loaded table depend on file order.
         let body = r##"{"result":[
             {"id":"accessory","entries":[{"type":"Sapphire Ring"}]},
             {"id":"accessory","entries":[{"type":"Sapphire Ring"}]}
@@ -927,8 +719,6 @@ mod tests {
 
     #[test]
     fn an_item_with_no_discriminator_omits_the_key() {
-        // An explicit null would be a discriminator of null, which matches no
-        // variant.
         let ring = items()
             .into_iter()
             .find(|i| i.name == "Sapphire Ring")
@@ -953,8 +743,6 @@ mod tests {
 
     #[test]
     fn every_rendered_line_holds_no_newline() {
-        // One record per line is the whole point of ndjson. An embedded
-        // newline would split one record into two unparseable halves.
         for record in stats() {
             assert!(!stat_to_ndjson(&record).contains('\n'));
         }
@@ -974,7 +762,6 @@ mod tests {
 
     #[test]
     fn a_coarse_group_yields_no_category_of_its_own() {
-        // The API gives accessory, armour and weapon, not accessory.ring.
         assert_eq!(category_for_group("accessory"), None);
         assert_eq!(category_for_group("armour"), None);
         assert_eq!(category_for_group("weapon"), None);
@@ -983,8 +770,6 @@ mod tests {
 
     #[test]
     fn an_accessory_resolves_from_its_name() {
-        // Accessory names are completely regular. 147 of the 153 the API lists
-        // end in Ring, Amulet or Belt.
         assert_eq!(
             category_from_name("accessory", "Sapphire Ring"),
             Some(ItemCategory::Ring)
@@ -1001,9 +786,6 @@ mod tests {
 
     #[test]
     fn an_armour_or_weapon_name_is_not_guessed_from() {
-        // Greathelm, Mask, Crown and Helm are all helmets. Guessing that list
-        // would be wrong in ways nobody would notice until a search returned
-        // nothing. Those come from the game bundles.
         assert_eq!(category_from_name("armour", "Iron Greathelm"), None);
         assert_eq!(category_from_name("weapon", "Spine Bow"), None);
     }

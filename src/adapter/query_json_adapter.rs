@@ -1,23 +1,10 @@
-//! Serialising a trade query to the JSON the API accepts.
-//!
-//! The domain owns the query as a plain type. This turns it into wire JSON.
-//! Keeping the two apart means the API's odd shape never leaks into the
-//! filters, and a future API change is one file.
-//!
-//! # Every empty filter is omitted
-//!
-//! The API rejects an unknown key and silently ignores a filter block whose
-//! inner shape is wrong. It also treats an empty range object as a real
-//! constraint on some endpoints. Sending only what the user actually asked for
-//! is the only shape that behaves the same on every endpoint.
-
 use poe_trader_core::types::query::{
     Filters, Flag, NameField, Range, StatFilter, StatGroup, Status, TradeQuery,
 };
+use poe_trader_core::types::GameVersion;
 use serde_json::{json, Map, Value};
 
-/// Turn a query into the request body.
-pub fn to_json(query: &TradeQuery) -> Value {
+pub fn to_json(query: &TradeQuery, game: GameVersion) -> Value {
     let mut q = Map::new();
 
     q.insert("status".into(), json!({ "option": query.status.as_str() }));
@@ -32,11 +19,9 @@ pub fn to_json(query: &TradeQuery) -> Value {
 
     let stats: Vec<Value> = query.stats.iter().map(stat_group_to_json).collect();
 
-    // The stats key is always sent, even empty. The API treats a missing stats
-    // array as malformed rather than as no stat filters.
     q.insert("stats".into(), Value::Array(stats));
 
-    let filters = filters_to_json(&query.filters);
+    let filters = filters_to_json(&query.filters, game);
 
     if !filters.is_empty() {
         q.insert("filters".into(), Value::Object(filters));
@@ -48,15 +33,6 @@ pub fn to_json(query: &TradeQuery) -> Value {
     })
 }
 
-/// Build an exchange request body.
-///
-/// The exchange endpoint takes a different shape from the search endpoint. It
-/// asks what the buyer has and what they want, both as short currency ids, and
-/// it has no concept of a modifier filter.
-///
-/// `have` is what the user is paying with. Sending an empty list asks for
-/// every currency pair the item trades in, which is what a price check wants:
-/// the market rate, not one pair.
 pub fn to_exchange_json(want: &str, have: &[String], status: Status) -> Value {
     let mut query = Map::new();
 
@@ -69,11 +45,7 @@ pub fn to_exchange_json(want: &str, have: &[String], status: Status) -> Value {
 
     serde_json::json!({
         "query": Value::Object(query),
-        // Cheapest first, same as the search endpoint. A buyer wants the best
-        // rate and a seller wants to know what the best rate is.
         "sort": { "have": "asc" },
-        // The newer engine. The old one returns a shape this build does not
-        // read, and asking for it silently would look like an empty market.
         "engine": "new",
     })
 }
@@ -139,8 +111,14 @@ fn stat_filter_to_json(filter: &StatFilter) -> Value {
     Value::Object(out)
 }
 
-/// Build the filter groups, dropping every group that constrains nothing.
-fn filters_to_json(filters: &Filters) -> Map<String, Value> {
+fn equipment_groups(game: GameVersion) -> (&'static str, &'static str) {
+    match game {
+        GameVersion::Poe2 => ("equipment_filters", "equipment_filters"),
+        GameVersion::Poe1 => ("armour_filters", "weapon_filters"),
+    }
+}
+
+fn filters_to_json(filters: &Filters, game: GameVersion) -> Map<String, Value> {
     let mut out = Map::new();
 
     let t = &filters.type_filters;
@@ -152,20 +130,34 @@ fn filters_to_json(filters: &Filters) -> Map<String, Value> {
     insert_group(&mut out, "type_filters", type_filters);
 
     let e = &filters.equipment_filters;
-    let mut equipment = Map::new();
-    insert_range(&mut equipment, "aps", e.aps);
-    insert_range(&mut equipment, "ar", e.ar);
-    insert_range(&mut equipment, "block", e.block);
-    insert_range(&mut equipment, "crit", e.crit);
-    insert_range(&mut equipment, "dps", e.dps);
-    insert_range(&mut equipment, "edps", e.edps);
-    insert_range(&mut equipment, "es", e.es);
-    insert_range(&mut equipment, "ev", e.ev);
-    insert_range(&mut equipment, "pdps", e.pdps);
-    insert_range(&mut equipment, "rune_sockets", e.rune_sockets);
-    insert_range(&mut equipment, "spirit", e.spirit);
-    insert_range(&mut equipment, "reload_time", e.reload_time);
-    insert_group(&mut out, "equipment_filters", equipment);
+    let (defence_group, weapon_group) = equipment_groups(game);
+
+    let mut defences = Map::new();
+    insert_range(&mut defences, "ar", e.ar);
+    insert_range(&mut defences, "ev", e.ev);
+    insert_range(&mut defences, "es", e.es);
+    insert_range(&mut defences, "block", e.block);
+
+    let mut weapons = Map::new();
+    insert_range(&mut weapons, "aps", e.aps);
+    insert_range(&mut weapons, "crit", e.crit);
+    insert_range(&mut weapons, "dps", e.dps);
+    insert_range(&mut weapons, "edps", e.edps);
+    insert_range(&mut weapons, "pdps", e.pdps);
+
+    if game == GameVersion::Poe2 {
+        insert_range(&mut weapons, "rune_sockets", e.rune_sockets);
+        insert_range(&mut weapons, "spirit", e.spirit);
+        insert_range(&mut weapons, "reload_time", e.reload_time);
+    }
+
+    if defence_group == weapon_group {
+        defences.append(&mut weapons);
+        insert_group(&mut out, defence_group, defences);
+    } else {
+        insert_group(&mut out, defence_group, defences);
+        insert_group(&mut out, weapon_group, weapons);
+    }
 
     let r = &filters.req_filters;
     let mut req = Map::new();
@@ -213,10 +205,6 @@ fn filters_to_json(filters: &Filters) -> Map<String, Value> {
     out
 }
 
-/// Wrap a group's filters under the nested `filters` key the API expects.
-///
-/// A group that constrains nothing is dropped. Sending an empty group is
-/// accepted on some endpoints and rejected on others.
 fn insert_group(out: &mut Map<String, Value>, name: &str, filters: Map<String, Value>) {
     if filters.is_empty() {
         return;
@@ -257,17 +245,10 @@ fn insert_option(out: &mut Map<String, Value>, name: &str, value: Option<&str>) 
 
 fn insert_flag(out: &mut Map<String, Value>, name: &str, flag: Flag) {
     if let Some(value) = flag {
-        // The API takes the string "true" or "false" here and not a bool. A
-        // real bool is accepted and then ignored, so the filter silently does
-        // nothing.
         out.insert(name.into(), json!({ "option": value.to_string() }));
     }
 }
 
-/// Render a number without a trailing `.0` when it is whole.
-///
-/// The API accepts both. A whole number reads better in a shared trade link,
-/// which users paste to each other constantly.
 fn number(value: f64) -> Value {
     if value.fract() == 0.0 && value.abs() < 9.0e15 {
         return json!(value as i64);
@@ -279,10 +260,91 @@ fn number(value: f64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poe2_puts_every_property_in_one_group() {
+        let mut query = TradeQuery::default();
+        query.filters.equipment_filters.ar = Range::at_least(450.0);
+        query.filters.equipment_filters.pdps = Range::at_least(135.0);
+
+        let got = to_json(&query, GameVersion::Poe2);
+        let filters = &got["query"]["filters"];
+
+        assert_eq!(filters["equipment_filters"]["filters"]["ar"]["min"], 450.0);
+        assert_eq!(
+            filters["equipment_filters"]["filters"]["pdps"]["min"],
+            135.0
+        );
+        assert!(filters.get("armour_filters").is_none());
+        assert!(filters.get("weapon_filters").is_none());
+    }
+
+    #[test]
+    fn poe1_splits_defences_from_weapon_damage() {
+        let mut query = TradeQuery::default();
+        query.filters.equipment_filters.ar = Range::at_least(450.0);
+        query.filters.equipment_filters.pdps = Range::at_least(135.0);
+
+        let got = to_json(&query, GameVersion::Poe1);
+        let filters = &got["query"]["filters"];
+
+        assert_eq!(filters["armour_filters"]["filters"]["ar"]["min"], 450.0);
+        assert_eq!(filters["weapon_filters"]["filters"]["pdps"]["min"], 135.0);
+        assert!(
+            filters.get("equipment_filters").is_none(),
+            "poe1 must never see equipment_filters"
+        );
+    }
+
+    #[test]
+    fn poe2_keeps_the_defences_when_both_halves_are_merged() {
+        let mut query = TradeQuery::default();
+        query.filters.equipment_filters.ar = Range::at_least(450.0);
+        query.filters.equipment_filters.es = Range::at_least(120.0);
+        query.filters.equipment_filters.crit = Range::at_least(6.5);
+
+        let got = to_json(&query, GameVersion::Poe2);
+        let group = &got["query"]["filters"]["equipment_filters"]["filters"];
+
+        assert_eq!(group["ar"]["min"], 450.0);
+        assert_eq!(group["es"]["min"], 120.0);
+        assert_eq!(group["crit"]["min"], 6.5);
+    }
+
+    #[test]
+    fn the_poe2_only_keys_never_reach_poe1() {
+        let mut query = TradeQuery::default();
+        query.filters.equipment_filters.rune_sockets = Range::at_least(2.0);
+        query.filters.equipment_filters.spirit = Range::at_least(100.0);
+        query.filters.equipment_filters.reload_time = Range::at_least(0.5);
+
+        let got = to_json(&query, GameVersion::Poe1);
+        let filters = &got["query"]["filters"];
+
+        for key in ["rune_sockets", "spirit", "reload_time"] {
+            assert!(
+                filters["weapon_filters"]["filters"].get(key).is_none(),
+                "{key} must not be sent to poe1"
+            );
+            assert!(filters["armour_filters"]["filters"].get(key).is_none());
+        }
+    }
+
+    #[test]
+    fn a_group_that_constrains_nothing_is_not_sent_for_either_game() {
+        for game in [GameVersion::Poe1, GameVersion::Poe2] {
+            let got = to_json(&TradeQuery::default(), game);
+            let filters = &got["query"]["filters"];
+
+            for key in ["equipment_filters", "armour_filters", "weapon_filters"] {
+                assert!(filters.get(key).is_none(), "{game:?} sent an empty {key}");
+            }
+        }
+    }
     use poe_trader_core::types::query::TradeQuery;
 
     fn body(query: &TradeQuery) -> Value {
-        to_json(query)
+        to_json(query, GameVersion::Poe2)
     }
 
     #[test]
@@ -291,14 +353,11 @@ mod tests {
 
         assert_eq!(got["query"]["status"]["option"], "online");
         assert_eq!(got["sort"]["price"], "asc");
-        // The API treats a missing stats array as malformed.
         assert!(got["query"]["stats"].is_array());
     }
 
     #[test]
     fn a_default_query_sends_no_filters_block() {
-        // An empty filters block is accepted on some endpoints and rejected on
-        // others.
         let got = body(&TradeQuery::default());
 
         assert!(got["query"].get("filters").is_none());
@@ -326,8 +385,6 @@ mod tests {
 
     #[test]
     fn a_discriminated_name_is_an_object() {
-        // Sending the bare name searches both variants and prices the wrong
-        // one half the time.
         let query = TradeQuery {
             type_name: Some(NameField::new("Two-Stone Ring", Some("fire_cold"))),
             ..TradeQuery::default()
@@ -341,7 +398,6 @@ mod tests {
 
     #[test]
     fn a_filter_group_is_nested_under_its_own_filters_key() {
-        // The nesting is the API's and it rejects the flatter shape.
         let mut query = TradeQuery::default();
         query.filters.type_filters.category = Some("weapon.bow".into());
 
@@ -390,8 +446,6 @@ mod tests {
 
     #[test]
     fn a_flag_is_sent_as_a_string_option() {
-        // The API accepts a real bool here and then ignores it, so the filter
-        // silently does nothing.
         let mut query = TradeQuery::default();
         query.filters.misc_filters.corrupted = Some(true);
 
@@ -418,8 +472,6 @@ mod tests {
 
     #[test]
     fn an_absent_flag_is_not_sent_at_all() {
-        // Sending false where absent was meant excludes every item that has
-        // the property.
         let mut query = TradeQuery::default();
         query.filters.misc_filters.corrupted = Some(true);
 
@@ -448,8 +500,6 @@ mod tests {
 
     #[test]
     fn a_disabled_stat_filter_says_so() {
-        // It still travels so the trade site shows it greyed out when the user
-        // opens the link.
         let mut filter = StatFilter::range("explicit.stat_life", Range::at_least(45.0));
         filter.disabled = true;
 
@@ -478,7 +528,6 @@ mod tests {
 
     #[test]
     fn a_stat_filter_with_no_constraint_sends_no_value() {
-        // A presence check. Sending an empty value object is rejected.
         let mut query = TradeQuery::default();
         query.stats.push(StatGroup::all(vec![StatFilter::range(
             "explicit.stat_freeze",
@@ -510,8 +559,6 @@ mod tests {
 
     #[test]
     fn a_whole_number_renders_without_a_decimal_point() {
-        // Users paste trade links to each other constantly and 45 reads better
-        // than 45.0.
         assert_eq!(number(45.0), json!(45));
         assert_eq!(number(-45.0), json!(-45));
         assert_eq!(number(0.0), json!(0));
@@ -525,7 +572,6 @@ mod tests {
 
     #[test]
     fn a_number_too_large_for_an_integer_stays_a_float() {
-        // Casting it would silently change the value.
         let huge = 1.0e17;
 
         assert_eq!(number(huge), json!(huge));
@@ -549,7 +595,6 @@ mod tests {
         let got = body(&query);
         let text = serde_json::to_string(&got).unwrap();
 
-        // The whole body has to be one object the API accepts.
         assert!(text.starts_with('{'));
         assert_eq!(got["query"]["type"], "Spine Bow");
         assert_eq!(
@@ -566,10 +611,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------
-    // Exchange requests
-    // -----------------------------------------------------------------
-
     #[test]
     fn an_exchange_request_names_what_is_wanted() {
         let got = to_exchange_json("divine", &[], Status::Online);
@@ -579,7 +620,6 @@ mod tests {
 
     #[test]
     fn an_empty_have_list_asks_for_every_pair() {
-        // That is what a price check wants: the market rate, not one pair.
         let got = to_exchange_json("divine", &[], Status::Online);
 
         assert_eq!(got["query"]["have"], serde_json::json!([]));
@@ -602,8 +642,6 @@ mod tests {
 
     #[test]
     fn an_exchange_request_asks_for_the_new_engine() {
-        // The old one returns a shape this build does not read, and asking for
-        // it silently would look like an empty market.
         assert_eq!(
             to_exchange_json("divine", &[], Status::Online)["engine"],
             "new"
@@ -620,8 +658,6 @@ mod tests {
 
     #[test]
     fn an_exchange_request_carries_no_stat_filters() {
-        // The endpoint has no concept of one, and sending it would be a field
-        // the server ignores while the user thinks it applied.
         let got = to_exchange_json("divine", &[], Status::Online);
 
         assert!(got["query"].get("stats").is_none());
