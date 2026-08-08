@@ -7,6 +7,7 @@ use super::{OverlayLoopError, OverlaySettings};
 
 use crate::controller::copy_controller::Copier;
 use crate::controller::game_state_controller::GameState;
+use crate::controller::input_controller::InputState;
 use crate::controller::overlay_controller::{Frame, OverlayModel};
 use crate::controller::panel_health_controller::PanelHealth;
 use crate::controller::price_check_controller::Prices;
@@ -22,6 +23,7 @@ use crate::types::Hotkey;
 use crate::util::error_chain::render;
 
 use poe_trader_core::adapter::data_adapter::GameData;
+use poe_trader_core::controller::overlay_lifecycle::{Input, Lifecycle, Point, Rect as LifeRect};
 use poe_trader_core::controller::press_coalesce;
 use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
 use poe_trader_core::types::GameVersion;
@@ -30,9 +32,10 @@ const PANEL_WINDOW_TITLE: &str = "poe-trader";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 100;
 
-pub struct OverlayLoopDriver<W, C, P, H, D>
+pub struct OverlayLoopDriver<W, C, P, H, D, I>
 where
     W: GameState + 'static,
+    I: InputState + 'static,
     C: Copier + 'static,
     P: Prices + 'static,
     H: PanelHealth + 'static,
@@ -41,6 +44,9 @@ where
     window: W,
     copier: C,
     health: H,
+    input: I,
+    life: Lifecycle,
+    last_tick: Instant,
     hotkeys: Option<HotkeyDriver>,
     hook: Option<HookDriver>,
     tray: Option<TrayIcon>,
@@ -63,13 +69,14 @@ where
     pending: Vec<UiEvent>,
 }
 
-impl<W, C, P, H, D> OverlayLoopDriver<W, C, P, H, D>
+impl<W, C, P, H, D, I> OverlayLoopDriver<W, C, P, H, D, I>
 where
     W: GameState + 'static,
     C: Copier + 'static,
     P: Prices + 'static,
     H: PanelHealth + 'static,
     D: GameData + 'static,
+    I: InputState + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -82,6 +89,8 @@ where
         copier: C,
         prices: P,
         health: H,
+        input: I,
+        hold: poe_trader_core::controller::overlay_lifecycle::HoldKey,
         log: Logger,
     ) -> Result<Self, OverlayLoopError> {
         report_window(&window, &log);
@@ -118,6 +127,9 @@ where
             window,
             copier,
             health,
+            input,
+            life: Lifecycle::new(hold),
+            last_tick: Instant::now(),
             hotkeys,
             hook,
             tray,
@@ -180,7 +192,15 @@ where
         self.refresh_tray(found.is_some());
         self.report_window_change(found.is_some(), found);
 
-        let frame = self.model.frame_scaled(found, self.window.scale());
+        let mut frame = self.model.frame_scaled(found, self.window.scale());
+
+        self.tick_lifecycle(&frame);
+
+        if !self.life.is_drawn() {
+            frame.rect = None;
+        }
+
+        frame.takes_input = self.life.takes_input();
 
         self.report_panel_change(&frame, found);
         self.apply_placement(ctx, &frame);
@@ -188,6 +208,45 @@ where
         self.pending.extend(paint(ctx, &self.model));
 
         ctx.request_repaint_after(FRAME_INTERVAL);
+    }
+
+    fn tick_lifecycle(&mut self, frame: &Frame) {
+        if let Some(rect) = frame.rect {
+            self.life.ready(LifeRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width as i32,
+                height: rect.height as i32,
+            });
+        }
+
+        let (x, y) = self.window.cursor();
+        let elapsed = self.last_tick.elapsed().as_millis() as u64;
+
+        self.last_tick = Instant::now();
+
+        let before = self.life.phase();
+
+        self.life.tick(Input {
+            pointer: Point { x, y },
+            hold_down: self.input.hold_down(),
+            alt_alone: self.input.alt_alone(),
+            clicked: self.input.mouse_down(),
+            elapsed_ms: elapsed,
+        });
+
+        let after = self.life.phase();
+
+        if before != after {
+            self.log.info(
+                "the panel lifecycle moved",
+                &[
+                    ("from", Value::Str(format!("{before:?}"))),
+                    ("to", Value::Str(format!("{after:?}"))),
+                    ("pointer", Value::Str(format!("{x},{y}"))),
+                ],
+            );
+        }
     }
 
     fn heartbeat(&mut self) {
@@ -214,7 +273,10 @@ where
             match event {
                 UiEvent::OpenInBrowser => asked.push(TrayAction::OpenInBrowser),
                 UiEvent::Research => asked.push(TrayAction::Research),
-                UiEvent::Dismiss => self.model.hide(),
+                UiEvent::Dismiss => {
+                    self.model.hide();
+                    self.life.dismiss();
+                }
                 UiEvent::ToggleFilter(_) => {}
             }
         }
@@ -375,6 +437,11 @@ where
         self.log.info("price check hotkey pressed", &[]);
 
         let cursor = self.window.cursor();
+
+        self.life.begin(Point {
+            x: cursor.0,
+            y: cursor.1,
+        });
 
         let Self {
             model,
@@ -568,13 +635,14 @@ where
     }
 }
 
-impl<W, C, P, H, D> Drop for OverlayLoopDriver<W, C, P, H, D>
+impl<W, C, P, H, D, I> Drop for OverlayLoopDriver<W, C, P, H, D, I>
 where
     W: GameState + 'static,
     C: Copier + 'static,
     P: Prices + 'static,
     H: PanelHealth + 'static,
     D: GameData + 'static,
+    I: InputState + 'static,
 {
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {

@@ -703,6 +703,13 @@ pub fn run_subcommand(args: &[String]) -> Option<ExitCode> {
         return Some(fake_game(&title, seconds, &item));
     }
 
+    if args.first().map(String::as_str) == Some("--move-mouse") {
+        let x = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let y = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(0);
+
+        return Some(move_mouse(x, y));
+    }
+
     if args.iter().any(|a| a == "--self-test-hook") {
         return Some(self_test_hook());
     }
@@ -765,4 +772,64 @@ pub fn build_http(
     };
 
     Some(http)
+}
+
+#[cfg(windows)]
+pub fn build_copier(
+    restore: bool,
+    log: &crate::logging::Logger,
+) -> Option<
+    crate::controller::copy_controller::CopyController<
+        crate::adapter::clipboard_adapter::SystemClipboard,
+        crate::adapter::game_window_adapter::KeyboardCopyTrigger,
+    >,
+> {
+    use crate::adapter::clipboard_adapter::{CopyTiming, SystemClipboard};
+    use crate::adapter::game_window_adapter::KeyboardCopyTrigger;
+    use crate::controller::copy_controller::CopyController;
+    use crate::logging::Value;
+
+    let clipboard = match SystemClipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(err) => {
+            log.error(
+                "opening the clipboard",
+                &[("error", Value::Str(err.to_string()))],
+            );
+
+            return None;
+        }
+    };
+
+    Some(CopyController::new(
+        clipboard,
+        KeyboardCopyTrigger::new(),
+        CopyTiming::default(),
+        restore,
+    ))
+}
+
+#[cfg(windows)]
+pub fn move_mouse(x: i32, y: i32) -> ExitCode {
+    use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+
+    match unsafe { SetCursorPos(x, y) } {
+        Ok(()) => {
+            println!("poe-trader: cursor moved to {x},{y}");
+
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("poe-trader: moving the cursor: {err}");
+
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn move_mouse(_x: i32, _y: i32) -> ExitCode {
+    eprintln!("poe-trader: --move-mouse only works on Windows.");
+
+    ExitCode::FAILURE
 }

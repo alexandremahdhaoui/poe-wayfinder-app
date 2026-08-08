@@ -49,12 +49,17 @@ fi
 # something else or the copy cannot be told apart from what was already there.
 powershell.exe -Command "Set-Clipboard -Value 'press-check placeholder'" >/dev/null 2>&1
 
-(timeout 90 "$exe" --fake-game "Path of Exile 2" 80 "$item" >"$fake" 2>&1 &)
+(timeout 130 "$exe" --fake-game "Path of Exile 2" 120 "$item" >"$fake" 2>&1 &)
 sleep 5
 
 # Debug, so the heartbeat is in the log. It is how a stopped loop is caught.
-(timeout 80 "$exe" --data-dir "$data" --game "$game" --log-level debug >"$log" 2>&1 &)
+(timeout 120 "$exe" --data-dir "$data" --game "$game" --log-level debug >"$log" 2>&1 &)
 sleep 12
+
+# Parked somewhere definite before the press, so the pointer check later has a
+# real distance to travel. Leaving it wherever it happened to be meant the
+# check once compared a position against itself and read as a failure.
+"$exe" --move-mouse 1400 900 >/dev/null 2>&1
 
 pressed=0
 
@@ -80,8 +85,15 @@ for attempt in 1 2 3; do
     echo "note: press $attempt did not land, retrying"
 done
 
-# The search is paced by the rate limiter, which is not optional.
-sleep 45
+# The search is paced by the rate limiter, which is not optional. Waited for
+# rather than slept through, so the pointer check below still happens while the
+# game window exists. Sleeping a fixed 45s outlived the stand in and made the
+# panel close for the wrong reason.
+for _ in $(seq 1 45); do
+    grep -q '"msg":"price check finished"' "$log" && break
+    grep -q '"msg":"price check did not produce a price"' "$log" && break
+    sleep 1
+done
 
 fail=0
 
@@ -115,6 +127,29 @@ if grep -q '"msg":"searching the trade site"' "$log"; then
     echo "FAIL: the trade api refused the search:"
     grep '"msg":"searching the trade site"' "$log" | tail -1
     fail=1
+fi
+
+# The panel must go away when the user looks elsewhere. It is the rule that
+# makes the overlay usable rather than a window stuck over the game, and no
+# unit test can see it because it needs a real pointer.
+# The panel must go away when the user looks elsewhere. It is the rule that
+# makes the overlay usable rather than a window stuck over the game, and no
+# unit test can see it because it needs a real pointer.
+#
+# Asserted on the lifecycle's own transition rather than on whether the panel
+# is drawn. The window also stops being drawn when the game loses focus, and
+# counting that passed once for the wrong reason.
+if grep -q '"msg":"price check hotkey pressed"' "$log"; then
+    "$exe" --move-mouse 30 30 >/dev/null 2>&1
+    sleep 3
+
+    if grep '"msg":"the panel lifecycle moved"' "$log" | grep -q '"to":"Closed"'; then
+        echo "PASS: the panel closed when the pointer moved away."
+    else
+        echo "FAIL: the panel never closed after the pointer moved away."
+        grep '"msg":"the panel lifecycle moved"' "$log" | tail -3
+        fail=1
+    fi
 fi
 
 if [ "$fail" -eq 0 ]; then
