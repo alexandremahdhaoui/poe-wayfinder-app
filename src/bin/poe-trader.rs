@@ -128,6 +128,7 @@ fn run_overlay(
     use poe_trader_app::adapter::window_probe_adapter::SystemWindowProbe;
     use poe_trader_app::controller::game_state_controller::GameStateController;
     use poe_trader_app::controller::input_controller::InputController;
+    use poe_trader_app::controller::log_watch_controller::{FileLogSource, LogSource, NoLogSource};
     use poe_trader_app::controller::panel_health_controller::PanelHealthController;
     use poe_trader_app::controller::price_check_controller::PriceCheckController;
     use poe_trader_app::driver::overlay_loop::{OverlayLoopDriver, OverlaySettings};
@@ -162,6 +163,13 @@ fn run_overlay(
     let health = PanelHealthController::new(SystemWindowProbe::new());
     let hold = hold_key_for(hotkey.modifiers());
     let input = InputController::new(hold);
+
+    let logs: Box<dyn LogSource> = match cfg.client_log_path.is_empty() {
+        true => Box::new(NoLogSource),
+        false => Box::new(FileLogSource::new(std::path::Path::new(
+            &cfg.client_log_path,
+        ))),
+    };
     let stats = data.stat_count();
 
     let driver = match OverlayLoopDriver::new(
@@ -175,6 +183,7 @@ fn run_overlay(
         prices,
         health,
         input,
+        logs,
         hold,
         Logger::new(&cfg.log_level, "poe-trader"),
     ) {

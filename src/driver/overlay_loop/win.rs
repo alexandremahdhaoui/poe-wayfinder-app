@@ -8,10 +8,12 @@ use super::{OverlayLoopError, OverlaySettings};
 use crate::controller::copy_controller::Copier;
 use crate::controller::game_state_controller::GameState;
 use crate::controller::input_controller::InputState;
+use crate::controller::log_watch_controller::LogSource;
 use crate::controller::overlay_controller::{Frame, OverlayModel};
 use crate::controller::panel_health_controller::PanelHealth;
 use crate::controller::price_check_controller::Prices;
 use crate::controller::price_check_loop;
+use crate::controller::session_controller::Session;
 use crate::driver::hook_driver::HookDriver;
 use crate::driver::hotkey_driver::HotkeyDriver;
 use crate::driver::overlay_placement;
@@ -32,7 +34,7 @@ const PANEL_WINDOW_TITLE: &str = "poe-trader";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 100;
 
-pub struct OverlayLoopDriver<W, C, P, H, D, I>
+pub struct OverlayLoopDriver<W, C, P, H, D, I, L>
 where
     W: GameState + 'static,
     I: InputState + 'static,
@@ -40,11 +42,14 @@ where
     P: Prices + 'static,
     H: PanelHealth + 'static,
     D: GameData + 'static,
+    L: LogSource + 'static,
 {
     window: W,
     copier: C,
     health: H,
     input: I,
+    logs: L,
+    session: Session,
     life: Lifecycle,
     last_tick: Instant,
     hotkeys: Option<HotkeyDriver>,
@@ -69,7 +74,7 @@ where
     pending: Vec<UiEvent>,
 }
 
-impl<W, C, P, H, D, I> OverlayLoopDriver<W, C, P, H, D, I>
+impl<W, C, P, H, D, I, L> OverlayLoopDriver<W, C, P, H, D, I, L>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -77,6 +82,7 @@ where
     H: PanelHealth + 'static,
     D: GameData + 'static,
     I: InputState + 'static,
+    L: LogSource + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -90,6 +96,7 @@ where
         prices: P,
         health: H,
         input: I,
+        logs: L,
         hold: poe_trader_core::controller::overlay_lifecycle::HoldKey,
         log: Logger,
     ) -> Result<Self, OverlayLoopError> {
@@ -128,6 +135,8 @@ where
             copier,
             health,
             input,
+            logs,
+            session: Session::from_config(&settings.league),
             life: Lifecycle::new(hold),
             last_tick: Instant::now(),
             hotkeys,
@@ -186,6 +195,8 @@ where
         if self.read_hotkey() {
             self.run_price_check();
         }
+
+        self.watch_logs();
 
         let found = self.window.window();
 
@@ -247,6 +258,35 @@ where
                 ],
             );
         }
+    }
+
+    fn watch_logs(&mut self) {
+        let Ok(events) = self.logs.poll() else {
+            return;
+        };
+
+        if events.is_empty() || !self.session.apply_all(&events) {
+            return;
+        }
+
+        let Some(league) = self.session.league() else {
+            return;
+        };
+
+        if league == self.settings.league {
+            return;
+        }
+
+        self.log.info(
+            "the game log says the league changed",
+            &[
+                ("was", Value::Str(self.settings.league.clone())),
+                ("now", Value::Str(league.to_string())),
+            ],
+        );
+
+        self.settings.league = league.to_string();
+        self.tray_state.league = Some(league.to_string());
     }
 
     fn heartbeat(&mut self) {
@@ -635,7 +675,7 @@ where
     }
 }
 
-impl<W, C, P, H, D, I> Drop for OverlayLoopDriver<W, C, P, H, D, I>
+impl<W, C, P, H, D, I, L> Drop for OverlayLoopDriver<W, C, P, H, D, I, L>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -643,6 +683,7 @@ where
     H: PanelHealth + 'static,
     D: GameData + 'static,
     I: InputState + 'static,
+    L: LogSource + 'static,
 {
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {
