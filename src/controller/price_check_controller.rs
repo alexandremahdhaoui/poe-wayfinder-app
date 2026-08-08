@@ -6,7 +6,7 @@ use poe_trader_core::types::GameVersion;
 use thiserror::Error;
 
 use crate::adapter::http_adapter::{HttpAdapterError, HttpClient, HttpResponse};
-use crate::adapter::query_json_adapter::to_json;
+use crate::adapter::query_json_adapter::{to_exchange_json, to_json};
 use crate::adapter::rate_limit_adapter::{LimiterSet, Millis};
 use crate::adapter::trade_api_adapter::{error_in_body, Endpoint, TradeApiError, TradeUrls};
 
@@ -49,6 +49,8 @@ pub struct PriceCheckController<H: HttpClient, C: Clock> {
     league: String,
     session_id: String,
     search_limits: LimiterSet,
+    game: GameVersion,
+    latency: u32,
 }
 
 impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
@@ -60,7 +62,15 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
             league: league.to_string(),
             session_id: String::new(),
             search_limits: LimiterSet::conservative(),
+            game,
+            latency: api_latency_seconds(),
         }
+    }
+
+    pub fn with_latency(mut self, latency: u32) -> Self {
+        self.latency = latency;
+
+        self
     }
 
     pub fn with_session(mut self, session_id: &str) -> Self {
@@ -80,17 +90,37 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         options: PriceCheckOptions,
     ) -> Result<(PriceCheck, SearchResult), PriceCheckError> {
         let checked = price_check(clipboard, data, options).map_err(PriceCheckError::Parse)?;
-
-        let body = serde_json::to_string(&to_json(&checked.query, options.game))
-            .map_err(PriceCheckError::Decode)?;
-
-        let response = self.send_search(&body).await?;
-        let result = read_search_result(&response)?;
+        let (result, _) = self.search_checked(&checked).await?;
 
         Ok((checked, result))
     }
 
-    async fn send_search(&mut self, body: &str) -> Result<HttpResponse, PriceCheckError> {
+    pub async fn search_checked(
+        &mut self,
+        checked: &PriceCheck,
+    ) -> Result<(SearchResult, bool), PriceCheckError> {
+        let exchange = match (checked.endpoint, &checked.trade_tag) {
+            (poe_trader_core::controller::bulk::Endpoint::Exchange, Some(tag)) => Some(tag.clone()),
+            _ => None,
+        };
+
+        let body = match &exchange {
+            Some(tag) => serde_json::to_string(&to_exchange_json(tag, &[], checked.query.status)),
+            None => serde_json::to_string(&to_json(&checked.query, self.game)),
+        }
+        .map_err(PriceCheckError::Decode)?;
+
+        let response = self.send_search(&body, exchange.is_some()).await?;
+        let result = read_search_result(&response)?;
+
+        Ok((result, exchange.is_some()))
+    }
+
+    async fn send_search(
+        &mut self,
+        body: &str,
+        exchange: bool,
+    ) -> Result<HttpResponse, PriceCheckError> {
         let wait = self.search_limits.wait_for(self.clock.now());
 
         if wait > 0 {
@@ -99,7 +129,10 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
 
         self.search_limits.borrow(self.clock.now());
 
-        let url = self.urls.search(&self.league);
+        let url = match exchange {
+            true => self.urls.exchange(&self.league),
+            false => self.urls.search(&self.league),
+        };
 
         let cookie = format!("POESESSID={}", self.session_id);
         let mut headers: Vec<(&str, &str)> = vec![("accept", "application/json")];
@@ -115,7 +148,7 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
             .map_err(PriceCheckError::Request)?;
 
         self.search_limits
-            .adjust(&response.headers, api_latency_seconds(), self.clock.now());
+            .adjust(&response.headers, self.latency, self.clock.now());
 
         Ok(response)
     }
@@ -526,7 +559,7 @@ mod tests {
             "Standard",
         );
 
-        let response = c.send_search("{}").await.unwrap();
+        let response = c.send_search("{}", false).await.unwrap();
         let got = read_search_result(&response).unwrap();
 
         assert_eq!(got.total, 57);
@@ -534,6 +567,72 @@ mod tests {
             c.http.sent_urls()[0],
             "https://www.pathofexile.com/api/trade2/search/Standard"
         );
+    }
+
+    fn currency_check() -> PriceCheck {
+        PriceCheck {
+            item: poe_trader_core::types::item::ParsedItem::default(),
+            query: poe_trader_core::types::query::TradeQuery::default(),
+            endpoint: poe_trader_core::controller::bulk::Endpoint::Exchange,
+            trade_tag: Some("divine".to_string()),
+        }
+    }
+
+    fn item_check() -> PriceCheck {
+        PriceCheck {
+            item: poe_trader_core::types::item::ParsedItem::default(),
+            query: poe_trader_core::types::query::TradeQuery::default(),
+            endpoint: poe_trader_core::controller::bulk::Endpoint::Search,
+            trade_tag: None,
+        }
+    }
+
+    fn controller(http: FakeHttp) -> PriceCheckController<FakeHttp, FakeClock> {
+        PriceCheckController::new(
+            http,
+            FakeClock::new(),
+            "https://www.pathofexile.com",
+            GameVersion::Poe2,
+            "Standard",
+        )
+    }
+
+    #[tokio::test]
+    async fn a_currency_goes_to_the_exchange_endpoint() {
+        let mut c = controller(FakeHttp::with(vec![ok_response(vec![])]));
+
+        let (_, exchange) = c.search_checked(&currency_check()).await.unwrap();
+
+        assert!(
+            exchange,
+            "a currency must report itself as an exchange search"
+        );
+        assert!(
+            c.http.sent_urls()[0].contains("exchange"),
+            "{:?}",
+            c.http.sent_urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_item_goes_to_the_search_endpoint() {
+        let mut c = controller(FakeHttp::with(vec![ok_response(vec![])]));
+
+        let (_, exchange) = c.search_checked(&item_check()).await.unwrap();
+
+        assert!(!exchange);
+        assert!(
+            c.http.sent_urls()[0].contains("search"),
+            "{:?}",
+            c.http.sent_urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_configured_latency_replaces_the_default() {
+        let c = controller(FakeHttp::with(vec![])).with_latency(9);
+
+        assert_eq!(c.latency, 9);
     }
 
     #[tokio::test]
@@ -548,7 +647,7 @@ mod tests {
             "Standard",
         );
 
-        c.send_search("{}").await.unwrap();
+        c.send_search("{}", false).await.unwrap();
 
         assert_eq!(c.clock.total_slept(), 0);
     }
@@ -564,8 +663,8 @@ mod tests {
             "Standard",
         );
 
-        c.send_search("{}").await.unwrap();
-        c.send_search("{}").await.unwrap();
+        c.send_search("{}", false).await.unwrap();
+        c.send_search("{}", false).await.unwrap();
 
         assert_eq!(c.clock.total_slept(), 5000);
     }
@@ -585,7 +684,7 @@ mod tests {
             "Standard",
         );
 
-        c.send_search("{}").await.unwrap();
+        c.send_search("{}", false).await.unwrap();
 
         let limits = c.search_limits().limits();
 
@@ -612,8 +711,8 @@ mod tests {
             "Standard",
         );
 
-        c.send_search("{}").await.unwrap();
-        c.send_search("{}").await.unwrap();
+        c.send_search("{}", false).await.unwrap();
+        c.send_search("{}", false).await.unwrap();
 
         assert_eq!(c.clock.total_slept(), 0);
     }
@@ -630,7 +729,7 @@ mod tests {
         )
         .with_session("deadbeef");
 
-        c.send_search("{}").await.unwrap();
+        c.send_search("{}", false).await.unwrap();
 
         assert_eq!(c.http.sent_urls().len(), 1);
         assert_eq!(c.session_id, "deadbeef");
@@ -647,7 +746,7 @@ mod tests {
             "Hardcore Ruthless",
         );
 
-        c.send_search("{}").await.unwrap();
+        c.send_search("{}", false).await.unwrap();
 
         assert!(c.http.sent_urls()[0].contains("Hardcore%20Ruthless"));
     }
@@ -667,7 +766,7 @@ mod tests {
                 "Standard",
             );
 
-            c.send_search("{}").await.unwrap();
+            c.send_search("{}", false).await.unwrap();
 
             assert!(c.http.sent_urls()[0].contains(want), "{game:?}");
         }

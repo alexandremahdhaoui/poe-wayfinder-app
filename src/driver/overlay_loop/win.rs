@@ -2,19 +2,19 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::search::{now_millis, search, SearchDeps, SearchOutcome};
+use super::search::SearchOutcome;
 use super::{OverlayLoopError, OverlaySettings};
 
 use crate::adapter::clipboard_adapter::{copy_item, CopyTiming, SystemClipboard};
+use crate::adapter::clock_adapter::SystemClock;
 use crate::adapter::game_data_adapter::GameTables;
 use crate::adapter::game_window_adapter::{
     self, GameWindowAdapter, GameWindowSource, KeyboardCopyTrigger,
 };
 use crate::adapter::http_adapter::HttpAdapter;
-use crate::adapter::rate_limit_adapter::LimiterSet;
-use crate::adapter::trade_api_adapter::TradeUrls;
 use crate::adapter::window_probe_adapter;
 use crate::controller::overlay_controller::{Frame, OverlayModel};
+use crate::controller::price_check_controller::PriceCheckController;
 use crate::controller::price_check_loop;
 use crate::driver::hook_driver::HookDriver;
 use crate::driver::hotkey_driver::HotkeyDriver;
@@ -45,9 +45,7 @@ pub struct OverlayLoopDriver {
     tray_state: TrayState,
     model: OverlayModel,
     runtime: tokio::runtime::Runtime,
-    http: HttpAdapter,
-    urls: TradeUrls,
-    limits: LimiterSet,
+    prices: PriceCheckController<HttpAdapter, SystemClock>,
     log: Logger,
     settings: OverlaySettings,
     game: GameVersion,
@@ -107,7 +105,16 @@ impl OverlayLoopDriver {
             "Ready. Press {hotkey} with the cursor over an item."
         ));
 
-        let urls = TradeUrls::new(&settings.site_url, game);
+        let prices = PriceCheckController::new(
+            http,
+            SystemClock::new(),
+            &settings.site_url,
+            game,
+            &settings.league,
+        )
+        .with_session(&settings.session)
+        .with_latency(settings.latency);
+
         let window_was_found = window.find().is_ok();
 
         Ok(Self {
@@ -120,9 +127,7 @@ impl OverlayLoopDriver {
             tray_state,
             model,
             runtime,
-            http,
-            urls,
-            limits: LimiterSet::conservative(),
+            prices,
             log,
             settings,
             game,
@@ -303,18 +308,10 @@ impl OverlayLoopDriver {
         &mut self,
         checked: &poe_trader_core::controller::price_check::PriceCheck,
     ) -> Result<u64, String> {
-        let deps = SearchDeps {
-            http: &self.http,
-            urls: &self.urls,
-            league: &self.settings.league,
-            session: &self.settings.session,
-            latency: self.settings.latency,
-            game: self.game,
-        };
-
-        let outcome = self
+        let (result, exchange) = self
             .runtime
-            .block_on(search(deps, &mut self.limits, checked))
+            .block_on(self.prices.search_checked(checked))
+            .map_err(|e| render(&e))
             .inspect_err(|message| {
                 self.log.error(
                     "searching the trade site",
@@ -322,9 +319,13 @@ impl OverlayLoopDriver {
                 );
             })?;
 
-        let total = outcome.total;
+        let total = result.total;
 
-        self.last_search = Some(outcome);
+        self.last_search = Some(SearchOutcome {
+            total,
+            id: result.id,
+            exchange,
+        });
 
         Ok(total)
     }
@@ -388,11 +389,8 @@ impl OverlayLoopDriver {
             data,
             options,
             runtime,
-            http,
-            urls,
-            limits,
+            prices,
             log,
-            game,
             last_search,
             ..
         } = self;
@@ -400,7 +398,6 @@ impl OverlayLoopDriver {
         let timing = *timing;
         let options = *options;
         let restore = settings.restore_clipboard;
-        let game = *game;
 
         let outcome = price_check_loop::run(
             model,
@@ -411,17 +408,9 @@ impl OverlayLoopDriver {
             },
             |text| price_check(text, data, options).map_err(|e| render(&e)),
             |checked| {
-                let deps = SearchDeps {
-                    http,
-                    urls,
-                    league: &settings.league,
-                    session: &settings.session,
-                    latency: settings.latency,
-                    game,
-                };
-
-                let outcome = runtime
-                    .block_on(search(deps, limits, checked))
+                let (result, exchange) = runtime
+                    .block_on(prices.search_checked(checked))
+                    .map_err(|e| render(&e))
                     .inspect_err(|message| {
                         log.error(
                             "searching the trade site",
@@ -429,9 +418,13 @@ impl OverlayLoopDriver {
                         );
                     })?;
 
-                let total = outcome.total;
+                let total = result.total;
 
-                *last_search = Some(outcome);
+                *last_search = Some(SearchOutcome {
+                    total,
+                    id: result.id,
+                    exchange,
+                });
 
                 Ok(total)
             },
@@ -756,5 +749,3 @@ fn rebuild_data(game: GameVersion, data_dir: &str) -> Result<(), String> {
 
     Ok(())
 }
-
-const _: fn() -> u64 = now_millis;

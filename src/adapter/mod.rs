@@ -1,4 +1,5 @@
 pub mod clipboard_adapter;
+pub mod clock_adapter;
 pub mod config_store_adapter;
 pub mod elevation_adapter;
 pub mod game_config_adapter;
