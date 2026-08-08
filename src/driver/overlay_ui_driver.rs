@@ -1,4 +1,4 @@
-use crate::controller::overlay_controller::{Frame, OverlayModel};
+use crate::controller::overlay_controller::{Frame, PanelSource};
 use crate::types::overlay::OverlayState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub struct PanelText {
     pub warnings: Vec<String>,
 }
 
-pub fn panel_text(model: &OverlayModel) -> PanelText {
+pub fn panel_text(model: &dyn PanelSource) -> PanelText {
     match model.state() {
         OverlayState::Hidden => PanelText {
             title: String::new(),
@@ -47,7 +47,7 @@ pub fn panel_text(model: &OverlayModel) -> PanelText {
     }
 }
 
-fn showing_text(model: &OverlayModel) -> PanelText {
+fn showing_text(model: &dyn PanelSource) -> PanelText {
     let Some(check) = model.result() else {
         return PanelText {
             title: "No result".into(),
@@ -112,7 +112,7 @@ pub fn should_paint(frame: &Frame) -> bool {
 
 #[cfg(windows)]
 mod win {
-    use super::{panel_text, Frame, OverlayModel, UiEvent};
+    use super::{panel_text, Frame, PanelSource, UiEvent};
 
     use eframe::egui;
 
@@ -133,7 +133,7 @@ mod win {
         builder.with_mouse_passthrough(!frame.takes_input)
     }
 
-    pub fn paint(ctx: &egui::Context, model: &OverlayModel) -> Vec<UiEvent> {
+    pub fn paint(ctx: &egui::Context, model: &dyn PanelSource) -> Vec<UiEvent> {
         let text = panel_text(model);
         let mut events = Vec::new();
 
@@ -213,6 +213,7 @@ pub use win::{overlay_viewport, paint};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::overlay_controller::OverlayModel;
     use crate::types::overlay::{OverlayGeometry, WindowRect};
     use poe_trader_core::controller::bulk::Endpoint;
     use poe_trader_core::controller::price_check::PriceCheck;

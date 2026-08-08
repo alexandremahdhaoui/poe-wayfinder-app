@@ -6,6 +6,7 @@ use poe_trader_app::adapter::http_adapter::HttpAdapter;
 use poe_trader_app::config::PoeTraderConfig;
 use poe_trader_app::controller::startup_controller;
 use poe_trader_app::driver::cli_driver;
+use poe_trader_app::driver::overlay_loop::wiring;
 use poe_trader_app::logging::{Logger, Value};
 #[cfg(windows)]
 use poe_trader_core::types::GameVersion;
@@ -37,7 +38,7 @@ fn main() -> ExitCode {
 
     let log = Logger::new(&cfg.log_level, "poe-trader");
 
-    let http = match cli_driver::build_http(&cfg, &log) {
+    let http = match wiring::build_http(&cfg, &log) {
         Some(http) => http,
         None => return ExitCode::FAILURE,
     };
@@ -124,14 +125,14 @@ fn run_overlay(
 ) -> ExitCode {
     use poe_trader_app::adapter::clock_adapter::SystemClock;
     use poe_trader_app::adapter::game_window_adapter::GameWindowAdapter;
-    use poe_trader_app::adapter::input_state_adapter::hold_key_for;
+    use poe_trader_app::adapter::input_state_adapter::{hold_key_for, SystemInput};
     use poe_trader_app::adapter::window_probe_adapter::SystemWindowProbe;
     use poe_trader_app::controller::game_state_controller::GameStateController;
     use poe_trader_app::controller::input_controller::InputController;
-    use poe_trader_app::controller::log_watch_controller::{FileLogSource, LogSource, NoLogSource};
+
     use poe_trader_app::controller::panel_health_controller::PanelHealthController;
     use poe_trader_app::controller::price_check_controller::PriceCheckController;
-    use poe_trader_app::driver::overlay_loop::{OverlayLoopDriver, OverlaySettings};
+    use poe_trader_app::driver::overlay_loop::{wiring, OverlayLoopDriver, OverlaySettings};
 
     let settings = OverlaySettings {
         window_title: cfg.window_title.clone(),
@@ -146,7 +147,7 @@ fn run_overlay(
 
     let window = GameStateController::new(GameWindowAdapter::new(&cfg.window_title));
 
-    let Some(copier) = cli_driver::build_copier(cfg.restore_clipboard, &log) else {
+    let Some(copier) = wiring::build_copier(cfg.restore_clipboard, &log) else {
         return ExitCode::FAILURE;
     };
 
@@ -162,14 +163,9 @@ fn run_overlay(
 
     let health = PanelHealthController::new(SystemWindowProbe::new());
     let hold = hold_key_for(hotkey.modifiers());
-    let input = InputController::new(hold);
+    let input = InputController::new(SystemInput::new(), hold);
 
-    let logs: Box<dyn LogSource> = match cfg.client_log_path.is_empty() {
-        true => Box::new(NoLogSource),
-        false => Box::new(FileLogSource::new(std::path::Path::new(
-            &cfg.client_log_path,
-        ))),
-    };
+    let logs = wiring::build_logs(&cfg.client_log_path);
     let stats = data.stat_count();
 
     let driver = match OverlayLoopDriver::new(

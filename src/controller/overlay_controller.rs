@@ -20,6 +20,34 @@ pub struct Frame {
     pub takes_input: bool,
 }
 
+pub trait PanelSource {
+    fn state(&self) -> OverlayState;
+
+    fn result(&self) -> Option<&PriceCheck>;
+
+    fn total(&self) -> Option<u64>;
+
+    fn message(&self) -> Option<&str>;
+}
+
+impl PanelSource for OverlayModel {
+    fn state(&self) -> OverlayState {
+        OverlayModel::state(self)
+    }
+
+    fn result(&self) -> Option<&PriceCheck> {
+        OverlayModel::result(self)
+    }
+
+    fn total(&self) -> Option<u64> {
+        OverlayModel::total(self)
+    }
+
+    fn message(&self) -> Option<&str> {
+        OverlayModel::message(self)
+    }
+}
+
 impl OverlayModel {
     pub fn new(geometry: OverlayGeometry) -> Self {
         Self {

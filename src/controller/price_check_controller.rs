@@ -5,9 +5,10 @@ use poe_trader_core::controller::price_check::{price_check, PriceCheck, PriceChe
 use poe_trader_core::types::GameVersion;
 use thiserror::Error;
 
+use crate::adapter::clock_adapter::Clock;
 use crate::adapter::http_adapter::{HttpAdapterError, HttpClient, HttpResponse};
 use crate::adapter::query_json_adapter::{to_exchange_json, to_json};
-use crate::adapter::rate_limit_adapter::{LimiterSet, Millis};
+use crate::adapter::rate_limit_adapter::LimiterSet;
 use crate::adapter::trade_api_adapter::{error_in_body, Endpoint, TradeApiError, TradeUrls};
 
 #[derive(Debug, Error)]
@@ -33,13 +34,6 @@ pub struct SearchResult {
     pub id: String,
     pub result: Vec<String>,
     pub total: u64,
-}
-
-#[allow(async_fn_in_trait)]
-pub trait Clock: Send + Sync {
-    fn now(&self) -> Millis;
-
-    async fn sleep(&self, millis: Millis);
 }
 
 #[allow(async_fn_in_trait)]
@@ -372,6 +366,7 @@ pub fn limiter_for(endpoint: Endpoint) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::time::Millis;
     use std::sync::Mutex;
 
     struct SteppingClock {

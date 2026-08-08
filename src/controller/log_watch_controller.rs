@@ -1,33 +1,23 @@
-use crate::adapter::game_log_adapter::{GameLogWatcher, LogError, LogEvent};
+use crate::adapter::game_log_adapter::{LogError, LogEvent, LogReader};
 
 #[cfg_attr(test, mockall::automock)]
 pub trait LogSource {
     fn poll(&mut self) -> Result<Vec<LogEvent>, LogError>;
 }
 
-pub struct FileLogSource {
-    watcher: GameLogWatcher,
+pub struct LogWatchController<R: LogReader> {
+    reader: R,
 }
 
-impl FileLogSource {
-    pub fn new(path: &std::path::Path) -> Self {
-        Self {
-            watcher: GameLogWatcher::new(path),
-        }
+impl<R: LogReader> LogWatchController<R> {
+    pub fn new(reader: R) -> Self {
+        Self { reader }
     }
 }
 
-impl LogSource for FileLogSource {
+impl<R: LogReader> LogSource for LogWatchController<R> {
     fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
-        self.watcher.poll()
-    }
-}
-
-pub struct NoLogSource;
-
-impl LogSource for NoLogSource {
-    fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
-        Ok(Vec::new())
+        self.reader.poll()
     }
 }
 
@@ -41,28 +31,32 @@ impl LogSource for Box<dyn LogSource> {
 mod tests {
     use super::*;
 
+    use crate::adapter::game_log_adapter::MockLogReader;
+
     #[test]
-    fn a_missing_log_yields_nothing_rather_than_failing() {
-        assert!(NoLogSource.poll().expect("no error").is_empty());
+    fn events_reach_the_caller_unchanged() {
+        let mut reader = MockLogReader::new();
+        reader.expect_poll().times(1).returning(|| {
+            Ok(vec![LogEvent::EnteredArea {
+                name: "The Twilight Strand".to_string(),
+            }])
+        });
+
+        let got = LogWatchController::new(reader).poll().expect("events");
+
+        assert_eq!(got.len(), 1);
     }
 
     #[test]
-    fn events_reach_the_caller_in_order() {
-        let mut source = MockLogSource::new();
-        source.expect_poll().times(1).returning(|| {
-            Ok(vec![
-                LogEvent::EnteredArea {
-                    name: "The Twilight Strand".to_string(),
-                },
-                LogEvent::Whisper {
-                    from: "Exile".to_string(),
-                    body: "hi".to_string(),
-                },
-            ])
+    fn a_reader_that_fails_does_not_panic_the_caller() {
+        let mut reader = MockLogReader::new();
+        reader.expect_poll().times(1).returning(|| {
+            Err(LogError::Open {
+                path: std::path::PathBuf::from("Client.txt"),
+                source: std::io::Error::other("gone"),
+            })
         });
 
-        let got = source.poll().expect("events");
-
-        assert_eq!(got.len(), 2);
+        assert!(LogWatchController::new(reader).poll().is_err());
     }
 }

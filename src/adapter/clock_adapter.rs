@@ -1,8 +1,15 @@
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::adapter::rate_limit_adapter::Millis;
-use crate::controller::price_check_controller::Clock;
+use crate::types::time::Millis;
+
+#[allow(async_fn_in_trait)]
+#[cfg_attr(test, mockall::automock)]
+pub trait Clock: Send + Sync {
+    fn now(&self) -> Millis;
+
+    async fn sleep(&self, millis: Millis);
+}
 
 pub struct SystemClock;
 

@@ -5,11 +5,18 @@ use std::process::ExitCode;
 const MAIN_BINARY: &str = "src/bin/poe-trader.rs";
 const MAIN_MAX_LINES: usize = 220;
 
-const WAIVED: &[(&str, &str)] = &[(
-    "src/driver/cli_driver.rs",
-    "diagnostics and self tests read adapters directly on purpose, because \
-     their whole job is to report what an adapter sees before any controller exists",
-)];
+const WAIVED: &[(&str, &str)] = &[
+    (
+        "src/driver/cli_driver.rs",
+        "self tests and diagnostics read adapters directly on purpose, because their whole \
+         job is to report what one adapter sees before any controller exists to ask",
+    ),
+    (
+        "src/driver/overlay_loop/wiring.rs",
+        "the composition root builds concrete adapters and hands them to controllers, which \
+         is main's job and the one place the layering is meant to be crossed",
+    ),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Violation {
@@ -140,30 +147,58 @@ fn main_is_only_wiring(source: &Source) -> Vec<Violation> {
     }]
 }
 
-fn layer_imports(source: &Source) -> Vec<Violation> {
-    let (layer, forbidden, why) = if source.relative.starts_with("src/driver/") {
-        ("driver", "crate::adapter::", "a driver reaches an adapter")
-    } else if source.relative.starts_with("src/controller/") {
-        (
-            "controller",
-            "crate::driver::",
-            "a controller reaches a driver",
-        )
-    } else {
-        return Vec::new();
-    };
+fn forbidden_imports(relative: &str) -> Vec<(&'static str, &'static str)> {
+    if relative.starts_with("src/driver/") {
+        return vec![("crate::adapter::", "a driver reaches an adapter")];
+    }
 
-    let _ = layer;
+    if relative.starts_with("src/controller/") {
+        return vec![("crate::driver::", "a controller reaches a driver")];
+    }
+
+    if relative.starts_with("src/adapter/") {
+        return vec![
+            ("crate::driver::", "an adapter reaches a driver"),
+            ("crate::controller::", "an adapter reaches a controller"),
+            ("crate::adapter::", "an adapter reaches another adapter"),
+        ];
+    }
+
+    Vec::new()
+}
+
+fn layer_imports(source: &Source) -> Vec<Violation> {
+    let forbidden = forbidden_imports(&source.relative);
+
+    if forbidden.is_empty() {
+        return Vec::new();
+    }
+
+    let own = format!(
+        "crate::adapter::{}",
+        source
+            .path
+            .file_stem()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default()
+    );
 
     source
         .text
         .lines()
         .enumerate()
-        .filter(|(_, line)| line.trim_start().starts_with("use ") && line.contains(forbidden))
-        .map(|(n, line)| Violation {
-            rule: "layers only depend downward",
-            path: source.relative.clone(),
-            detail: format!("line {}: {why}: {}", n + 1, line.trim()),
+        .filter(|(_, line)| line.trim_start().starts_with("use "))
+        .flat_map(|(n, line)| {
+            let own = own.clone();
+
+            forbidden
+                .iter()
+                .filter(move |(prefix, _)| line.contains(*prefix) && !line.contains(&own))
+                .map(move |(_, why)| Violation {
+                    rule: "layers only depend downward",
+                    path: source.relative.clone(),
+                    detail: format!("line {}: {why}: {}", n + 1, line.trim()),
+                })
         })
         .collect()
 }
@@ -348,10 +383,50 @@ mod tests {
     }
 
     #[test]
-    fn an_adapter_may_import_anything_it_likes() {
+    fn an_adapter_reaching_a_driver_is_a_violation() {
         let got = layer_imports(&source(
             "src/adapter/thing_adapter.rs",
-            "use crate::driver::thing_driver::Thing;\n",
+            "use crate::driver::thing_driver::Thing;",
+        ));
+
+        assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn an_adapter_reaching_a_controller_is_a_violation() {
+        let got = layer_imports(&source(
+            "src/adapter/clock_adapter.rs",
+            "use crate::controller::price_check_controller::Clock;",
+        ));
+
+        assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn an_adapter_reaching_another_adapter_is_a_violation() {
+        let got = layer_imports(&source(
+            "src/adapter/clock_adapter.rs",
+            "use crate::adapter::rate_limit_adapter::Millis;",
+        ));
+
+        assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn an_adapter_may_refer_to_its_own_module() {
+        let got = layer_imports(&source(
+            "src/adapter/clock_adapter.rs",
+            "use crate::adapter::clock_adapter::SystemClock;",
+        ));
+
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn an_adapter_may_import_core() {
+        let got = layer_imports(&source(
+            "src/adapter/thing_adapter.rs",
+            "use poe_trader_core::types::GameVersion;",
         ));
 
         assert!(got.is_empty(), "{got:?}");

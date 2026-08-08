@@ -1,4 +1,4 @@
-use crate::adapter::input_state_adapter;
+use crate::adapter::input_state_adapter::RawInput;
 
 use poe_trader_core::controller::overlay_lifecycle::HoldKey;
 
@@ -11,27 +11,28 @@ pub trait InputState {
     fn mouse_down(&self) -> bool;
 }
 
-pub struct InputController {
+pub struct InputController<R: RawInput> {
+    raw: R,
     hold: HoldKey,
 }
 
-impl InputController {
-    pub fn new(hold: HoldKey) -> Self {
-        Self { hold }
+impl<R: RawInput> InputController<R> {
+    pub fn new(raw: R, hold: HoldKey) -> Self {
+        Self { raw, hold }
     }
 }
 
-impl InputState for InputController {
+impl<R: RawInput> InputState for InputController<R> {
     fn hold_down(&self) -> bool {
-        input_state_adapter::hold_down(self.hold)
+        self.raw.hold_down(self.hold)
     }
 
     fn alt_alone(&self) -> bool {
-        input_state_adapter::alt_alone()
+        self.raw.alt_alone()
     }
 
     fn mouse_down(&self) -> bool {
-        input_state_adapter::mouse_down()
+        self.raw.mouse_down()
     }
 }
 
@@ -39,15 +40,32 @@ impl InputState for InputController {
 mod tests {
     use super::*;
 
+    use crate::adapter::input_state_adapter::MockRawInput;
+
     #[test]
-    fn a_hotkey_with_no_modifier_never_reports_a_hold() {
-        assert!(!InputController::new(HoldKey::None).hold_down());
+    fn the_configured_hold_key_reaches_the_adapter() {
+        let mut raw = MockRawInput::new();
+        raw.expect_hold_down()
+            .withf(|hold| *hold == HoldKey::Alt)
+            .times(1)
+            .returning(|_| true);
+
+        assert!(InputController::new(raw, HoldKey::Alt).hold_down());
     }
 
     #[test]
-    fn the_hold_key_is_remembered() {
-        let controller = InputController::new(HoldKey::Ctrl);
+    fn alt_alone_passes_through_untouched() {
+        let mut raw = MockRawInput::new();
+        raw.expect_alt_alone().times(1).returning(|| true);
 
-        assert_eq!(controller.hold, HoldKey::Ctrl);
+        assert!(InputController::new(raw, HoldKey::Ctrl).alt_alone());
+    }
+
+    #[test]
+    fn a_click_passes_through_untouched() {
+        let mut raw = MockRawInput::new();
+        raw.expect_mouse_down().times(1).returning(|| false);
+
+        assert!(!InputController::new(raw, HoldKey::Ctrl).mouse_down());
     }
 }

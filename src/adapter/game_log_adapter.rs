@@ -114,6 +114,25 @@ pub fn league_from_whisper(body: &str) -> Option<String> {
     Some(league.to_string())
 }
 
+#[cfg_attr(test, mockall::automock)]
+pub trait LogReader: Send + Sync {
+    fn poll(&mut self) -> Result<Vec<LogEvent>, LogError>;
+}
+
+pub struct NoLog;
+
+impl LogReader for NoLog {
+    fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
+        Ok(Vec::new())
+    }
+}
+
+impl LogReader for GameLogWatcher {
+    fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
+        GameLogWatcher::poll(self)
+    }
+}
+
 #[derive(Debug)]
 pub struct GameLogWatcher {
     path: PathBuf,

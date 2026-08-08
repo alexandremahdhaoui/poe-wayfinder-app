@@ -1,5 +1,42 @@
 use poe_trader_core::controller::overlay_lifecycle::HoldKey;
 
+#[cfg_attr(test, mockall::automock)]
+pub trait RawInput: Send + Sync {
+    fn hold_down(&self, hold: HoldKey) -> bool;
+
+    fn alt_alone(&self) -> bool;
+
+    fn mouse_down(&self) -> bool;
+}
+
+pub struct SystemInput;
+
+impl SystemInput {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SystemInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RawInput for SystemInput {
+    fn hold_down(&self, hold: HoldKey) -> bool {
+        hold_down(hold)
+    }
+
+    fn alt_alone(&self) -> bool {
+        alt_alone()
+    }
+
+    fn mouse_down(&self) -> bool {
+        mouse_down()
+    }
+}
+
 #[cfg(windows)]
 pub fn hold_down(hold: HoldKey) -> bool {
     let code = match hold {

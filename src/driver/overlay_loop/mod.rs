@@ -1,4 +1,5 @@
 pub mod search;
+pub mod wiring;
 
 use thiserror::Error;
 
