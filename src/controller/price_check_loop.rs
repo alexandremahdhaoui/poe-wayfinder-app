@@ -1,4 +1,4 @@
-use poe_trader_core::controller::price_check::PriceCheck;
+use poe_wayfinder_core::controller::price_check::PriceCheck;
 
 use crate::controller::overlay_controller::OverlayModel;
 
@@ -69,9 +69,9 @@ where
 mod tests {
     use super::*;
     use crate::types::overlay::{OverlayGeometry, OverlayState};
-    use poe_trader_core::controller::bulk::Endpoint;
-    use poe_trader_core::types::item::ParsedItem;
-    use poe_trader_core::types::query::{NameField, TradeQuery};
+    use poe_wayfinder_core::controller::bulk::Endpoint;
+    use poe_wayfinder_core::types::item::ParsedItem;
+    use poe_wayfinder_core::types::query::{NameField, TradeQuery};
 
     fn model() -> OverlayModel {
         OverlayModel::new(OverlayGeometry::default())

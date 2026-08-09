@@ -1,7 +1,7 @@
 #!/bin/sh
 # Copy the Windows build out under a name that will not be overwritten.
 #
-# # Why versioned and not just poe-trader.exe
+# # Why versioned and not just poe-wayfinder.exe
 #
 # Smart App Control decides per binary, by hash. A build it has allowed keeps
 # running; a new build is a stranger again and is usually refused. Rebuilding
@@ -16,11 +16,11 @@
 
 set -eu
 
-SOURCE="../target/x86_64-pc-windows-gnu/release/poe-trader.exe"
+SOURCE="../target/x86_64-pc-windows-gnu/release/poe-wayfinder.exe"
 DEST="${WIN_OUTPUT_PATH:-/mnt/c/Users/alexa/Desktop/testbin}"
 
 [ -f "$SOURCE" ] || {
-    echo "deploy: $SOURCE does not exist. Run: forge build poe-trader-windows" >&2
+    echo "deploy: $SOURCE does not exist. Run: forge build poe-wayfinder-windows" >&2
     exit 1
 }
 
@@ -31,14 +31,14 @@ DIRTY=$(git status --porcelain 2>/dev/null | head -1)
 [ -z "$DIRTY" ] || COMMIT="$COMMIT-dirty"
 
 SHORT_HASH=$(md5sum "$SOURCE" | cut -c1-8)
-NAME="poe-trader-$COMMIT-$SHORT_HASH.exe"
+NAME="poe-wayfinder-$COMMIT-$SHORT_HASH.exe"
 
 cp "$SOURCE" "$DEST/$NAME"
 
 echo "deploy: wrote $DEST/$NAME"
 echo
 echo "Existing builds, newest last:"
-ls -1t "$DEST"/poe-trader-*.exe 2>/dev/null | tail -8 | while read -r f; do
+ls -1t "$DEST"/poe-wayfinder-*.exe 2>/dev/null | tail -8 | while read -r f; do
     echo "  $(basename "$f")"
 done
 

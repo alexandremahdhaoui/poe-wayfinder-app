@@ -1,7 +1,7 @@
-use poe_trader_core::types::query::{
+use poe_wayfinder_core::types::query::{
     Filters, Flag, NameField, Range, StatFilter, StatGroup, Status, TradeQuery,
 };
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::types::GameVersion;
 use serde_json::{json, Map, Value};
 
 pub fn to_json(query: &TradeQuery, game: GameVersion) -> Value {
@@ -341,7 +341,7 @@ mod tests {
             }
         }
     }
-    use poe_trader_core::types::query::TradeQuery;
+    use poe_wayfinder_core::types::query::TradeQuery;
 
     fn body(query: &TradeQuery) -> Value {
         to_json(query, GameVersion::Poe2)

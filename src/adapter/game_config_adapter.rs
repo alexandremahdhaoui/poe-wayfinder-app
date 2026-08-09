@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use poe_trader_core::controller::game_config::{show_mods_key, show_mods_key_was_read};
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::controller::game_config::{show_mods_key, show_mods_key_was_read};
+use poe_wayfinder_core::types::GameVersion;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameConfigInfo {
@@ -14,7 +14,7 @@ impl GameConfigInfo {
     fn unknown() -> Self {
         Self {
             path: None,
-            show_mods_key: poe_trader_core::controller::game_config::DEFAULT_SHOW_MODS_KEY
+            show_mods_key: poe_wayfinder_core::controller::game_config::DEFAULT_SHOW_MODS_KEY
                 .to_string(),
             read: false,
         }
@@ -52,7 +52,7 @@ pub fn read(
             continue;
         };
 
-        let parsed = poe_trader_core::controller::game_config::parse_ini(&text);
+        let parsed = poe_wayfinder_core::controller::game_config::parse_ini(&text);
 
         return GameConfigInfo {
             path: Some(path),

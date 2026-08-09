@@ -1,12 +1,12 @@
 [package]
-name = "poe-trader-app"
+name = "poe-wayfinder-app"
 version = "0.1.0"
 edition = "2021"
-description = "Overlay, adapters and drivers for poe-trader."
+description = "Overlay, adapters and drivers for poe-wayfinder."
 
 [dependencies]
-poe-trader-core = { path = "../poe-trader-core" }
-poe-trader-data = { path = "../poe-trader-data" }
+poe-wayfinder-core = { path = "../poe-wayfinder-core" }
+poe-wayfinder-data = { path = "../poe-wayfinder-data" }
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true

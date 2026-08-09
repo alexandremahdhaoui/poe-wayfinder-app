@@ -409,7 +409,7 @@ fn repo_root() -> PathBuf {
 fn collect(root: &Path) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
 
-    for crate_name in ["poe-trader-app", "poe-trader-core"] {
+    for crate_name in ["poe-wayfinder-app", "poe-wayfinder-core"] {
         let src = root.join(crate_name).join("src");
 
         if !src.is_dir() {
@@ -630,10 +630,10 @@ mod tests {
     fn a_capability_with_both_halves_present_counts() {
         let tree = files(&[
             (
-                "poe-trader-core/src/controller/x.rs",
+                "poe-wayfinder-core/src/controller/x.rs",
                 "fn suggested_price()",
             ),
-            ("poe-trader-app/src/driver/ui.rs", "fn price_banner()"),
+            ("poe-wayfinder-app/src/driver/ui.rs", "fn price_banner()"),
         ]);
 
         let outcome = Outcome {
@@ -658,7 +658,10 @@ mod tests {
 
     #[test]
     fn domain_code_alone_does_not_count_as_a_feature() {
-        let tree = files(&[("poe-trader-core/src/controller/x.rs", "fn price_banner()")]);
+        let tree = files(&[(
+            "poe-wayfinder-core/src/controller/x.rs",
+            "fn price_banner()",
+        )]);
 
         assert!(anywhere(&tree, "fn price_banner"));
         assert!(
@@ -670,7 +673,7 @@ mod tests {
     #[test]
     fn a_symbol_that_only_appears_in_a_test_does_not_count() {
         let tree = files(&[(
-            "poe-trader-app/src/driver/ui.rs",
+            "poe-wayfinder-app/src/driver/ui.rs",
             "fn real() {}\n#[cfg(test)]\nmod tests { fn price_banner() {} }",
         )]);
 
@@ -680,7 +683,7 @@ mod tests {
     #[test]
     fn a_symbol_in_production_code_counts_even_when_tests_follow_it() {
         let tree = files(&[(
-            "poe-trader-app/src/driver/ui.rs",
+            "poe-wayfinder-app/src/driver/ui.rs",
             "fn price_banner() {}\n#[cfg(test)]\nmod tests {}",
         )]);
 

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use poe_trader_core::types::ItemCategory;
+use poe_wayfinder_core::types::ItemCategory;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -741,7 +741,8 @@ mod tests {
     fn every_namespace_written_is_one_the_parser_reads() {
         for item in items() {
             assert!(
-                poe_trader_core::adapter::data_adapter::Namespace::parse(&item.namespace).is_some(),
+                poe_wayfinder_core::adapter::data_adapter::Namespace::parse(&item.namespace)
+                    .is_some(),
                 "{} was filed under {}",
                 item.name,
                 item.namespace

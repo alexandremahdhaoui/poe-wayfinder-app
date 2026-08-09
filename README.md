@@ -59,5 +59,5 @@ This is a port of Awakened PoE Trade and Exiled Exchange 2, both MIT licensed.
 Their notice and a statement of what was taken and what changed are in `NOTICE`.
 
 Game data belongs to Grinding Gear Games and is not covered by either licence.
-See `../poe-trader-data/README.md`. This project is not affiliated with or
+See `../poe-wayfinder-data/README.md`. This project is not affiliated with or
 endorsed by Grinding Gear Games.

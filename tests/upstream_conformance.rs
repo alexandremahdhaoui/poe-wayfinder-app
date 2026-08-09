@@ -11,7 +11,7 @@
 //! resolve is not recorded as a modifier at all, in the reference or here, so
 //! running these without data would compare against a different question.
 //!
-//! Loading a data file is I/O, and `poe-trader-core` is not allowed any.
+//! Loading a data file is I/O, and `poe-wayfinder-core` is not allowed any.
 //!
 //! # Why the counts and not just "it parses"
 //!
@@ -35,12 +35,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use poe_trader_app::adapter::game_data_adapter::GameTables;
-use poe_trader_core::controller::parse::parse_clipboard;
-use poe_trader_core::controller::parse::sections::text_to_sections;
-use poe_trader_core::types::item::ParsedItem;
-use poe_trader_core::types::modifier::{Generation, ModifierType};
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_app::adapter::game_data_adapter::GameTables;
+use poe_wayfinder_core::controller::parse::parse_clipboard;
+use poe_wayfinder_core::controller::parse::sections::text_to_sections;
+use poe_wayfinder_core::types::item::ParsedItem;
+use poe_wayfinder_core::types::modifier::{Generation, ModifierType};
+use poe_wayfinder_core::types::GameVersion;
 
 /// The six fixtures no upstream test ever uses.
 ///
@@ -118,7 +118,7 @@ fn fixtures() -> Vec<Fixture> {
 
 /// Where the PoE2 data lives, if it has been built.
 ///
-/// Returns nothing when it has not. `poe-trader-datagen` writes it and it is
+/// Returns nothing when it has not. `poe-wayfinder-datagen` writes it and it is
 /// not committed, so a fresh checkout has none and these tests report that
 /// rather than failing on a missing file.
 fn data() -> Option<GameTables> {
@@ -138,7 +138,7 @@ fn parsed() -> Vec<(Fixture, ParsedItem)> {
     let Some(tables) = data() else {
         eprintln!(
             "upstream_conformance: no data-poe2 directory. \
-             Run poe-trader-datagen --game poe2 --out-dir data-poe2 first."
+             Run poe-wayfinder-datagen --game poe2 --out-dir data-poe2 first."
         );
 
         return Vec::new();

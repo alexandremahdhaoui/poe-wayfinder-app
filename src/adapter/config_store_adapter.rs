@@ -84,7 +84,7 @@ impl SettingsStore for ConfigStore {
     }
 }
 
-pub const APP_DIR: &str = "poe-trader";
+pub const APP_DIR: &str = "poe-wayfinder";
 
 pub fn resolve_dir(configured: &str) -> PathBuf {
     if !configured.trim().is_empty() {
@@ -179,7 +179,7 @@ mod tests {
 
     fn tempdir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("poe-trader-store-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("poe-wayfinder-store-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         dir
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_loads_the_defaults() {
-        let store = ConfigStore::new(Path::new("/nonexistent/poe-trader"));
+        let store = ConfigStore::new(Path::new("/nonexistent/poe-wayfinder"));
 
         assert_eq!(store.load(), Settings::default());
     }

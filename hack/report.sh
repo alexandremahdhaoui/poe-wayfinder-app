@@ -12,10 +12,10 @@ rule() { printf '%s\n' "--------------------------------------------------------
 value() { printf '  %-34s %s\n' "$1" "$2"; }
 
 echo
-echo "poe-trader, what is measured"
+echo "poe-wayfinder, what is measured"
 rule
 
-arch=$(cargo run --quiet --release --bin poe-trader-arch -- --root . --max 0 2>/dev/null)
+arch=$(cargo run --quiet --release --bin poe-wayfinder-arch -- --root . --max 0 2>/dev/null)
 
 value "wired public functions" "$(echo "$arch" | grep -E '^  wired' | sed 's/.*: //')"
 value "architecture violations" "$(echo "$arch" | grep -E '^  violations' | sed 's/.*: //')"
@@ -32,7 +32,7 @@ for stage in parity parity-overlay parity-poe1; do
     value "$stage" "${pct:-not run}  (${gap:-?} missing)"
 done
 
-ui=$(cargo run --quiet --release --bin poe-trader-uiparity 2>/dev/null)
+ui=$(cargo run --quiet --release --bin poe-wayfinder-uiparity 2>/dev/null)
 
 value "ui parity" "$(echo "$ui" | grep -E '^  ui parity' | sed 's/.*: //')"
 value "ui capabilities" "$(echo "$ui" | grep -E '^  implemented' | sed 's/.*: //')"
@@ -47,7 +47,7 @@ while read -r f; do
     n=$(awk '/^#\[cfg\(test\)\]/{seen=1} !seen{c++} END{print c+0}' "$f")
     prod=$((prod + n))
     tests=$((tests + $(wc -l < "$f") - n))
-done < <(find ../poe-trader-core/src ../poe-trader-data/src src -name '*.rs' ! -name 'zz_generated*')
+done < <(find ../poe-wayfinder-core/src ../poe-wayfinder-data/src src -name '*.rs' ! -name 'zz_generated*')
 
 value "production lines" "$prod"
 value "test lines" "$tests"
@@ -91,8 +91,8 @@ fi
 
 rule
 
-value "embedded data" "$(du -shc ../poe-trader-data/data/*/*.ndjson 2>/dev/null | tail -1 | cut -f1)"
-value "windows exe" "$(stat -c%s ../target/x86_64-pc-windows-gnu/release/poe-trader.exe 2>/dev/null | awk '{printf "%.1f MB", $1/1048576}')"
+value "embedded data" "$(du -shc ../poe-wayfinder-data/data/*/*.ndjson 2>/dev/null | tail -1 | cut -f1)"
+value "windows exe" "$(stat -c%s ../target/x86_64-pc-windows-gnu/release/poe-wayfinder.exe 2>/dev/null | awk '{printf "%.1f MB", $1/1048576}')"
 value "flags needed to run it" "0"
 
 rule

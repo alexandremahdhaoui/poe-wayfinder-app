@@ -1,5 +1,5 @@
-use poe_trader_core::controller::filter_view::{modifier_text, FlagKey, Row, RowKey};
-use poe_trader_core::types::item::ItemRarity;
+use poe_wayfinder_core::controller::filter_view::{modifier_text, FlagKey, Row, RowKey};
+use poe_wayfinder_core::types::item::ItemRarity;
 
 use crate::controller::overlay_controller::{Frame, PanelSource};
 use crate::types::overlay::OverlayState;
@@ -183,14 +183,14 @@ mod win {
     };
 
     use eframe::egui;
-    use poe_trader_core::controller::filter_view::{
+    use poe_wayfinder_core::controller::filter_view::{
         influence_labels, tier_label, FilterView, FlagRow, Row,
     };
-    use poe_trader_core::controller::item_editor::AugmentOption;
-    use poe_trader_core::controller::price_summary::{
+    use poe_wayfinder_core::controller::item_editor::AugmentOption;
+    use poe_wayfinder_core::controller::price_summary::{
         online_count, price_headline, price_spread, stack_value, Estimate, Quote,
     };
-    use poe_trader_core::controller::rate_limit::LimiterLine;
+    use poe_wayfinder_core::controller::rate_limit::LimiterLine;
 
     use std::time::SystemTime;
 
@@ -334,7 +334,7 @@ mod win {
         if model.result().is_some_and(|c| c.has_unknown_modifiers()) {
             ui.label(
                 egui::RichText::new(
-                    "The price may be wrong. Rebuild the data with poe-trader-datagen.",
+                    "The price may be wrong. Rebuild the data with poe-wayfinder-datagen.",
                 )
                 .small()
                 .color(MUTED),
@@ -832,7 +832,7 @@ mod win {
 
             let online_only = model
                 .result()
-                .map(|c| c.query.status == poe_trader_core::types::query::Status::Online)
+                .map(|c| c.query.status == poe_wayfinder_core::types::query::Status::Online)
                 .unwrap_or(true);
 
             let caption = match online_only {
@@ -874,14 +874,15 @@ mod win {
         .on_hover_text("how much of the trade api rate limit is used");
     }
 
-    pub const STATUS_VIEWPORT: &str = "poe-trader-status";
-    const STATUS_SIZE: [f32; 2] = [460.0, 400.0];
+    pub const STATUS_VIEWPORT: &str = "poe-wayfinder-status";
+    const STATUS_SIZE: [f32; 2] = [560.0, 520.0];
+    const STATUS_MIN: [f32; 2] = [440.0, 380.0];
 
     pub fn status_viewport() -> egui::ViewportBuilder {
         egui::ViewportBuilder::default()
-            .with_title("poe-trader")
+            .with_title("PoE Wayfinder")
             .with_inner_size(STATUS_SIZE)
-            .with_min_inner_size([380.0, 300.0])
+            .with_min_inner_size(STATUS_MIN)
             .with_resizable(true)
     }
 
@@ -898,6 +899,16 @@ mod win {
             |ctx, _class| {
                 style(ctx);
 
+                egui::TopBottomPanel::bottom("status-actions")
+                    .frame(
+                        egui::Frame::new()
+                            .fill(PANEL_BACKGROUND)
+                            .inner_margin(egui::Margin::symmetric(14, 10)),
+                    )
+                    .show(ctx, |ui| {
+                        events.extend(status_actions(ui, status));
+                    });
+
                 egui::CentralPanel::default()
                     .frame(
                         egui::Frame::new()
@@ -905,7 +916,9 @@ mod win {
                             .inner_margin(egui::Margin::same(14)),
                     )
                     .show(ctx, |ui| {
-                        events.extend(status_body(ui, status, now));
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| status_body(ui, status, now));
                     });
 
                 if ctx.input(|i| i.viewport().close_requested()) {
@@ -922,7 +935,7 @@ mod win {
 
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("poe-trader")
+                egui::RichText::new("PoE Wayfinder")
                     .size(20.0)
                     .strong()
                     .color(ACCENT),
@@ -955,14 +968,18 @@ mod win {
         ui.add_space(8.0);
         rate_limit_line(ui, &status.limits);
 
-        ui.add_space(12.0);
+        events
+    }
 
-        ui.horizontal(|ui| {
-            let pause = match status.paused {
-                true => "Resume",
-                false => "Pause",
-            };
+    fn status_actions(ui: &mut egui::Ui, status: &Status) -> Vec<StatusEvent> {
+        let mut events = Vec::new();
 
+        let pause = match status.paused {
+            true => "Resume",
+            false => "Pause",
+        };
+
+        ui.horizontal_wrapped(|ui| {
             if ui.button(pause).clicked() {
                 events.push(StatusEvent::TogglePaused);
             }
@@ -975,19 +992,17 @@ mod win {
                 events.push(StatusEvent::RefreshNow);
             }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Quit").clicked() {
-                    events.push(StatusEvent::Quit);
-                }
+            if ui
+                .button("Hide to tray")
+                .on_hover_text("keeps running. The tray icon brings this back.")
+                .clicked()
+            {
+                events.push(StatusEvent::HideToTray);
+            }
 
-                if ui
-                    .button("Hide to tray")
-                    .on_hover_text("keeps running. The tray icon brings this back.")
-                    .clicked()
-                {
-                    events.push(StatusEvent::HideToTray);
-                }
-            });
+            if ui.button("Quit").clicked() {
+                events.push(StatusEvent::Quit);
+            }
         });
 
         events
@@ -1029,11 +1044,11 @@ mod tests {
     use super::*;
     use crate::controller::overlay_controller::OverlayModel;
     use crate::types::overlay::{OverlayGeometry, WindowRect};
-    use poe_trader_core::controller::bulk::Endpoint;
-    use poe_trader_core::controller::price_check::PriceCheck;
-    use poe_trader_core::types::item::{BaseInfo, ItemRarity, ParsedItem, UnknownModifier};
-    use poe_trader_core::types::modifier::ModifierType;
-    use poe_trader_core::types::query::TradeQuery;
+    use poe_wayfinder_core::controller::bulk::Endpoint;
+    use poe_wayfinder_core::controller::price_check::PriceCheck;
+    use poe_wayfinder_core::types::item::{BaseInfo, ItemRarity, ParsedItem, UnknownModifier};
+    use poe_wayfinder_core::types::modifier::ModifierType;
+    use poe_wayfinder_core::types::query::TradeQuery;
 
     fn check(item: ParsedItem) -> PriceCheck {
         PriceCheck {

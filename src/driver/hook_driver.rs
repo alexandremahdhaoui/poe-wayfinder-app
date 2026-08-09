@@ -16,7 +16,9 @@ mod win {
     use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
     use std::sync::mpsc::{self, Receiver};
 
-    use poe_trader_core::controller::hotkey_match::{fires, is_modifier_code, KeyEvent, Modifiers};
+    use poe_wayfinder_core::controller::hotkey_match::{
+        fires, is_modifier_code, KeyEvent, Modifiers,
+    };
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;

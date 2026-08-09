@@ -10,7 +10,7 @@ use crate::logging::{Logger, Value};
 use crate::types::Hotkey;
 
 #[cfg(windows)]
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::types::GameVersion;
 
 pub fn list_windows() -> ExitCode {
     #[cfg(windows)]
@@ -33,7 +33,7 @@ pub fn list_windows() -> ExitCode {
 
     #[cfg(not(windows))]
     {
-        eprintln!("poe-trader: --list-windows only works on Windows.");
+        eprintln!("poe-wayfinder: --list-windows only works on Windows.");
 
         ExitCode::FAILURE
     }
@@ -46,7 +46,7 @@ pub fn self_test_hotkey() -> ExitCode {
 
     const COMBINATION: &str = "Ctrl+Alt+Shift+F24";
 
-    let log = Logger::new("info", "poe-trader");
+    let log = Logger::new("info", "poe-wayfinder");
 
     let Ok(hotkey) = Hotkey::parse(COMBINATION) else {
         log.error("the self test hotkey does not parse", &[]);
@@ -102,7 +102,7 @@ pub fn self_test_hotkey() -> ExitCode {
 
 #[cfg(not(windows))]
 pub fn self_test_hotkey() -> ExitCode {
-    eprintln!("poe-trader: --self-test-hotkey only works on Windows.");
+    eprintln!("poe-wayfinder: --self-test-hotkey only works on Windows.");
 
     ExitCode::FAILURE
 }
@@ -136,7 +136,7 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
         DefWindowProcW(window, message, wparam, lparam)
     }
 
-    let class = w!("PoeTraderFakeGame");
+    let class = w!("PoeWayfinderFakeGame");
 
     let module = match unsafe { GetModuleHandleW(None) } {
         Ok(module) => module,
@@ -199,7 +199,7 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
 
     let mut copy_watch = match HookDriver::start(
         0x43,
-        poe_trader_core::controller::hotkey_match::Modifiers {
+        poe_wayfinder_core::controller::hotkey_match::Modifiers {
             ctrl: true,
             ..Default::default()
         },
@@ -268,7 +268,7 @@ pub fn press_hotkey(hotkey: &Hotkey) -> ExitCode {
     };
 
     let Some(code) = crate::driver::hotkey_driver::virtual_key_code(hotkey.key()) else {
-        eprintln!("poe-trader: {hotkey} has no Windows key code.");
+        eprintln!("poe-wayfinder: {hotkey} has no Windows key code.");
 
         return ExitCode::FAILURE;
     };
@@ -316,29 +316,29 @@ pub fn press_hotkey(hotkey: &Hotkey) -> ExitCode {
 
     if sent as usize != presses.len() {
         eprintln!(
-            "poe-trader: only {sent} of {} events were accepted.",
+            "poe-wayfinder: only {sent} of {} events were accepted.",
             presses.len()
         );
 
         return ExitCode::FAILURE;
     }
 
-    eprintln!("poe-trader: pressed {hotkey}.");
+    eprintln!("poe-wayfinder: pressed {hotkey}.");
 
     ExitCode::SUCCESS
 }
 
 #[cfg(not(windows))]
 pub fn press_hotkey(_hotkey: &Hotkey) -> ExitCode {
-    eprintln!("poe-trader: --press-hotkey only works on Windows.");
+    eprintln!("poe-wayfinder: --press-hotkey only works on Windows.");
 
     ExitCode::FAILURE
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn hook_modifiers(hotkey: &Hotkey) -> poe_trader_core::controller::hotkey_match::Modifiers {
+pub fn hook_modifiers(hotkey: &Hotkey) -> poe_wayfinder_core::controller::hotkey_match::Modifiers {
     use crate::types::Modifier;
-    use poe_trader_core::controller::hotkey_match::Modifiers;
+    use poe_wayfinder_core::controller::hotkey_match::Modifiers;
 
     let has = |wanted: Modifier| hotkey.modifiers().contains(&wanted);
 
@@ -353,7 +353,7 @@ pub fn hook_modifiers(hotkey: &Hotkey) -> poe_trader_core::controller::hotkey_ma
 #[cfg(windows)]
 pub fn self_test_hook() -> ExitCode {
     use crate::driver::hook_driver::HookDriver;
-    use poe_trader_core::controller::hotkey_match::Modifiers;
+    use poe_wayfinder_core::controller::hotkey_match::Modifiers;
 
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
@@ -365,7 +365,7 @@ pub fn self_test_hook() -> ExitCode {
     const ALT: u16 = 0x12;
     const SHIFT: u16 = 0x10;
 
-    let log = Logger::new("info", "poe-trader");
+    let log = Logger::new("info", "poe-wayfinder");
 
     let wanted = Modifiers {
         ctrl: true,
@@ -466,7 +466,7 @@ pub fn self_test_hook() -> ExitCode {
 
 #[cfg(not(windows))]
 pub fn self_test_hook() -> ExitCode {
-    eprintln!("poe-trader: --self-test-hook only works on Windows.");
+    eprintln!("poe-wayfinder: --self-test-hook only works on Windows.");
 
     ExitCode::FAILURE
 }
@@ -477,7 +477,9 @@ fn report_hotkey_outlook(
     log: &Logger,
 ) {
     use crate::adapter::elevation_adapter::{own_elevation, window_elevation};
-    use poe_trader_core::controller::elevation::{advice, hotkey_outlook, is_blocking, Elevation};
+    use poe_wayfinder_core::controller::elevation::{
+        advice, hotkey_outlook, is_blocking, Elevation,
+    };
 
     let overlay = own_elevation();
 
@@ -506,8 +508,8 @@ fn report_hotkey_outlook(
 #[cfg(windows)]
 pub fn check_clipboard_now(game: GameVersion, data: &GameTables, log: &Logger) -> ExitCode {
     use crate::adapter::clipboard_adapter::{Clipboard, SystemClipboard};
-    use poe_trader_core::controller::overlay::{clipboard_kind, ClipboardKind};
-    use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
+    use poe_wayfinder_core::controller::overlay::{clipboard_kind, ClipboardKind};
+    use poe_wayfinder_core::controller::price_check::{price_check, PriceCheckOptions};
 
     let mut clipboard = match SystemClipboard::new() {
         Ok(clipboard) => clipboard,
@@ -697,7 +699,7 @@ pub fn run_subcommand(args: &[String]) -> Option<ExitCode> {
         let item = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(err) => {
-                eprintln!("poe-trader: reading {path}: {err}");
+                eprintln!("poe-wayfinder: reading {path}: {err}");
 
                 return Some(ExitCode::FAILURE);
             }
@@ -737,7 +739,7 @@ pub fn run_subcommand(args: &[String]) -> Option<ExitCode> {
 #[cfg(not(windows))]
 pub fn report_startup(
     _log: &crate::logging::Logger,
-    _game: poe_trader_core::types::GameVersion,
+    _game: poe_wayfinder_core::types::GameVersion,
     _window_title: &str,
     _hotkey: &str,
     _data: &crate::adapter::game_data_adapter::GameTables,
@@ -750,12 +752,12 @@ pub fn move_mouse(x: i32, y: i32) -> ExitCode {
 
     match unsafe { SetCursorPos(x, y) } {
         Ok(()) => {
-            println!("poe-trader: cursor moved to {x},{y}");
+            println!("poe-wayfinder: cursor moved to {x},{y}");
 
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("poe-trader: moving the cursor: {err}");
+            eprintln!("poe-wayfinder: moving the cursor: {err}");
 
             ExitCode::FAILURE
         }
@@ -764,7 +766,7 @@ pub fn move_mouse(x: i32, y: i32) -> ExitCode {
 
 #[cfg(not(windows))]
 pub fn move_mouse(_x: i32, _y: i32) -> ExitCode {
-    eprintln!("poe-trader: --move-mouse only works on Windows.");
+    eprintln!("poe-wayfinder: --move-mouse only works on Windows.");
 
     ExitCode::FAILURE
 }
@@ -790,13 +792,13 @@ pub fn focus_window(title: &str) -> ExitCode {
     let wanted = HSTRING::from(title);
 
     let Ok(handle) = (unsafe { FindWindowW(None, &wanted) }) else {
-        eprintln!("poe-trader: no window is titled {title:?}");
+        eprintln!("poe-wayfinder: no window is titled {title:?}");
 
         return ExitCode::FAILURE;
     };
 
     if handle.is_invalid() {
-        eprintln!("poe-trader: no window is titled {title:?}");
+        eprintln!("poe-wayfinder: no window is titled {title:?}");
 
         return ExitCode::FAILURE;
     }
@@ -807,7 +809,7 @@ pub fn focus_window(title: &str) -> ExitCode {
 
     let raised = raise_to_front(handle);
 
-    println!("poe-trader: {title:?} raised={raised}");
+    println!("poe-wayfinder: {title:?} raised={raised}");
 
     match raised {
         true => ExitCode::SUCCESS,
@@ -856,7 +858,7 @@ fn raise_to_front(handle: windows::Win32::Foundation::HWND) -> bool {
 
 #[cfg(not(windows))]
 pub fn focus_window(_title: &str) -> ExitCode {
-    eprintln!("poe-trader: --focus-window only works on Windows.");
+    eprintln!("poe-wayfinder: --focus-window only works on Windows.");
 
     ExitCode::FAILURE
 }

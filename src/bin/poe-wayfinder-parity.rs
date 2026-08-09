@@ -59,11 +59,11 @@ const WAIVED: &[(&str, &str)] = &[
     ),
     (
         "useTradeApi",
-        "a Vue composable wrapper, replaced by trade_api_adapter in poe-trader-app",
+        "a Vue composable wrapper, replaced by trade_api_adapter in poe-wayfinder-app",
     ),
     (
         "useBulkApi",
-        "a Vue composable wrapper, replaced by trade_api_adapter in poe-trader-app",
+        "a Vue composable wrapper, replaced by trade_api_adapter in poe-wayfinder-app",
     ),
     (
         "t",
@@ -376,7 +376,7 @@ fn top_level_functions(text: &str) -> Vec<String> {
 fn collect_our_source(root: &Path) -> String {
     let mut out = String::new();
 
-    for crate_dir in ["poe-trader-core/src", "poe-trader-app/src"] {
+    for crate_dir in ["poe-wayfinder-core/src", "poe-wayfinder-app/src"] {
         collect_rs(&root.join(crate_dir), &mut out);
     }
 
@@ -475,7 +475,7 @@ fn report(ref_files: &[RefFile], our_source: &str, floor: f64) -> ExitCode {
         ((ported + waived) as f64 / total as f64) * 100.0
     };
 
-    println!("poe-trader parity report");
+    println!("poe-wayfinder parity report");
     println!();
     println!("  reference functions : {total}");
     println!("  ported              : {ported}");

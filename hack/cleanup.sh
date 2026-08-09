@@ -50,7 +50,7 @@ remember_size() {
 stop_stray_overlays() {
     local running
     running=$(powershell.exe -Command \
-        "(Get-Process poe-trader* -ErrorAction SilentlyContinue | Measure-Object).Count" \
+        "(Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Measure-Object).Count" \
         2>/dev/null | tr -d '\r\n ')
 
     if [ -z "$running" ] || [ "$running" = "0" ]; then
@@ -62,14 +62,14 @@ stop_stray_overlays() {
 
     if [ "$APPLY" -eq 1 ]; then
         powershell.exe -Command \
-            "Get-Process poe-trader* -ErrorAction SilentlyContinue | Stop-Process -Force" \
+            "Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Stop-Process -Force" \
             >/dev/null 2>&1
         sleep 2
     fi
 }
 
 launcher_targets() {
-    grep -ho 'poe-trader[A-Za-z0-9._-]*\.exe' "$DEST"/*.cmd 2>/dev/null | sort -u
+    grep -ho 'poe-wayfinder[A-Za-z0-9._-]*\.exe' "$DEST"/*.cmd 2>/dev/null | sort -u
 }
 
 prune_deployed_exes() {
@@ -82,7 +82,7 @@ prune_deployed_exes() {
         echo "$protected" | sed 's/^/  /'
     fi
 
-    all=$(cd "$DEST" 2>/dev/null && ls -1t poe-trader-*.exe 2>/dev/null)
+    all=$(cd "$DEST" 2>/dev/null && ls -1t poe-wayfinder-*.exe 2>/dev/null)
 
     if [ -z "$all" ]; then
         echo "no deployed exe to prune"

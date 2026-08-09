@@ -233,7 +233,7 @@ mod tests {
     use std::io::Write;
 
     fn tempfile(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("poe-trader-log-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("poe-wayfinder-log-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         dir.join(name)

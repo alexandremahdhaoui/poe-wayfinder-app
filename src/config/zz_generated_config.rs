@@ -131,9 +131,9 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-/// Config for poe-trader.
+/// Config for poe-wayfinder.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PoeTraderConfig {
+pub struct PoeWayfinderConfig {
     /// Master switch for all outbound traffic. False makes every request fail before a socket opens. Use it to run the parser offline.
     pub network_enabled: bool,
     /// Refuse any request whose host is not in allowed_hosts. The reference hardcodes an allowlist in main/src/proxy.ts. This makes it config.
@@ -168,7 +168,7 @@ pub struct PoeTraderConfig {
     pub log_level: String,
 }
 
-impl PoeTraderConfig {
+impl PoeWayfinderConfig {
     /// Resolve config from flags then env then defaults.
     pub fn load(args: &[String]) -> Result<Self, ConfigError> {
         let mut known: HashMap<&str, bool> = HashMap::new();
@@ -416,9 +416,9 @@ impl PoeTraderConfig {
     }
 }
 
-/// Config for poe-trader-cli.
+/// Config for poe-wayfinder-cli.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PoeTraderCliConfig {
+pub struct PoeWayfinderCliConfig {
     /// Master switch for all outbound traffic.
     pub network_enabled: bool,
     /// Refuse any request whose host is not in allowed_hosts.
@@ -445,7 +445,7 @@ pub struct PoeTraderCliConfig {
     pub log_level: String,
 }
 
-impl PoeTraderCliConfig {
+impl PoeWayfinderCliConfig {
     /// Resolve config from flags then env then defaults.
     pub fn load(args: &[String]) -> Result<Self, ConfigError> {
         let mut known: HashMap<&str, bool> = HashMap::new();
@@ -638,9 +638,9 @@ impl PoeTraderCliConfig {
     }
 }
 
-/// Config for poe-trader-datagen.
+/// Config for poe-wayfinder-datagen.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PoeTraderDatagenConfig {
+pub struct PoeWayfinderDatagenConfig {
     /// Master switch for all outbound traffic.
     pub network_enabled: bool,
     /// Refuse any request whose host is not in allowed_hosts.
@@ -663,7 +663,7 @@ pub struct PoeTraderDatagenConfig {
     pub log_level: String,
 }
 
-impl PoeTraderDatagenConfig {
+impl PoeWayfinderDatagenConfig {
     /// Resolve config from flags then env then defaults.
     pub fn load(args: &[String]) -> Result<Self, ConfigError> {
         let mut known: HashMap<&str, bool> = HashMap::new();

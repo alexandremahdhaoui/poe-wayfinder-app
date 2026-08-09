@@ -46,7 +46,7 @@ pub fn should_draw(window: &GameWindow) -> bool {
 mod win {
     use super::{GameWindow, GameWindowSource, WindowError};
     use crate::types::overlay::WindowRect;
-    use poe_trader_core::controller::overlay::copy_key_sequence;
+    use poe_wayfinder_core::controller::overlay::copy_key_sequence;
 
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{HWND, POINT, RECT};

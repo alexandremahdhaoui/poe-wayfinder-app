@@ -178,7 +178,7 @@ pub enum HttpAdapterError {
     },
 }
 
-pub const DEFAULT_USER_AGENT: &str = concat!("poe-trader/", env!("CARGO_PKG_VERSION"));
+pub const DEFAULT_USER_AGENT: &str = concat!("poe-wayfinder/", env!("CARGO_PKG_VERSION"));
 
 pub struct HttpAdapter {
     policy: NetworkPolicy,
@@ -503,8 +503,8 @@ mod tests {
 
     #[test]
     fn the_default_user_agent_names_the_tool_and_its_version() {
-        assert!(DEFAULT_USER_AGENT.starts_with("poe-trader/"));
-        assert!(DEFAULT_USER_AGENT.len() > "poe-trader/".len());
+        assert!(DEFAULT_USER_AGENT.starts_with("poe-wayfinder/"));
+        assert!(DEFAULT_USER_AGENT.len() > "poe-wayfinder/".len());
     }
 
     #[test]

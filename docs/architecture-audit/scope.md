@@ -1,10 +1,10 @@
-# Architecture audit: poe-trader-app
+# Architecture audit: poe-wayfinder-app
 
 Measured 2026-08-08. Every number is from the tree, not from memory.
 
 ## The finding
 
-`poe-trader-core` is genuinely hexagonal. `poe-trader-app` is hexagonal in
+`poe-wayfinder-core` is genuinely hexagonal. `poe-wayfinder-app` is hexagonal in
 folder names only.
 
 The directories are right. The dependencies are not. Nothing enforces the
@@ -14,7 +14,7 @@ layering, so it did not happen.
 
 | Thing | Rule | Actual |
 |---|---|---|
-| `src/bin/poe-trader.rs` | main wires and starts drivers | **2091 lines**, 157 of them tests |
+| `src/bin/poe-wayfinder.rs` | main wires and starts drivers | **2091 lines**, 157 of them tests |
 | `run_overlay` | is a driver | ~700 lines, inside the binary |
 | `search` | is a controller | inside the binary |
 | App adapters with a port trait | all | **4 of 14** |
@@ -42,7 +42,7 @@ behaviour is only ever tested through the real one, or not at all.
 filesystem or the window state calls a free function. It cannot be given a fake
 one, so the controller cannot be tested without the real thing.
 
-**Coverage hid it.** `poe-trader-core` is pure and heavily tested by value, and
+**Coverage hid it.** `poe-wayfinder-core` is pure and heavily tested by value, and
 it is most of the line count. The app crate's few controllers use hand-written
 fakes. So the totals looked healthy while the layering did not exist.
 
@@ -65,7 +65,7 @@ same way PoE1 parity rotted before `parity-poe1` existed.**
 
 ## Non-goals
 
-- Rewriting `poe-trader-core`. It is already right.
+- Rewriting `poe-wayfinder-core`. It is already right.
 - Changing behaviour. This is a refactor; the press-check harness and
   `forge test-all` must pass unchanged at every step.
 - Touching the data pipeline or the parser.

@@ -1,6 +1,6 @@
 use crate::adapter::window_probe_adapter::WindowProbe;
 
-use poe_trader_core::controller::panel_visible::{explain, visibility, Measured, Visibility};
+use poe_wayfinder_core::controller::panel_visible::{explain, visibility, Measured, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Health {
@@ -43,7 +43,7 @@ mod tests {
 
     use crate::adapter::window_probe_adapter::{MockWindowProbe, ProbeError};
 
-    use poe_trader_core::controller::panel_visible::Rect;
+    use poe_wayfinder_core::controller::panel_visible::Rect;
 
     fn measured(x: i32, above_game: bool) -> Measured {
         Measured {
@@ -72,7 +72,7 @@ mod tests {
             .returning(|_, _| Ok(measured(1936, true)));
 
         let got = PanelHealthController::new(probe)
-            .check("poe-trader", "Path of Exile 2")
+            .check("poe-wayfinder", "Path of Exile 2")
             .expect("a reading");
 
         assert_eq!(got.verdict, Visibility::Visible);
@@ -87,7 +87,7 @@ mod tests {
             .returning(|_, _| Ok(measured(2904, true)));
 
         let got = PanelHealthController::new(probe)
-            .check("poe-trader", "Path of Exile 2")
+            .check("poe-wayfinder", "Path of Exile 2")
             .expect("a reading");
 
         assert_eq!(got.verdict, Visibility::OffScreen);
@@ -102,7 +102,7 @@ mod tests {
             .returning(|_, _| Ok(measured(1936, false)));
 
         let got = PanelHealthController::new(probe)
-            .check("poe-trader", "Path of Exile 2")
+            .check("poe-wayfinder", "Path of Exile 2")
             .expect("a reading");
 
         assert_eq!(got.verdict, Visibility::BehindGame);
@@ -113,12 +113,12 @@ mod tests {
         let mut probe = MockWindowProbe::new();
         probe.expect_measure().returning(|_, _| {
             Err(ProbeError::NotFound {
-                title: "poe-trader".to_string(),
+                title: "poe-wayfinder".to_string(),
             })
         });
 
         assert!(PanelHealthController::new(probe)
-            .check("poe-trader", "Path of Exile 2")
+            .check("poe-wayfinder", "Path of Exile 2")
             .is_none());
     }
 
@@ -127,12 +127,12 @@ mod tests {
         let mut probe = MockWindowProbe::new();
         probe
             .expect_measure()
-            .withf(|panel, game| panel == "poe-trader" && game == "Path of Exile 2")
+            .withf(|panel, game| panel == "poe-wayfinder" && game == "Path of Exile 2")
             .times(1)
             .returning(|_, _| Ok(measured(1936, true)));
 
         assert!(PanelHealthController::new(probe)
-            .check("poe-trader", "Path of Exile 2")
+            .check("poe-wayfinder", "Path of Exile 2")
             .is_some());
     }
 }

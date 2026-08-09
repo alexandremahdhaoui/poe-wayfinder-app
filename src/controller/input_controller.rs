@@ -1,6 +1,6 @@
 use crate::adapter::input_state_adapter::RawInput;
 
-use poe_trader_core::controller::overlay_lifecycle::HoldKey;
+use poe_wayfinder_core::controller::overlay_lifecycle::HoldKey;
 
 #[cfg_attr(test, mockall::automock)]
 pub trait InputState {

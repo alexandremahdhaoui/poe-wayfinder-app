@@ -2,19 +2,19 @@ use crate::adapter::config_store_adapter::ConfigStore;
 use crate::adapter::game_data_adapter::{cache_dir, resolve_both, GameTables};
 use crate::adapter::game_log_adapter::{GameLogWatcher, NoLog};
 use crate::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPolicy};
-use crate::config::PoeTraderConfig;
+use crate::config::PoeWayfinderConfig;
 use crate::controller::data_refresh_controller;
 use crate::controller::log_watch_controller::{LogSource, LogWatchController};
 use crate::controller::settings_controller::{RememberedSettings, SettingsController};
 use crate::logging::{Logger, Value};
 
-use poe_trader_core::controller::game_detect;
-use poe_trader_core::controller::trade_api::TradeUrls;
-use poe_trader_core::types::{GamePair, GameVersion};
+use poe_wayfinder_core::controller::game_detect;
+use poe_wayfinder_core::controller::trade_api::TradeUrls;
+use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 use std::time::Duration;
 
-pub fn build_http(cfg: &PoeTraderConfig, log: &Logger) -> Option<HttpAdapter> {
+pub fn build_http(cfg: &PoeWayfinderConfig, log: &Logger) -> Option<HttpAdapter> {
     let policy = NetworkPolicy::new(
         cfg.network_enabled,
         cfg.block_unlisted_hosts,
@@ -98,7 +98,7 @@ pub fn window_title(configured: &str, game: GameVersion) -> String {
 
 #[cfg(windows)]
 pub fn build_settings_for(
-    cfg: &PoeTraderConfig,
+    cfg: &PoeWayfinderConfig,
     game: GameVersion,
     pinned: Option<GameVersion>,
     origin: &GamePair<crate::adapter::game_data_adapter::Origin>,
@@ -121,7 +121,7 @@ pub fn build_settings_for(
 
 #[cfg(windows)]
 pub fn build_game_state(
-    cfg: &PoeTraderConfig,
+    cfg: &PoeWayfinderConfig,
     pinned: Option<GameVersion>,
     log: &Logger,
 ) -> (
@@ -156,7 +156,7 @@ pub fn build_game_state(
 }
 
 pub fn build_data(
-    cfg: &PoeTraderConfig,
+    cfg: &PoeWayfinderConfig,
     config_dir: &std::path::Path,
     pinned: Option<GameVersion>,
     log: &Logger,
@@ -328,7 +328,7 @@ pub struct RefreshPlan {
 }
 
 impl RefreshPlan {
-    pub fn new(cfg: &PoeTraderConfig, config_dir: &std::path::Path) -> Self {
+    pub fn new(cfg: &PoeWayfinderConfig, config_dir: &std::path::Path) -> Self {
         Self {
             network_enabled: cfg.network_enabled,
             block_unlisted_hosts: cfg.block_unlisted_hosts,
@@ -376,7 +376,7 @@ impl RefreshPlan {
         let log_level = self.log_level.clone();
 
         std::thread::spawn(move || {
-            let log = Logger::new(&log_level, "poe-trader-refresh");
+            let log = Logger::new(&log_level, "poe-wayfinder-refresh");
 
             let Ok(http) =
                 HttpAdapter::with_user_agent(policy, Duration::from_secs(60), &user_agent)
@@ -532,14 +532,14 @@ mod tests {
 
     #[test]
     fn with_no_flags_at_all_the_data_comes_from_inside_the_binary() {
-        let cfg = PoeTraderConfig::load(&[]).expect("defaults load with no arguments");
+        let cfg = PoeWayfinderConfig::load(&[]).expect("defaults load with no arguments");
 
         assert_eq!(cfg.data_dir, "", "--data-dir must not be required");
         assert_eq!(cfg.game, "auto", "--game must default to detection");
         assert_eq!(cfg.window_title, "", "the title is derived, not configured");
 
         let log = Logger::new("error", "test");
-        let dir = std::env::temp_dir().join("poe-trader-wiring-nodata");
+        let dir = std::env::temp_dir().join("poe-wayfinder-wiring-nodata");
 
         let (tables, _) = build_data(&cfg, &dir, None, &log).expect("the built in data loads");
 
@@ -548,14 +548,16 @@ mod tests {
     }
 
     fn plan_in(name: &str) -> (RefreshPlan, std::path::PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("poe-trader-refresh-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "poe-wayfinder-refresh-{}-{name}",
+            std::process::id()
+        ));
 
         let _ = std::fs::remove_dir_all(&dir);
 
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut cfg = PoeTraderConfig::load(&[]).expect("defaults");
+        let mut cfg = PoeWayfinderConfig::load(&[]).expect("defaults");
 
         cfg.network_enabled = false;
 

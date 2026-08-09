@@ -61,7 +61,7 @@ pub fn menu(state: &TrayState) -> Vec<MenuItem> {
     }
 
     out.push(MenuItem::action(
-        "Open poe-trader",
+        "Open poe-wayfinder",
         TrayAction::OpenStatus,
         true,
     ));
@@ -279,7 +279,7 @@ pub fn tooltip(state: &TrayState, game: &str, hotkey: &str) -> String {
         hotkey
     };
 
-    format!("poe-trader — {game} — {status}")
+    format!("poe-wayfinder — {game} — {status}")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -421,7 +421,7 @@ mod win {
         ready: &Sender<Result<(), TrayError>>,
         window_out: &Arc<Mutex<Option<isize>>>,
     ) -> Result<(), TrayError> {
-        let class_name = wide("poe_trader_tray");
+        let class_name = wide("poe_wayfinder_tray");
 
         let instance = unsafe { GetModuleHandleW(None) }.map_err(|_| TrayError::WindowClass)?;
 

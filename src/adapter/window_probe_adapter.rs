@@ -1,4 +1,4 @@
-use poe_trader_core::controller::panel_visible::{Measured, Rect};
+use poe_wayfinder_core::controller::panel_visible::{Measured, Rect};
 
 #[cfg_attr(test, mockall::automock)]
 pub trait WindowProbe: Send + Sync {

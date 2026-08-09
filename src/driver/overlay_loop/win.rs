@@ -27,14 +27,16 @@ use crate::logging::{Logger, Value};
 use crate::types::Hotkey;
 use crate::util::error_chain::render;
 
-use poe_trader_core::adapter::data_adapter::GameData;
-use poe_trader_core::controller::game_detect;
-use poe_trader_core::controller::overlay_lifecycle::{Input, Lifecycle, Point, Rect as LifeRect};
-use poe_trader_core::controller::press_coalesce;
-use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
-use poe_trader_core::types::{GamePair, GameVersion};
+use poe_wayfinder_core::adapter::data_adapter::GameData;
+use poe_wayfinder_core::controller::game_detect;
+use poe_wayfinder_core::controller::overlay_lifecycle::{
+    Input, Lifecycle, Point, Rect as LifeRect,
+};
+use poe_wayfinder_core::controller::press_coalesce;
+use poe_wayfinder_core::controller::price_check::{price_check, PriceCheckOptions};
+use poe_wayfinder_core::types::{GamePair, GameVersion};
 
-const PANEL_WINDOW_TITLE: &str = "poe-trader";
+const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 100;
 const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
@@ -111,7 +113,7 @@ where
         input: I,
         logs: L,
         remembered: R,
-        hold: poe_trader_core::controller::overlay_lifecycle::HoldKey,
+        hold: poe_wayfinder_core::controller::overlay_lifecycle::HoldKey,
         refresh: super::wiring::RefreshPlan,
         log: Logger,
     ) -> Result<Self, OverlayLoopError> {
@@ -633,7 +635,7 @@ where
 
     fn search_for(
         &mut self,
-        checked: &poe_trader_core::controller::price_check::PriceCheck,
+        checked: &poe_wayfinder_core::controller::price_check::PriceCheck,
     ) -> Result<u64, String> {
         let (result, exchange) = self
             .runtime
@@ -996,7 +998,7 @@ where
     }
 }
 
-fn rect_text(rect: poe_trader_core::controller::panel_visible::Rect) -> String {
+fn rect_text(rect: poe_wayfinder_core::controller::panel_visible::Rect) -> String {
     format!("{}x{} at {},{}", rect.width, rect.height, rect.x, rect.y)
 }
 
@@ -1080,9 +1082,9 @@ fn start_tray(
     }
 }
 
-pub fn hook_modifiers(hotkey: &Hotkey) -> poe_trader_core::controller::hotkey_match::Modifiers {
+pub fn hook_modifiers(hotkey: &Hotkey) -> poe_wayfinder_core::controller::hotkey_match::Modifiers {
     use crate::types::Modifier;
-    use poe_trader_core::controller::hotkey_match::Modifiers;
+    use poe_wayfinder_core::controller::hotkey_match::Modifiers;
 
     let has = |wanted: Modifier| hotkey.modifiers().contains(&wanted);
 

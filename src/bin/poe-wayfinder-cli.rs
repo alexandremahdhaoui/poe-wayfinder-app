@@ -1,31 +1,31 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-use poe_trader_app::adapter::config_store_adapter;
-use poe_trader_app::adapter::game_data_adapter::GameTables;
-use poe_trader_app::adapter::http_adapter::NetworkPolicy;
-use poe_trader_app::adapter::query_json_adapter::{to_exchange_json, to_json};
-use poe_trader_app::config::PoeTraderCliConfig;
-use poe_trader_app::logging::{Logger, Value};
-use poe_trader_core::controller::bulk::Endpoint;
-use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_app::adapter::config_store_adapter;
+use poe_wayfinder_app::adapter::game_data_adapter::GameTables;
+use poe_wayfinder_app::adapter::http_adapter::NetworkPolicy;
+use poe_wayfinder_app::adapter::query_json_adapter::{to_exchange_json, to_json};
+use poe_wayfinder_app::config::PoeWayfinderCliConfig;
+use poe_wayfinder_app::logging::{Logger, Value};
+use poe_wayfinder_core::controller::bulk::Endpoint;
+use poe_wayfinder_core::controller::price_check::{price_check, PriceCheckOptions};
+use poe_wayfinder_core::types::GameVersion;
 
 fn main() -> ExitCode {
     let should_send = std::env::args().any(|a| a == "--send");
 
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--send").collect();
 
-    let cfg = match PoeTraderCliConfig::load(&args) {
+    let cfg = match PoeWayfinderCliConfig::load(&args) {
         Ok(cfg) => cfg,
         Err(err) => {
-            eprintln!("poe-trader-cli: loading config: {err}");
+            eprintln!("poe-wayfinder-cli: loading config: {err}");
 
             return ExitCode::FAILURE;
         }
     };
 
-    let log = Logger::new(&cfg.log_level, "poe-trader-cli");
+    let log = Logger::new(&cfg.log_level, "poe-wayfinder-cli");
 
     let Some(game) = GameVersion::parse(&cfg.game) else {
         log.error("unknown game", &[("game", Value::Str(cfg.game.clone()))]);
@@ -207,16 +207,16 @@ fn main() -> ExitCode {
 }
 
 async fn send(
-    cfg: &PoeTraderCliConfig,
+    cfg: &PoeWayfinderCliConfig,
     game: GameVersion,
-    checked: &poe_trader_core::controller::price_check::PriceCheck,
+    checked: &poe_wayfinder_core::controller::price_check::PriceCheck,
     body: &serde_json::Value,
     log: &Logger,
 ) -> Result<(), String> {
-    use poe_trader_app::adapter::http_adapter::{HttpAdapter, HttpClient};
-    use poe_trader_app::adapter::rate_limit_adapter::LimiterSet;
-    use poe_trader_app::adapter::trade_api_adapter::TradeUrls;
-    use poe_trader_app::controller::price_check_controller::{
+    use poe_wayfinder_app::adapter::http_adapter::{HttpAdapter, HttpClient};
+    use poe_wayfinder_app::adapter::rate_limit_adapter::LimiterSet;
+    use poe_wayfinder_app::adapter::trade_api_adapter::TradeUrls;
+    use poe_wayfinder_app::controller::price_check_controller::{
         read_exchange_listings, read_listings, read_search_result,
     };
 
@@ -322,10 +322,10 @@ async fn send(
 }
 
 fn report_price(
-    listings: &[poe_trader_app::controller::price_check_controller::Listing],
+    listings: &[poe_wayfinder_app::controller::price_check_controller::Listing],
     log: &Logger,
 ) {
-    use poe_trader_app::controller::price_check_controller::suggested_price;
+    use poe_wayfinder_app::controller::price_check_controller::suggested_price;
 
     let Some((amount, currency)) = suggested_price(listings) else {
         log.warn("the listings carry no price to average", &[]);
@@ -333,7 +333,7 @@ fn report_price(
         return;
     };
 
-    let shown = poe_trader_core::controller::money::price(amount, &currency);
+    let shown = poe_wayfinder_core::controller::money::price(amount, &currency);
 
     let mut fields = vec![
         ("amount", Value::Str(shown.amount)),

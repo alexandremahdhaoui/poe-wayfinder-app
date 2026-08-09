@@ -35,6 +35,22 @@ cfg="refresh-check-config"
 rm -rf "$cfg"
 mkdir -p "$cfg"
 
+# Kill the overlay on the way out as well as on the way in.
+#
+# `timeout` no longer stops it. The exe is windows subsystem now, so launched
+# from WSL there is no parent console to attach to, the process detaches from
+# the interop proxy, and timeout kills the proxy while the Windows process runs
+# on forever. One orphan reached 26900 frames against a 120 second timeout.
+#
+# It matters more than a stray process: a leftover overlay owns the hotkey
+# registration and answers the next run's press itself, which reads as that run
+# passing when it never started.
+stop_overlays() {
+    powershell.exe -Command "Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
+}
+
+trap stop_overlays EXIT INT TERM
+
 fail=0
 
 say_fail() {

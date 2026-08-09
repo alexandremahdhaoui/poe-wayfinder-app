@@ -1,4 +1,4 @@
-use poe_trader_core::controller::elevation::Elevation;
+use poe_wayfinder_core::controller::elevation::Elevation;
 
 #[cfg(windows)]
 mod win {
@@ -94,7 +94,7 @@ pub fn window_elevation(_window: isize, _we_are_elevated: bool) -> Elevation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use poe_trader_core::controller::elevation::{hotkey_outlook, HotkeyOutlook};
+    use poe_wayfinder_core::controller::elevation::{hotkey_outlook, HotkeyOutlook};
 
     #[test]
     fn reading_our_own_elevation_never_panics() {

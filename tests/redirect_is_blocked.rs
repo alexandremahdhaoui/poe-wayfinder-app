@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use poe_trader_app::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPolicy};
+use poe_wayfinder_app::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPolicy};
 
 /// Serve one 302 then one 200, and report the port.
 ///

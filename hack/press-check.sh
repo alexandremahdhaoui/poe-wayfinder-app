@@ -57,7 +57,23 @@ exe="./$(basename "$exe")"
 
 # A leftover overlay owns the hotkey registration and answers the press itself,
 # which reads as this run passing when it never started. Cost an hour once.
-powershell.exe -Command "Get-Process poe-trader* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
+# Kill the overlay on the way out as well as on the way in.
+#
+# `timeout` no longer stops it. The exe is windows subsystem now, so launched
+# from WSL there is no parent console to attach to, the process detaches from
+# the interop proxy, and timeout kills the proxy while the Windows process runs
+# on forever. One orphan reached 26900 frames against a 120 second timeout.
+#
+# It matters more than a stray process: a leftover overlay owns the hotkey
+# registration and answers the next run's press itself, which reads as that run
+# passing when it never started.
+stop_overlays() {
+    powershell.exe -Command "Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
+}
+
+trap stop_overlays EXIT INT TERM
+
+stop_overlays
 sleep 2
 
 # The item files live in the repo so a fresh machine can run this. They are

@@ -16,16 +16,16 @@ if "%GAME%"=="" set GAME=poe2
 set DATA=data-%GAME%
 if not exist "%DATA%\stats.ndjson" set DATA=data
 
-echo Starting poe-trader for %GAME%, data from %DATA%
-echo Log: %CD%\poe-trader.log
+echo Starting poe-wayfinder for %GAME%, data from %DATA%
+echo Log: %CD%\poe-wayfinder.log
 echo.
 
-poe-trader.exe --game %GAME% --data-dir "%DATA%" > poe-trader.log 2>&1
+poe-wayfinder.exe --game %GAME% --data-dir "%DATA%" > poe-wayfinder.log 2>&1
 set CODE=%ERRORLEVEL%
 
 rem A blocked binary never runs, so the log is empty and the exit code is not
 rem one the program itself can produce.
-for %%A in (poe-trader.log) do set SIZE=%%~zA
+for %%A in (poe-wayfinder.log) do set SIZE=%%~zA
 
 if "%SIZE%"=="0" (
     echo.
@@ -54,9 +54,9 @@ if "%SIZE%"=="0" (
 
 if not "%CODE%"=="0" (
     echo.
-    echo The overlay exited with code %CODE%. The reason is in poe-trader.log:
+    echo The overlay exited with code %CODE%. The reason is in poe-wayfinder.log:
     echo.
-    type poe-trader.log
+    type poe-wayfinder.log
 )
 
 :end

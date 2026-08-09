@@ -2,15 +2,15 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use poe_trader_app::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPolicy};
-use poe_trader_app::adapter::trade_api_adapter::TradeUrls;
-use poe_trader_app::config::PoeTraderDatagenConfig;
-use poe_trader_app::controller::datagen_controller::{
+use poe_wayfinder_app::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPolicy};
+use poe_wayfinder_app::adapter::trade_api_adapter::TradeUrls;
+use poe_wayfinder_app::config::PoeWayfinderDatagenConfig;
+use poe_wayfinder_app::controller::datagen_controller::{
     augment_to_ndjson, build_augments, build_items, build_stats, build_trade_tags, item_to_ndjson,
     stat_to_ndjson,
 };
-use poe_trader_app::logging::{Logger, Value};
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_app::logging::{Logger, Value};
+use poe_wayfinder_core::types::GameVersion;
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -19,14 +19,14 @@ fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(err) => {
-            eprintln!("poe-trader-datagen: starting the runtime: {err}");
+            eprintln!("poe-wayfinder-datagen: starting the runtime: {err}");
 
             return ExitCode::FAILURE;
         }
     };
 
     if let Some(dir) = augments_only() {
-        let log = Logger::new("info", "poe-trader-datagen");
+        let log = Logger::new("info", "poe-wayfinder-datagen");
 
         write_augments(Path::new(&dir), GameVersion::Poe2, &log);
 
@@ -51,16 +51,16 @@ fn augments_only() -> Option<String> {
 async fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let cfg = match PoeTraderDatagenConfig::load(&args) {
+    let cfg = match PoeWayfinderDatagenConfig::load(&args) {
         Ok(cfg) => cfg,
         Err(err) => {
-            eprintln!("poe-trader-datagen: loading config: {err}");
+            eprintln!("poe-wayfinder-datagen: loading config: {err}");
 
             return ExitCode::FAILURE;
         }
     };
 
-    let log = Logger::new(&cfg.log_level, "poe-trader-datagen");
+    let log = Logger::new(&cfg.log_level, "poe-wayfinder-datagen");
 
     let policy = NetworkPolicy::new(
         cfg.network_enabled,
@@ -221,7 +221,7 @@ async fn run() -> ExitCode {
     );
 
     log.warn(
-        "weapon and armour categories, roll ranges and modifier tiers are not built here. They come from the game bundles and are vendored in poe-trader-data/tables.",
+        "weapon and armour categories, roll ranges and modifier tiers are not built here. They come from the game bundles and are vendored in poe-wayfinder-data/tables.",
         &[],
     );
 

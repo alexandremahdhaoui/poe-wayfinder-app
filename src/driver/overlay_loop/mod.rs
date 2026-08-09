@@ -27,7 +27,7 @@ pub enum OverlayLoopError {
 pub struct OverlaySettings {
     pub window_title: String,
     pub pinned_title: bool,
-    pub pinned_game: Option<poe_trader_core::types::GameVersion>,
+    pub pinned_game: Option<poe_wayfinder_core::types::GameVersion>,
     pub league: String,
     pub session: String,
     pub site_url: String,

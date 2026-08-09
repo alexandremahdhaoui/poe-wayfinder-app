@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const MAIN_BINARY: &str = "src/bin/poe-trader.rs";
+const MAIN_BINARY: &str = "src/bin/poe-wayfinder.rs";
 const MAIN_MAX_LINES: usize = 220;
 
-const SIBLING_CRATES: &[&str] = &["poe-trader-core", "poe-trader-data"];
+const SIBLING_CRATES: &[&str] = &["poe-wayfinder-core", "poe-wayfinder-data"];
 
 const WAIVED: &[(&str, &str)] = &[
     (
@@ -52,7 +52,7 @@ fn main() -> ExitCode {
     let src = root.join("src");
 
     if !src.is_dir() {
-        eprintln!("poe-trader-arch: no src directory at {}", src.display());
+        eprintln!("poe-wayfinder-arch: no src directory at {}", src.display());
 
         return ExitCode::FAILURE;
     }
@@ -239,7 +239,7 @@ fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-const NOT_A_CALLER: &str = "src/bin/poe-trader-uiparity.rs";
+const NOT_A_CALLER: &str = "src/bin/poe-wayfinder-uiparity.rs";
 
 pub struct Wiring {
     pub wired: usize,
@@ -500,7 +500,7 @@ fn report(sources: &[Source], everything: &[Source], ceiling: usize) -> ExitCode
     let wiring = wiring(everything);
     let (tests, untested) = test_counts(everything);
 
-    println!("poe-trader architecture report\n");
+    println!("poe-wayfinder architecture report\n");
     println!("  files scanned  : {}", everything.len());
     println!(
         "  wired          : {:.1}%  ({} of {} public functions have a caller)",
@@ -644,7 +644,7 @@ mod tests {
     fn an_adapter_may_import_core() {
         let got = layer_imports(&source(
             "src/adapter/thing_adapter.rs",
-            "use poe_trader_core::types::GameVersion;",
+            "use poe_wayfinder_core::types::GameVersion;",
         ));
 
         assert!(got.is_empty(), "{got:?}");
@@ -752,7 +752,7 @@ mod tests {
     fn a_binary_needs_no_mod_declaration() {
         let sources = vec![
             source("src/lib.rs", ""),
-            source("src/bin/poe-trader-arch.rs", ""),
+            source("src/bin/poe-wayfinder-arch.rs", ""),
         ];
 
         assert!(modules_are_declared(&sources).is_empty());
@@ -851,7 +851,7 @@ mod tests {
     #[test]
     fn the_capability_catalogue_is_not_treated_as_a_caller() {
         assert_eq!(
-            NOT_A_CALLER, "src/bin/poe-trader-uiparity.rs",
+            NOT_A_CALLER, "src/bin/poe-wayfinder-uiparity.rs",
             "the catalogue names every symbol it measures, so counting it would \
              make every measured function look alive"
         );

@@ -21,9 +21,9 @@
 
 use std::path::PathBuf;
 
-use poe_trader_app::adapter::game_data_adapter::GameTables;
-use poe_trader_core::controller::parse::magic_name::magic_base_type;
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_app::adapter::game_data_adapter::GameTables;
+use poe_wayfinder_core::controller::parse::magic_name::magic_base_type;
+use poe_wayfinder_core::types::GameVersion;
 
 /// The reference's four English cases, name and expected base.
 const CASES: [(&str, &str); 4] = [

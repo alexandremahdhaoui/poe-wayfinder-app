@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use poe_trader_app::adapter::game_data_adapter::GameTables;
-use poe_trader_core::adapter::data_adapter::Namespace;
-use poe_trader_core::adapter::StatLookup;
-use poe_trader_core::controller::parse::parse_clipboard;
-use poe_trader_core::controller::stat_match::placeholder::candidates;
-use poe_trader_core::types::category::ItemCategory;
-use poe_trader_core::types::item::BaseInfo;
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_app::adapter::game_data_adapter::GameTables;
+use poe_wayfinder_core::adapter::data_adapter::Namespace;
+use poe_wayfinder_core::adapter::StatLookup;
+use poe_wayfinder_core::controller::parse::parse_clipboard;
+use poe_wayfinder_core::controller::stat_match::placeholder::candidates;
+use poe_wayfinder_core::types::category::ItemCategory;
+use poe_wayfinder_core::types::item::BaseInfo;
+use poe_wayfinder_core::types::GameVersion;
 
 const ROLL: &str = "7";
 
@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     }
 
     if dirs.is_empty() {
-        eprintln!("poe-trader-datacheck: give at least one data directory");
+        eprintln!("poe-wayfinder-datacheck: give at least one data directory");
 
         return ExitCode::FAILURE;
     }
@@ -38,7 +38,7 @@ fn main() -> ExitCode {
         let tables = match GameTables::load(dir) {
             Ok(tables) => tables,
             Err(err) => {
-                eprintln!("poe-trader-datacheck: loading {}: {err}", dir.display());
+                eprintln!("poe-wayfinder-datacheck: loading {}: {err}", dir.display());
 
                 return ExitCode::FAILURE;
             }
@@ -90,7 +90,9 @@ fn main() -> ExitCode {
     }
 
     if worst < min {
-        eprintln!("\npoe-trader-datacheck: coverage {worst:.1}% is below the floor of {min:.1}%");
+        eprintln!(
+            "\npoe-wayfinder-datacheck: coverage {worst:.1}% is below the floor of {min:.1}%"
+        );
 
         return ExitCode::FAILURE;
     }

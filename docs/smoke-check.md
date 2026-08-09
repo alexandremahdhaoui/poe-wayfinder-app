@@ -16,8 +16,8 @@ nothing on the user's desktop needs to change.
 ## The check
 
 ```sh
-cd poe-trader-app && forge build poe-trader-windows
-cd "$WIN_OUTPUT_PATH" && timeout 12 ./poe-trader.exe \
+cd poe-wayfinder-app && forge build poe-wayfinder-windows
+cd "$WIN_OUTPUT_PATH" && timeout 12 ./poe-wayfinder.exe \
     --game poe2 --data-dir ./data --window-title "Program Manager"
 ```
 
@@ -62,7 +62,7 @@ focused and overwrites the user's clipboard. That is their state, not ours.
 The data directory and the window title are the only differences.
 
 ```sh
-./poe-trader.exe --game poe1 --data-dir ./data-poe1 \
+./poe-wayfinder.exe --game poe1 --data-dir ./data-poe1 \
     --window-title "Program Manager" --price-check-hotkey "Ctrl+Q"
 ```
 

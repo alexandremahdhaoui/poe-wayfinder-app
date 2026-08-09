@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use poe_trader_core::adapter::data_adapter::GameData;
-use poe_trader_core::controller::price_check::{price_check, PriceCheck, PriceCheckOptions};
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::adapter::data_adapter::GameData;
+use poe_wayfinder_core::controller::price_check::{price_check, PriceCheck, PriceCheckOptions};
+use poe_wayfinder_core::types::GameVersion;
 use thiserror::Error;
 
 use crate::adapter::clock_adapter::Clock;
@@ -13,12 +13,12 @@ use crate::adapter::trade_api_adapter::{
     error_in_body, fetch_batches, Endpoint, TradeApiError, TradeUrls,
 };
 
-pub use poe_trader_core::controller::price_summary::Quote as Listing;
+pub use poe_wayfinder_core::controller::price_summary::Quote as Listing;
 
 #[derive(Debug, Error)]
 pub enum PriceCheckError {
     #[error("parsing the item")]
-    Parse(#[source] poe_trader_core::controller::parse::ParseError),
+    Parse(#[source] poe_wayfinder_core::controller::parse::ParseError),
 
     #[error("searching the trade api")]
     Request(#[source] HttpAdapterError),
@@ -130,7 +130,9 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         checked: &PriceCheck,
     ) -> Result<(SearchResult, bool), PriceCheckError> {
         let exchange = match (checked.endpoint, &checked.trade_tag) {
-            (poe_trader_core::controller::bulk::Endpoint::Exchange, Some(tag)) => Some(tag.clone()),
+            (poe_wayfinder_core::controller::bulk::Endpoint::Exchange, Some(tag)) => {
+                Some(tag.clone())
+            }
             _ => None,
         };
 
@@ -254,7 +256,7 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         let estimated = self.search_limits.estimate_time(1, now, false);
         let clean = self.search_limits.estimate_time(1, now, true);
 
-        poe_trader_core::controller::price_summary::queue_note(estimated, clean)
+        poe_wayfinder_core::controller::price_summary::queue_note(estimated, clean)
     }
 }
 
@@ -451,7 +453,7 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
         .and_then(|a| a.get("online"))
         .is_some_and(|o| !o.is_null());
 
-    let bulk = poe_trader_core::controller::bulk::BulkListing {
+    let bulk = poe_wayfinder_core::controller::bulk::BulkListing {
         id: String::new(),
         exchange_amount: want_amount,
         item_amount: give_amount,
@@ -460,13 +462,13 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
         account_name: account.to_string(),
         character_name: String::new(),
         status: match online {
-            true => poe_trader_core::controller::bulk::SellerStatus::Online,
-            false => poe_trader_core::controller::bulk::SellerStatus::Offline,
+            true => poe_wayfinder_core::controller::bulk::SellerStatus::Online,
+            false => poe_wayfinder_core::controller::bulk::SellerStatus::Offline,
         },
     };
 
     Some(Listing {
-        amount: poe_trader_core::controller::bulk::exchange_rate(&bulk)?,
+        amount: poe_wayfinder_core::controller::bulk::exchange_rate(&bulk)?,
         currency: currency.to_string(),
         account: bulk.account_name,
         online,
@@ -729,9 +731,9 @@ mod tests {
 
     fn currency_check() -> PriceCheck {
         PriceCheck {
-            item: poe_trader_core::types::item::ParsedItem::default(),
-            query: poe_trader_core::types::query::TradeQuery::default(),
-            endpoint: poe_trader_core::controller::bulk::Endpoint::Exchange,
+            item: poe_wayfinder_core::types::item::ParsedItem::default(),
+            query: poe_wayfinder_core::types::query::TradeQuery::default(),
+            endpoint: poe_wayfinder_core::controller::bulk::Endpoint::Exchange,
             trade_tag: Some("divine".to_string()),
             sources: Vec::new(),
         }
@@ -739,9 +741,9 @@ mod tests {
 
     fn item_check() -> PriceCheck {
         PriceCheck {
-            item: poe_trader_core::types::item::ParsedItem::default(),
-            query: poe_trader_core::types::query::TradeQuery::default(),
-            endpoint: poe_trader_core::controller::bulk::Endpoint::Search,
+            item: poe_wayfinder_core::types::item::ParsedItem::default(),
+            query: poe_wayfinder_core::types::query::TradeQuery::default(),
+            endpoint: poe_wayfinder_core::controller::bulk::Endpoint::Search,
             trade_tag: None,
             sources: Vec::new(),
         }

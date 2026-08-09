@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use poe_trader_core::adapter::data_adapter::{ItemLookup, Namespace, StatLookup};
-use poe_trader_core::controller::filter::augments::{Augment, AugmentEffect};
-use poe_trader_core::types::item::BaseInfo;
-use poe_trader_core::types::stat::{Stat, StatBetter, StatHit, StatMatcher, TradeInfo};
-use poe_trader_core::types::ItemCategory;
-use poe_trader_core::types::{GamePair, GameVersion};
+use poe_wayfinder_core::adapter::data_adapter::{ItemLookup, Namespace, StatLookup};
+use poe_wayfinder_core::controller::filter::augments::{Augment, AugmentEffect};
+use poe_wayfinder_core::types::item::BaseInfo;
+use poe_wayfinder_core::types::stat::{Stat, StatBetter, StatHit, StatMatcher, TradeInfo};
+use poe_wayfinder_core::types::ItemCategory;
+use poe_wayfinder_core::types::{GamePair, GameVersion};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -173,8 +173,8 @@ impl GameTables {
         let name = game.as_str();
         let root = Path::new("<built in>").join(name);
 
-        let stats = parse_bytes::<WireStat>(poe_trader_data::stats(name), &root.join("stats"))?;
-        let items = parse_bytes::<WireItem>(poe_trader_data::items(name), &root.join("items"))?;
+        let stats = parse_bytes::<WireStat>(poe_wayfinder_data::stats(name), &root.join("stats"))?;
+        let items = parse_bytes::<WireItem>(poe_wayfinder_data::items(name), &root.join("items"))?;
 
         let mut tables = Self::from_wire(stats, items);
         tables.augments = Self::embedded_augments(game);
@@ -185,7 +185,7 @@ impl GameTables {
     fn embedded_augments(game: GameVersion) -> Vec<Augment> {
         let path = Path::new("<built in>").join(game.as_str()).join("augments");
 
-        match parse_bytes::<WireAugment>(poe_trader_data::augments(game.as_str()), &path) {
+        match parse_bytes::<WireAugment>(poe_wayfinder_data::augments(game.as_str()), &path) {
             Ok(wire) => augments_from_wire(wire),
             Err(_) => Vec::new(),
         }
@@ -282,7 +282,7 @@ impl GameTables {
                 craftable: w.craftable.is_some(),
                 map_tier: w.map.and_then(|m| m.tier),
                 category,
-                armour_bounds: poe_trader_core::types::item::ArmourBounds::default(),
+                armour_bounds: poe_wayfinder_core::types::item::ArmourBounds::default(),
                 unique_base: None,
             };
 
@@ -436,7 +436,7 @@ mod tests {
 
     fn tempdir() -> PathBuf {
         let base = std::env::temp_dir().join(format!(
-            "poe-trader-test-{}-{:?}",
+            "poe-wayfinder-test-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -526,7 +526,7 @@ mod tests {
     fn a_named_data_dir_that_is_missing_is_fatal_rather_than_silently_replaced() {
         let config = scratch("resolve-missing");
 
-        let got = GameTables::resolve("/nonexistent/poe-trader", &config, GameVersion::Poe2);
+        let got = GameTables::resolve("/nonexistent/poe-wayfinder", &config, GameVersion::Poe2);
 
         assert!(
             got.is_err(),
@@ -938,9 +938,9 @@ mod tests {
 
     #[test]
     fn a_missing_file_names_the_path() {
-        let err = GameTables::load(Path::new("/nonexistent/poe-trader")).unwrap_err();
+        let err = GameTables::load(Path::new("/nonexistent/poe-wayfinder")).unwrap_err();
 
-        assert!(err.to_string().contains("/nonexistent/poe-trader"));
+        assert!(err.to_string().contains("/nonexistent/poe-wayfinder"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use poe_trader_core::controller::overlay::{clipboard_kind, ClipboardKind};
+use poe_wayfinder_core::controller::overlay::{clipboard_kind, ClipboardKind};
 
 use thiserror::Error;
 

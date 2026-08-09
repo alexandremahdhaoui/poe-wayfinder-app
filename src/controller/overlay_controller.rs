@@ -1,11 +1,11 @@
-use poe_trader_core::controller::filter::augments::Augment;
-use poe_trader_core::controller::filter_view::{self, FilterView, FlagKey, RowKey};
-use poe_trader_core::controller::item_editor::{
+use poe_wayfinder_core::controller::filter::augments::Augment;
+use poe_wayfinder_core::controller::filter_view::{self, FilterView, FlagKey, RowKey};
+use poe_wayfinder_core::controller::item_editor::{
     augment_options, empty_sockets, AugmentOption, ItemEditor,
 };
-use poe_trader_core::controller::price_check::PriceCheck;
-use poe_trader_core::controller::price_summary::{estimate_from, Estimate, Quote};
-use poe_trader_core::controller::rate_limit::LimiterLine;
+use poe_wayfinder_core::controller::price_check::PriceCheck;
+use poe_wayfinder_core::controller::price_summary::{estimate_from, Estimate, Quote};
+use poe_wayfinder_core::controller::rate_limit::LimiterLine;
 
 use crate::adapter::game_window_adapter::{should_draw, GameWindow};
 use crate::types::overlay::{OverlayGeometry, OverlayState, WindowRect};
@@ -183,7 +183,7 @@ impl OverlayModel {
     }
 
     pub fn toggle_online(&mut self) {
-        use poe_trader_core::types::query::Status;
+        use poe_wayfinder_core::types::query::Status;
 
         let Some(check) = self.result.as_mut() else {
             return;
@@ -369,9 +369,9 @@ impl OverlayModel {
 mod tests {
     use super::*;
     use crate::types::overlay::Anchor;
-    use poe_trader_core::controller::bulk::Endpoint;
-    use poe_trader_core::types::item::ParsedItem;
-    use poe_trader_core::types::query::TradeQuery;
+    use poe_wayfinder_core::controller::bulk::Endpoint;
+    use poe_wayfinder_core::types::item::ParsedItem;
+    use poe_wayfinder_core::types::query::TradeQuery;
 
     fn game(foreground: bool) -> GameWindow {
         GameWindow {
@@ -585,9 +585,9 @@ mod tests {
     }
 
     fn life_check() -> PriceCheck {
-        use poe_trader_core::controller::filter::stat_filters::FilterSource;
-        use poe_trader_core::types::query::{Range, StatFilter, StatGroup};
-        use poe_trader_core::types::stat::StatRoll;
+        use poe_wayfinder_core::controller::filter::stat_filters::FilterSource;
+        use poe_wayfinder_core::types::query::{Range, StatFilter, StatGroup};
+        use poe_wayfinder_core::types::stat::StatRoll;
 
         let mut query = TradeQuery::default();
         query.stats.push(StatGroup::all(vec![StatFilter::range(
@@ -722,7 +722,7 @@ mod tests {
         m.finish(life_check(), 57);
 
         m.set_min(
-            RowKey::Numeric(poe_trader_core::controller::filter_view::NumericKey::ItemLevel),
+            RowKey::Numeric(poe_wayfinder_core::controller::filter_view::NumericKey::ItemLevel),
             Some(84.0),
         );
 

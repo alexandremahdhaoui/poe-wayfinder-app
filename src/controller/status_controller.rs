@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::types::GameVersion;
 
 use crate::adapter::rate_limit_adapter::LimiterLine;
 use crate::controller::data_refresh_controller::MAX_AGE;

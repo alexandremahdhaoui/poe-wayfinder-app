@@ -2,18 +2,18 @@
 
 use std::process::ExitCode;
 
-use poe_trader_app::adapter::config_store_adapter;
+use poe_wayfinder_app::adapter::config_store_adapter;
 #[cfg(windows)]
-use poe_trader_app::adapter::game_data_adapter::GameTables;
+use poe_wayfinder_app::adapter::game_data_adapter::GameTables;
 #[cfg(windows)]
-use poe_trader_app::adapter::http_adapter::HttpAdapter;
-use poe_trader_app::config::PoeTraderConfig;
-use poe_trader_app::controller::startup_controller;
-use poe_trader_app::driver::cli_driver;
-use poe_trader_app::driver::overlay_loop::wiring;
-use poe_trader_app::logging::{Logger, Value};
+use poe_wayfinder_app::adapter::http_adapter::HttpAdapter;
+use poe_wayfinder_app::config::PoeWayfinderConfig;
+use poe_wayfinder_app::controller::startup_controller;
+use poe_wayfinder_app::driver::cli_driver;
+use poe_wayfinder_app::driver::overlay_loop::wiring;
+use poe_wayfinder_app::logging::{Logger, Value};
 #[cfg(windows)]
-use poe_trader_core::types::{GamePair, GameVersion};
+use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 fn main() -> ExitCode {
     cli_driver::attach_console();
@@ -30,16 +30,16 @@ fn main() -> ExitCode {
 
     let args = wiring::strip_diagnostic_flags(args);
 
-    let cfg = match PoeTraderConfig::load(&args) {
+    let cfg = match PoeWayfinderConfig::load(&args) {
         Ok(cfg) => cfg,
         Err(err) => {
-            eprintln!("poe-trader: loading config: {err}");
+            eprintln!("poe-wayfinder: loading config: {err}");
 
             return ExitCode::FAILURE;
         }
     };
 
-    let log = Logger::new(&cfg.log_level, "poe-trader");
+    let log = Logger::new(&cfg.log_level, "poe-wayfinder");
 
     let http = match wiring::build_http(&cfg, &log) {
         Some(http) => http,
@@ -57,7 +57,7 @@ fn main() -> ExitCode {
                 "the configuration cannot start the overlay",
                 &[(
                     "error",
-                    Value::Str(poe_trader_app::util::error_chain::render(&err)),
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
                 )],
             );
 
@@ -101,7 +101,7 @@ fn main() -> ExitCode {
     #[cfg(not(windows))]
     {
         log.warn(
-            "the overlay only runs on Windows. Use poe-trader-cli here.",
+            "the overlay only runs on Windows. Use poe-wayfinder-cli here.",
             &[],
         );
 
@@ -113,23 +113,23 @@ fn main() -> ExitCode {
 
 #[cfg(windows)]
 fn run_overlay(
-    cfg: &PoeTraderConfig,
+    cfg: &PoeWayfinderConfig,
     config_dir: &std::path::Path,
     pinned: Option<GameVersion>,
     data: GamePair<GameTables>,
-    origin: GamePair<poe_trader_app::adapter::game_data_adapter::Origin>,
-    hotkey: poe_trader_app::types::Hotkey,
+    origin: GamePair<poe_wayfinder_app::adapter::game_data_adapter::Origin>,
+    hotkey: poe_wayfinder_app::types::Hotkey,
     http: HttpAdapter,
     log: Logger,
 ) -> ExitCode {
-    use poe_trader_app::adapter::clock_adapter::SystemClock;
-    use poe_trader_app::adapter::input_state_adapter::{hold_key_for, SystemInput};
-    use poe_trader_app::adapter::window_probe_adapter::SystemWindowProbe;
-    use poe_trader_app::controller::input_controller::InputController;
+    use poe_wayfinder_app::adapter::clock_adapter::SystemClock;
+    use poe_wayfinder_app::adapter::input_state_adapter::{hold_key_for, SystemInput};
+    use poe_wayfinder_app::adapter::window_probe_adapter::SystemWindowProbe;
+    use poe_wayfinder_app::controller::input_controller::InputController;
 
-    use poe_trader_app::controller::panel_health_controller::PanelHealthController;
-    use poe_trader_app::controller::price_check_controller::PriceCheckController;
-    use poe_trader_app::driver::overlay_loop::{wiring, OverlayLoopDriver};
+    use poe_wayfinder_app::controller::panel_health_controller::PanelHealthController;
+    use poe_wayfinder_app::controller::price_check_controller::PriceCheckController;
+    use poe_wayfinder_app::driver::overlay_loop::{wiring, OverlayLoopDriver};
 
     let (window, game) = wiring::build_game_state(cfg, pinned, &log);
 
@@ -177,7 +177,7 @@ fn run_overlay(
         remembered,
         hold,
         refresh,
-        Logger::new(&cfg.log_level, "poe-trader"),
+        Logger::new(&cfg.log_level, "poe-wayfinder"),
     ) {
         Ok(driver) => driver,
         Err(err) => {
@@ -185,7 +185,7 @@ fn run_overlay(
                 "starting the overlay",
                 &[(
                     "error",
-                    Value::Str(poe_trader_app::util::error_chain::render(&err)),
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
                 )],
             );
 
@@ -198,7 +198,7 @@ fn run_overlay(
             "running the overlay",
             &[(
                 "error",
-                Value::Str(poe_trader_app::util::error_chain::render(&err)),
+                Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
             )],
         );
 

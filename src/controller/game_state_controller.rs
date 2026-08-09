@@ -1,6 +1,6 @@
 use crate::adapter::game_window_adapter::{GameWindow, GameWindowSource};
-use poe_trader_core::controller::game_detect;
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::controller::game_detect;
+use poe_wayfinder_core::types::GameVersion;
 
 #[cfg_attr(test, mockall::automock)]
 pub trait GameState {

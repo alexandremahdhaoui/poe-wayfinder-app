@@ -1,4 +1,4 @@
-use poe_trader_core::types::GameVersion;
+use poe_wayfinder_core::types::GameVersion;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchOutcome {
