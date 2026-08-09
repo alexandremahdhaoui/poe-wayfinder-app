@@ -8,8 +8,12 @@ use thiserror::Error;
 use crate::adapter::clock_adapter::Clock;
 use crate::adapter::http_adapter::{HttpAdapterError, HttpClient, HttpResponse};
 use crate::adapter::query_json_adapter::{to_exchange_json, to_json};
-use crate::adapter::rate_limit_adapter::LimiterSet;
-use crate::adapter::trade_api_adapter::{error_in_body, Endpoint, TradeApiError, TradeUrls};
+use crate::adapter::rate_limit_adapter::{LimiterLine, LimiterSet};
+use crate::adapter::trade_api_adapter::{
+    error_in_body, fetch_batches, Endpoint, TradeApiError, TradeUrls,
+};
+
+pub use poe_trader_core::controller::price_summary::Quote as Listing;
 
 #[derive(Debug, Error)]
 pub enum PriceCheckError {
@@ -42,6 +46,26 @@ pub trait Prices {
         &mut self,
         checked: &PriceCheck,
     ) -> Result<(SearchResult, bool), PriceCheckError>;
+
+    async fn listings_for(
+        &mut self,
+        result: &SearchResult,
+        exchange: bool,
+    ) -> Result<Vec<Listing>, PriceCheckError>;
+
+    fn limiter_report(&mut self) -> Vec<LimiterLine>;
+
+    fn pacing_note(&mut self) -> Option<String>;
+
+    fn burst_hint(&mut self, count: u32) -> Duration;
+
+    fn limiter_names(&self) -> Vec<&'static str>;
+
+    fn search_endpoint(&self) -> String;
+
+    fn set_game(&mut self, game: GameVersion);
+
+    fn set_league(&mut self, league: &str);
 }
 
 pub struct PriceCheckController<H: HttpClient, C: Clock> {
@@ -51,6 +75,8 @@ pub struct PriceCheckController<H: HttpClient, C: Clock> {
     league: String,
     session_id: String,
     search_limits: LimiterSet,
+    fetch_limits: LimiterSet,
+    last_exchange: Option<HttpResponse>,
     game: GameVersion,
     latency: u32,
 }
@@ -64,6 +90,8 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
             league: league.to_string(),
             session_id: String::new(),
             search_limits: LimiterSet::conservative(),
+            fetch_limits: LimiterSet::conservative(),
+            last_exchange: None,
             game,
             latency: api_latency_seconds(),
         }
@@ -115,6 +143,11 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         let response = self.send_search(&body, exchange.is_some()).await?;
         let result = read_search_result(&response)?;
 
+        self.last_exchange = match exchange.is_some() {
+            true => Some(response),
+            false => None,
+        };
+
         Ok((result, exchange.is_some()))
     }
 
@@ -155,12 +188,73 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         Ok(response)
     }
 
+    async fn run_fetch(
+        &mut self,
+        result: &SearchResult,
+        exchange: bool,
+    ) -> Result<Vec<Listing>, PriceCheckError> {
+        if exchange {
+            let Some(response) = self.last_exchange.as_ref() else {
+                return Ok(Vec::new());
+            };
+
+            return read_exchange_listings(response);
+        }
+
+        if result.id.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let Some(batch) = fetch_batches(&result.result).into_iter().next() else {
+            return Ok(Vec::new());
+        };
+
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let wait = self.fetch_limits.wait_for(self.clock.now());
+
+        if wait > 0 {
+            self.clock.sleep(wait).await;
+        }
+
+        self.fetch_limits.borrow(self.clock.now());
+
+        let url = self.urls.fetch(&batch, &result.id);
+        let cookie = format!("POESESSID={}", self.session_id);
+        let mut headers: Vec<(&str, &str)> = vec![("accept", "application/json")];
+
+        if !self.session_id.is_empty() {
+            headers.push(("cookie", &cookie));
+        }
+
+        let response = self
+            .http
+            .get(&url, &headers)
+            .await
+            .map_err(PriceCheckError::Request)?;
+
+        self.fetch_limits
+            .adjust(&response.headers, self.latency, self.clock.now());
+
+        read_listings(&response)
+    }
+
     pub fn estimate_burst(&mut self, count: u32) -> Duration {
         let millis = self
             .search_limits
             .estimate_time(count, self.clock.now(), false);
 
         Duration::from_millis(millis)
+    }
+
+    fn queue_note(&mut self) -> Option<String> {
+        let now = self.clock.now();
+        let estimated = self.search_limits.estimate_time(1, now, false);
+        let clean = self.search_limits.estimate_time(1, now, true);
+
+        poe_trader_core::controller::price_summary::queue_note(estimated, clean)
     }
 }
 
@@ -170,6 +264,56 @@ impl<H: HttpClient, C: Clock> Prices for PriceCheckController<H, C> {
         checked: &PriceCheck,
     ) -> Result<(SearchResult, bool), PriceCheckError> {
         self.run_search(checked).await
+    }
+
+    async fn listings_for(
+        &mut self,
+        result: &SearchResult,
+        exchange: bool,
+    ) -> Result<Vec<Listing>, PriceCheckError> {
+        self.run_fetch(result, exchange).await
+    }
+
+    fn limiter_report(&mut self) -> Vec<LimiterLine> {
+        self.search_limits.limiter_report(self.clock.now())
+    }
+
+    fn pacing_note(&mut self) -> Option<String> {
+        self.queue_note()
+    }
+
+    fn burst_hint(&mut self, count: u32) -> Duration {
+        self.estimate_burst(count)
+    }
+
+    fn limiter_names(&self) -> Vec<&'static str> {
+        [Endpoint::Search, Endpoint::Fetch, Endpoint::Exchange]
+            .into_iter()
+            .map(limiter_for)
+            .collect()
+    }
+
+    fn search_endpoint(&self) -> String {
+        self.urls.search(&self.league)
+    }
+
+    fn set_game(&mut self, game: GameVersion) {
+        if self.game == game {
+            return;
+        }
+
+        self.game = game;
+        self.urls.set_game(game);
+        self.last_exchange = None;
+    }
+
+    fn set_league(&mut self, league: &str) {
+        if league.is_empty() || self.league == league {
+            return;
+        }
+
+        self.league = league.to_string();
+        self.last_exchange = None;
     }
 }
 
@@ -212,14 +356,6 @@ pub fn read_search_result(response: &HttpResponse) -> Result<SearchResult, Price
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0),
     })
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Listing {
-    pub amount: f64,
-    pub currency: String,
-    pub account: String,
-    pub online: bool,
 }
 
 pub fn read_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheckError> {
@@ -304,10 +440,6 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
     let give_amount = give.get("amount").and_then(serde_json::Value::as_f64)?;
     let currency = want.get("currency").and_then(serde_json::Value::as_str)?;
 
-    if give_amount == 0.0 {
-        return None;
-    }
-
     let account = listing
         .get("account")
         .and_then(|a| a.get("name"))
@@ -319,10 +451,24 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
         .and_then(|a| a.get("online"))
         .is_some_and(|o| !o.is_null());
 
+    let bulk = poe_trader_core::controller::bulk::BulkListing {
+        id: String::new(),
+        exchange_amount: want_amount,
+        item_amount: give_amount,
+        stock: 0,
+        is_mine: false,
+        account_name: account.to_string(),
+        character_name: String::new(),
+        status: match online {
+            true => poe_trader_core::controller::bulk::SellerStatus::Online,
+            false => poe_trader_core::controller::bulk::SellerStatus::Offline,
+        },
+    };
+
     Some(Listing {
-        amount: want_amount / give_amount,
+        amount: poe_trader_core::controller::bulk::exchange_rate(&bulk)?,
         currency: currency.to_string(),
-        account: account.to_string(),
+        account: bulk.account_name,
         online,
     })
 }
@@ -587,6 +733,7 @@ mod tests {
             query: poe_trader_core::types::query::TradeQuery::default(),
             endpoint: poe_trader_core::controller::bulk::Endpoint::Exchange,
             trade_tag: Some("divine".to_string()),
+            sources: Vec::new(),
         }
     }
 
@@ -596,6 +743,7 @@ mod tests {
             query: poe_trader_core::types::query::TradeQuery::default(),
             endpoint: poe_trader_core::controller::bulk::Endpoint::Search,
             trade_tag: None,
+            sources: Vec::new(),
         }
     }
 
@@ -782,6 +930,101 @@ mod tests {
 
             assert!(c.http.sent_urls()[0].contains(want), "{game:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn switching_game_moves_the_next_search_to_the_other_api() {
+        let http = CannedHttp::with(vec![ok_response(vec![]), ok_response(vec![])]);
+        let mut c = PriceCheckController::new(
+            http,
+            SteppingClock::new(),
+            "https://www.pathofexile.com",
+            GameVersion::Poe2,
+            "Standard",
+        );
+
+        c.send_search("{}", false).await.unwrap();
+
+        c.set_game(GameVersion::Poe1);
+
+        c.send_search("{}", false).await.unwrap();
+
+        let sent = c.http.sent_urls();
+
+        assert!(sent[0].contains("/api/trade2/search/"), "{sent:?}");
+        assert!(sent[1].contains("/api/trade/search/"), "{sent:?}");
+    }
+
+    #[tokio::test]
+    async fn switching_league_moves_the_next_search_to_the_other_league() {
+        let http = CannedHttp::with(vec![ok_response(vec![]), ok_response(vec![])]);
+        let mut c = PriceCheckController::new(
+            http,
+            SteppingClock::new(),
+            "https://www.pathofexile.com",
+            GameVersion::Poe2,
+            "Standard",
+        );
+
+        c.send_search("{}", false).await.unwrap();
+
+        c.set_league("Rise of the Abyssal");
+
+        c.send_search("{}", false).await.unwrap();
+
+        let sent = c.http.sent_urls();
+
+        assert!(sent[0].ends_with("/Standard"), "{sent:?}");
+        assert!(sent[1].contains("Rise%20of%20the%20Abyssal"), "{sent:?}");
+    }
+
+    #[test]
+    fn an_empty_league_is_ignored_rather_than_searching_nothing() {
+        let mut c = PriceCheckController::new(
+            CannedHttp::with(vec![]),
+            SteppingClock::new(),
+            "https://www.pathofexile.com",
+            GameVersion::Poe2,
+            "Standard",
+        );
+
+        c.set_league("");
+
+        assert_eq!(c.league, "Standard");
+    }
+
+    #[test]
+    fn the_endpoint_reported_is_the_one_that_will_be_searched() {
+        let mut c = PriceCheckController::new(
+            CannedHttp::with(vec![]),
+            SteppingClock::new(),
+            "https://www.pathofexile.com",
+            GameVersion::Poe2,
+            "Standard",
+        );
+
+        assert!(c.search_endpoint().contains("/api/trade2/search/Standard"));
+
+        c.set_game(GameVersion::Poe1);
+        c.set_league("Rise of the Abyssal");
+
+        assert!(c.search_endpoint().contains("/api/trade/search/"));
+        assert!(c.search_endpoint().contains("Rise%20of%20the%20Abyssal"));
+    }
+
+    #[test]
+    fn setting_the_game_it_already_has_changes_nothing() {
+        let mut c = PriceCheckController::new(
+            CannedHttp::with(vec![]),
+            SteppingClock::new(),
+            "https://www.pathofexile.com",
+            GameVersion::Poe2,
+            "Standard",
+        );
+
+        c.set_game(GameVersion::Poe2);
+
+        assert_eq!(c.game, GameVersion::Poe2);
     }
 
     #[test]

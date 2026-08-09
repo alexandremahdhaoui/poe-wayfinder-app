@@ -11,30 +11,35 @@ use crate::controller::input_controller::InputState;
 use crate::controller::log_watch_controller::LogSource;
 use crate::controller::overlay_controller::{Frame, OverlayModel};
 use crate::controller::panel_health_controller::PanelHealth;
-use crate::controller::price_check_controller::Prices;
+use crate::controller::price_check_controller::{Prices, SearchResult};
 use crate::controller::price_check_loop;
 use crate::controller::session_controller::Session;
+use crate::controller::settings_controller::RememberedSettings;
+use crate::controller::status_controller::{LeagueSource, Status};
 use crate::driver::hook_driver::HookDriver;
 use crate::driver::hotkey_driver::HotkeyDriver;
 use crate::driver::overlay_placement;
-use crate::driver::overlay_ui_driver::{overlay_viewport, paint, should_paint, UiEvent};
+use crate::driver::overlay_ui_driver::{
+    overlay_viewport, paint, should_paint, status_window, StatusEvent, UiEvent,
+};
 use crate::driver::tray_driver::{accepts_hotkey, TrayAction, TrayIcon, TrayState};
 use crate::logging::{Logger, Value};
-use crate::types::overlay::OverlayGeometry;
 use crate::types::Hotkey;
 use crate::util::error_chain::render;
 
 use poe_trader_core::adapter::data_adapter::GameData;
+use poe_trader_core::controller::game_detect;
 use poe_trader_core::controller::overlay_lifecycle::{Input, Lifecycle, Point, Rect as LifeRect};
 use poe_trader_core::controller::press_coalesce;
 use poe_trader_core::controller::price_check::{price_check, PriceCheckOptions};
-use poe_trader_core::types::GameVersion;
+use poe_trader_core::types::{GamePair, GameVersion};
 
 const PANEL_WINDOW_TITLE: &str = "poe-trader";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 100;
+const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
 
-pub struct OverlayLoopDriver<W, C, P, H, D, I, L>
+pub struct OverlayLoopDriver<W, C, P, H, D, I, L, R>
 where
     W: GameState + 'static,
     I: InputState + 'static,
@@ -43,12 +48,14 @@ where
     H: PanelHealth + 'static,
     D: GameData + 'static,
     L: LogSource + 'static,
+    R: RememberedSettings + 'static,
 {
     window: W,
     copier: C,
     health: H,
     input: I,
     logs: L,
+    remembered: R,
     session: Session,
     life: Lifecycle,
     last_tick: Instant,
@@ -62,7 +69,7 @@ where
     log: Logger,
     settings: OverlaySettings,
     game: GameVersion,
-    data: D,
+    data: GamePair<D>,
     options: PriceCheckOptions,
     frames: i64,
     started: bool,
@@ -70,11 +77,16 @@ where
     window_was_found: bool,
     was_showing: bool,
     probe_due: bool,
+    last_game_check: Instant,
+    status_open: bool,
+    hotkey_text: String,
+    refresh: super::wiring::RefreshPlan,
     last_search: Option<SearchOutcome>,
     pending: Vec<UiEvent>,
+    hold_open: bool,
 }
 
-impl<W, C, P, H, D, I, L> OverlayLoopDriver<W, C, P, H, D, I, L>
+impl<W, C, P, H, D, I, L, R> OverlayLoopDriver<W, C, P, H, D, I, L, R>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -83,12 +95,13 @@ where
     D: GameData + 'static,
     I: InputState + 'static,
     L: LogSource + 'static,
+    R: RememberedSettings + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         settings: OverlaySettings,
         game: GameVersion,
-        data: D,
+        data: GamePair<D>,
         stats: usize,
         hotkey: &Hotkey,
         window: W,
@@ -97,11 +110,12 @@ where
         health: H,
         input: I,
         logs: L,
+        remembered: R,
         hold: poe_trader_core::controller::overlay_lifecycle::HoldKey,
+        refresh: super::wiring::RefreshPlan,
         log: Logger,
     ) -> Result<Self, OverlayLoopError> {
         report_window(&window, &log);
-        crate::driver::cli_driver::report_input(&log);
 
         let hotkeys = start_registration(hotkey, &log);
         let hook = start_hook(hotkey, &log);
@@ -121,12 +135,31 @@ where
             .build()
             .map_err(|source| OverlayLoopError::Runtime { source })?;
 
-        let mut model = OverlayModel::new(OverlayGeometry::default());
+        let mut model = OverlayModel::new(super::wiring::build_geometry());
 
         model.start(window.cursor());
         model.fail(&format!(
             "Ready. Press {hotkey} with the cursor over an item."
         ));
+
+        let mut settings = settings;
+        let mut prices = prices;
+
+        if let Some(league) = remembered.last_league() {
+            if league != settings.league {
+                log.info(
+                    "using the league remembered from the last run",
+                    &[
+                        ("configured", Value::Str(settings.league.clone())),
+                        ("remembered", Value::Str(league.clone())),
+                    ],
+                );
+
+                prices.set_league(&league);
+
+                settings.league = league;
+            }
+        }
 
         let window_was_found = window.window().is_some();
 
@@ -136,6 +169,7 @@ where
             health,
             input,
             logs,
+            remembered,
             session: Session::from_config(&settings.league),
             life: Lifecycle::new(hold),
             last_tick: Instant::now(),
@@ -157,8 +191,13 @@ where
             window_was_found,
             was_showing: false,
             probe_due: false,
+            last_game_check: Instant::now(),
+            status_open: true,
+            hotkey_text: hotkey.to_string(),
+            refresh,
             last_search: None,
             pending: Vec::new(),
+            hold_open: super::wiring::panel_hold(),
         })
     }
 
@@ -196,9 +235,15 @@ where
             self.run_price_check();
         }
 
+        self.follow_game();
         self.watch_logs();
+        self.draw_status(ctx);
 
-        let found = self.window.window();
+        let found = self.window.window().map(|mut window| {
+            window.is_foreground = window.is_foreground || self.hold_open;
+
+            window
+        });
 
         self.refresh_tray(found.is_some());
         self.report_window_change(found.is_some(), found);
@@ -238,11 +283,16 @@ where
 
         let before = self.life.phase();
 
+        let pointer = match self.hold_open {
+            true => self.life.origin(),
+            false => Point { x, y },
+        };
+
         self.life.tick(Input {
-            pointer: Point { x, y },
+            pointer,
             hold_down: self.input.hold_down(),
-            alt_alone: self.input.alt_alone(),
-            clicked: self.input.mouse_down(),
+            alt_alone: !self.hold_open && self.input.alt_alone(),
+            clicked: !self.hold_open && self.input.mouse_down(),
             elapsed_ms: elapsed,
         });
 
@@ -287,6 +337,8 @@ where
 
         self.settings.league = league.to_string();
         self.tray_state.league = Some(league.to_string());
+        self.remembered.remember_league(league);
+        self.prices.set_league(league);
     }
 
     fn heartbeat(&mut self) {
@@ -317,7 +369,62 @@ where
                     self.model.hide();
                     self.life.dismiss();
                 }
-                UiEvent::ToggleFilter(_) => {}
+                UiEvent::ToggleRow(key) => {
+                    let enabled = self
+                        .model
+                        .filters()
+                        .numerics
+                        .iter()
+                        .chain(self.model.filters().stats.iter())
+                        .find(|row| row.key == key)
+                        .map(|row| row.enabled)
+                        .unwrap_or(false);
+
+                    self.model.set_enabled(key, !enabled);
+                }
+                UiEvent::SetMin(key, value) => self.model.set_min(key, value),
+                UiEvent::SetMax(key, value) => self.model.set_max(key, value),
+                UiEvent::ToggleFlag(key) => {
+                    let flag = self
+                        .model
+                        .filters()
+                        .flags
+                        .iter()
+                        .find(|row| row.key == key)
+                        .map(|row| (row.enabled, row.value))
+                        .unwrap_or((false, true));
+
+                    self.model.set_flag(key, !flag.0, flag.1);
+                }
+                UiEvent::InvertFlag(key) => {
+                    let flag = self
+                        .model
+                        .filters()
+                        .flags
+                        .iter()
+                        .find(|row| row.key == key)
+                        .map(|row| row.value)
+                        .unwrap_or(true);
+
+                    self.model.set_flag(key, true, !flag);
+                }
+                UiEvent::SetAllStats(enabled) => self.model.set_all_stats(enabled),
+                UiEvent::CycleName => self.model.cycle_name(),
+                UiEvent::ToggleOnline => self.model.toggle_online(),
+                UiEvent::ChooseAugment(reference) => {
+                    let augments: Vec<_> = self.data.get(self.game).augments().to_vec();
+
+                    if self.model.choose_augment(&reference, &augments) {
+                        self.log.info(
+                            "an augment was socketed into the item",
+                            &[("augment", Value::Str(reference))],
+                        );
+                    }
+                }
+                UiEvent::ClearAugment => {
+                    self.model.clear_augment();
+                    self.log.info("the augment was taken back off", &[]);
+                }
             }
         }
 
@@ -346,6 +453,72 @@ where
                 TrayAction::Research => self.research(),
 
                 TrayAction::RebuildData => self.rebuild_data(),
+
+                TrayAction::OpenStatus => self.show_status(true),
+            }
+        }
+    }
+
+    fn show_status(&mut self, open: bool) {
+        if self.status_open == open {
+            return;
+        }
+
+        self.status_open = open;
+
+        self.log.info(
+            match open {
+                true => "the status window is open",
+                false => "the status window is hidden. The tray icon brings it back.",
+            },
+            &[],
+        );
+    }
+
+    fn status(&mut self) -> Status {
+        Status {
+            game: match self.window.window().is_some() {
+                true => Some(self.game),
+                false => None,
+            },
+            pinned: self.settings.pinned_game.is_some(),
+            window_title: self.settings.window_title.clone(),
+            hotkey: self.hotkey_text.clone(),
+            league: self.settings.league.clone(),
+            league_source: match self.session.league_source() {
+                Some(_) => LeagueSource::GameLog,
+                None => LeagueSource::Configured,
+            },
+            origin: self.settings.data_origin.clone(),
+            stats: self.data.get(self.game).stat_count(),
+            items: self.data.get(self.game).item_name_count(),
+            augments: self.data.get(self.game).augments().len(),
+            last_refresh: self.refresh.last_refresh(self.game),
+            paused: self.tray_state.paused,
+            network: self.settings.network,
+            limits: self.prices.limiter_report(),
+            note: self.prices.pacing_note(),
+        }
+    }
+
+    fn draw_status(&mut self, ctx: &egui::Context) {
+        if !self.status_open {
+            return;
+        }
+
+        let status = self.status();
+
+        for event in status_window(ctx, &status, std::time::SystemTime::now()) {
+            match event {
+                StatusEvent::HideToTray => self.show_status(false),
+                StatusEvent::Quit => {
+                    self.log.info("quit chosen from the status window", &[]);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                StatusEvent::RefreshNow => self.rebuild_data(),
+                StatusEvent::TogglePaused => {
+                    self.tray_state.paused = !self.tray_state.paused;
+                }
             }
         }
     }
@@ -369,37 +542,93 @@ where
     }
 
     fn research(&mut self) {
-        let Some(checked) = self.model.result().cloned() else {
+        let Some(checked) = self.model.edited_check() else {
             self.model.warn("Nothing to search again yet.");
 
             return;
         };
 
-        self.log.info("searching again", &[]);
+        self.log.info(
+            "searching again",
+            &[(
+                "filters",
+                Value::Int(self.model.filters().enabled_count() as i64),
+            )],
+        );
 
         match self.search_for(&checked) {
-            Ok(total) => self.model.finish(checked, total),
+            Ok(total) => {
+                self.model.finish(checked, total);
+                self.after_search();
+            }
             Err(message) => self.model.warn(&message),
         }
     }
 
-    fn rebuild_data(&mut self) {
-        self.log.info("rebuilding the game data", &[]);
+    fn after_search(&mut self) {
+        let augments: Vec<_> = self.data.get(self.game).augments().to_vec();
 
-        match rebuild_data(self.game, &self.settings.data_dir) {
-            Ok(()) => self
-                .model
-                .warn("Rebuilding the data. Restart when it finishes."),
-            Err(message) => {
-                self.log.error(
-                    "rebuilding the game data",
-                    &[("error", Value::Str(message.clone()))],
+        self.model.offer_augments(&augments);
+        self.model.set_limits(self.prices.limiter_report());
+
+        if let Some(note) = self.prices.pacing_note() {
+            self.model.note(&note);
+        }
+
+        let Some(outcome) = self.last_search.clone() else {
+            return;
+        };
+
+        let result = SearchResult {
+            id: outcome.id.clone(),
+            result: outcome.ids.clone(),
+            total: outcome.total,
+        };
+
+        let listings = self
+            .runtime
+            .block_on(self.prices.listings_for(&result, outcome.exchange));
+
+        match listings {
+            Ok(listings) => {
+                self.log.info(
+                    "read the listings",
+                    &[("listings", Value::Int(listings.len() as i64))],
                 );
 
-                self.model
-                    .warn(&format!("Could not rebuild the data: {message}"));
+                self.model.set_listings(listings);
             }
+            Err(err) => self.log.warn(
+                "the listings could not be read, so no price is offered",
+                &[("error", Value::Str(render(&err)))],
+            ),
         }
+
+        self.model.set_limits(self.prices.limiter_report());
+
+        self.log.debug(
+            "rate limit pools",
+            &[
+                ("pools", Value::Str(self.prices.limiter_names().join(","))),
+                (
+                    "burst_millis",
+                    Value::Int(self.prices.burst_hint(3).as_millis() as i64),
+                ),
+            ],
+        );
+    }
+
+    fn rebuild_data(&mut self) {
+        self.log.info(
+            "refreshing the game data on request",
+            &[("game", Value::Str(self.game.as_str().to_string()))],
+        );
+
+        self.refresh.forget(self.game);
+        self.refresh.start(vec![self.game], &self.log);
+
+        self.model
+            .warn("Refreshing the game data. It is used from the next launch.");
     }
 
     fn search_for(
@@ -423,6 +652,7 @@ where
             total,
             id: result.id,
             exchange,
+            ids: result.result,
         });
 
         Ok(total)
@@ -486,8 +716,8 @@ where
         let Self {
             model,
             copier,
-            settings,
             data,
+            game,
             options,
             runtime,
             prices,
@@ -502,8 +732,16 @@ where
             model,
             cursor,
             || copier.copy(),
-            |text| price_check(text, data, options).map_err(|e| render(&e)),
+            |text| price_check(text, data.get(*game), options).map_err(|e| render(&e)),
             |checked| {
+                log.info(
+                    "searching",
+                    &[
+                        ("url", Value::Str(prices.search_endpoint())),
+                        ("game", Value::Str(game.as_str().to_string())),
+                    ],
+                );
+
                 let (result, exchange) = runtime
                     .block_on(prices.search_checked(checked))
                     .map_err(|e| render(&e))
@@ -520,6 +758,7 @@ where
                     total,
                     id: result.id,
                     exchange,
+                    ids: result.result,
                 });
 
                 Ok(total)
@@ -527,10 +766,24 @@ where
         );
 
         match outcome {
-            price_check_loop::Outcome::Priced { total } => self.log.info(
-                "price check finished",
-                &[("listings", Value::Int(total as i64))],
-            ),
+            price_check_loop::Outcome::Priced { total } => {
+                self.after_search();
+
+                let view = self.model.filters();
+
+                self.log.info(
+                    "price check finished",
+                    &[
+                        ("listings", Value::Int(total as i64)),
+                        ("stat_rows", Value::Int(view.stats.len() as i64)),
+                        ("numeric_rows", Value::Int(view.numerics.len() as i64)),
+                        ("flag_rows", Value::Int(view.flags.len() as i64)),
+                        ("enabled", Value::Int(view.enabled_count() as i64)),
+                        ("augments", Value::Int(self.model.augments().len() as i64)),
+                        ("quotes", Value::Int(self.model.listings().len() as i64)),
+                    ],
+                );
+            }
             other => self.log.warn(
                 "price check did not produce a price",
                 &[("outcome", Value::Str(format!("{other:?}")))],
@@ -538,6 +791,56 @@ where
         }
 
         self.drain_hotkeys();
+    }
+
+    fn follow_game(&mut self) {
+        if self.settings.pinned_game.is_some() || self.settings.pinned_title {
+            return;
+        }
+
+        if self.last_game_check.elapsed() < GAME_CHECK_EVERY {
+            return;
+        }
+
+        self.last_game_check = Instant::now();
+
+        let Some(found) = self.window.game_changed_from(self.game) else {
+            return;
+        };
+
+        let was = self.game;
+
+        self.game = found;
+        self.options = PriceCheckOptions::new(found);
+        self.settings.window_title = game_detect::title_for(found).to_string();
+
+        self.window.retarget(found);
+        self.prices.set_game(found);
+
+        if let Some(path) = super::wiring::default_client_log(found) {
+            self.logs.watch(&path);
+        }
+
+        self.tray_state.stat_count = self.data.get(found).stat_count();
+        self.last_search = None;
+
+        self.model.fail(&format!(
+            "Now watching {}. Press the hotkey over an item.",
+            self.settings.window_title
+        ));
+
+        self.log.info(
+            "the game changed",
+            &[
+                ("from", Value::Str(was.as_str().to_string())),
+                ("to", Value::Str(found.as_str().to_string())),
+                (
+                    "window_title",
+                    Value::Str(self.settings.window_title.clone()),
+                ),
+                ("stats", Value::Int(self.tray_state.stat_count as i64)),
+            ],
+        );
     }
 
     fn refresh_tray(&mut self, found: bool) {
@@ -675,7 +978,7 @@ where
     }
 }
 
-impl<W, C, P, H, D, I, L> Drop for OverlayLoopDriver<W, C, P, H, D, I, L>
+impl<W, C, P, H, D, I, L, R> Drop for OverlayLoopDriver<W, C, P, H, D, I, L, R>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -684,6 +987,7 @@ where
     D: GameData + 'static,
     I: InputState + 'static,
     L: LogSource + 'static,
+    R: RememberedSettings + 'static,
 {
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {
@@ -808,27 +1112,4 @@ fn open_in_browser(url: &str) {
             SW_SHOWNORMAL,
         );
     }
-}
-
-fn rebuild_data(game: GameVersion, data_dir: &str) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("finding this binary: {e}"))?;
-
-    let builder = exe
-        .parent()
-        .ok_or_else(|| "this binary has no directory".to_string())?
-        .join("poe-trader-datagen.exe");
-
-    if !builder.exists() {
-        return Err(format!(
-            "{} is not next to the overlay",
-            builder.file_name().unwrap_or_default().to_string_lossy()
-        ));
-    }
-
-    std::process::Command::new(&builder)
-        .args(["--game", game.as_str(), "--out-dir", data_dir])
-        .spawn()
-        .map_err(|e| format!("starting {}: {e}", builder.display()))?;
-
-    Ok(())
 }

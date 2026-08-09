@@ -6,7 +6,8 @@ use poe_trader_app::adapter::http_adapter::{HttpAdapter, HttpClient, NetworkPoli
 use poe_trader_app::adapter::trade_api_adapter::TradeUrls;
 use poe_trader_app::config::PoeTraderDatagenConfig;
 use poe_trader_app::controller::datagen_controller::{
-    build_items, build_stats, build_trade_tags, item_to_ndjson, stat_to_ndjson,
+    augment_to_ndjson, build_augments, build_items, build_stats, build_trade_tags, item_to_ndjson,
+    stat_to_ndjson,
 };
 use poe_trader_app::logging::{Logger, Value};
 use poe_trader_core::types::GameVersion;
@@ -24,7 +25,27 @@ fn main() -> ExitCode {
         }
     };
 
+    if let Some(dir) = augments_only() {
+        let log = Logger::new("info", "poe-trader-datagen");
+
+        write_augments(Path::new(&dir), GameVersion::Poe2, &log);
+
+        return ExitCode::SUCCESS;
+    }
+
     runtime.block_on(run())
+}
+
+fn augments_only() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        if arg == "--augments-only" {
+            return args.next();
+        }
+    }
+
+    None
 }
 
 async fn run() -> ExitCode {
@@ -187,6 +208,8 @@ async fn run() -> ExitCode {
         );
     }
 
+    write_augments(out_dir, game, &log);
+
     let with_category = items.iter().filter(|i| i.category.is_some()).count();
 
     log.info(
@@ -203,6 +226,70 @@ async fn run() -> ExitCode {
     );
 
     ExitCode::SUCCESS
+}
+
+const AUGMENT_SOURCES: &[&str] = &[
+    "../reference/Exiled-Exchange-2/renderer/public/data/en/items.ndjson",
+    "reference/Exiled-Exchange-2/renderer/public/data/en/items.ndjson",
+];
+
+fn write_augments(out_dir: &Path, game: GameVersion, log: &Logger) {
+    if game != GameVersion::Poe2 {
+        log.info(
+            "runes and soul cores are Path of Exile 2 only, so no augment file is written",
+            &[],
+        );
+
+        return;
+    }
+
+    let Some(source) = AUGMENT_SOURCES.iter().map(Path::new).find(|p| p.exists()) else {
+        log.warn(
+            "no augment source found, so the item editor will have nothing to offer. Check out the reference beside this workspace and run datagen again.",
+            &[],
+        );
+
+        return;
+    };
+
+    let body = match std::fs::read_to_string(source) {
+        Ok(body) => body,
+        Err(err) => {
+            log.error(
+                "reading the augment source",
+                &[
+                    ("path", Value::Str(source.display().to_string())),
+                    ("error", Value::Str(err.to_string())),
+                ],
+            );
+
+            return;
+        }
+    };
+
+    let records = build_augments(&body);
+    let lines: Vec<String> = records.iter().map(augment_to_ndjson).collect();
+    let path = out_dir.join("augments.ndjson");
+
+    if let Err(err) = std::fs::write(&path, format!("{}\n", lines.join("\n"))) {
+        log.error(
+            "writing the augment file",
+            &[
+                ("path", Value::Str(path.display().to_string())),
+                ("error", Value::Str(err.to_string())),
+            ],
+        );
+
+        return;
+    }
+
+    log.info(
+        "wrote data file",
+        &[
+            ("path", Value::Str(path.display().to_string())),
+            ("records", Value::Int(records.len() as i64)),
+        ],
+    );
 }
 
 async fn fetch(http: &HttpAdapter, url: &str, log: &Logger) -> Option<String> {

@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use poe_trader_core::adapter::data_adapter::{ItemLookup, Namespace, StatLookup};
+use poe_trader_core::controller::filter::augments::{Augment, AugmentEffect};
 use poe_trader_core::types::item::BaseInfo;
 use poe_trader_core::types::stat::{Stat, StatBetter, StatHit, StatMatcher, TradeInfo};
-use poe_trader_core::types::GameVersion;
 use poe_trader_core::types::ItemCategory;
+use poe_trader_core::types::{GamePair, GameVersion};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -93,11 +94,68 @@ struct WireItem {
     map: Option<WireMap>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct WireAugmentEffect {
+    reference: String,
+    #[serde(rename = "tradeId")]
+    trade_id: String,
+    value: f64,
+    categories: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireAugment {
+    #[serde(rename = "refName")]
+    reference_name: String,
+    name: String,
+    effects: Vec<WireAugmentEffect>,
+}
+
 #[derive(Debug, Default)]
 pub struct GameTables {
     stats: Vec<Stat>,
     by_matcher: HashMap<String, (usize, usize)>,
     by_name: HashMap<(String, Namespace), Vec<BaseInfo>>,
+    augments: Vec<Augment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Directory,
+    Cache,
+    Embedded,
+}
+
+impl Origin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Origin::Directory => "directory",
+            Origin::Cache => "cache",
+            Origin::Embedded => "embedded",
+        }
+    }
+}
+
+pub fn resolve_both(
+    dir: &str,
+    config_dir: &Path,
+    pinned: Option<GameVersion>,
+) -> Result<(GamePair<GameTables>, GamePair<Origin>), LoadError> {
+    let named_for = |game: GameVersion| match pinned {
+        Some(only) if only != game => "",
+        _ => dir,
+    };
+
+    let (poe1, first) =
+        GameTables::resolve(named_for(GameVersion::Poe1), config_dir, GameVersion::Poe1)?;
+    let (poe2, second) =
+        GameTables::resolve(named_for(GameVersion::Poe2), config_dir, GameVersion::Poe2)?;
+
+    Ok((GamePair::new(poe1, poe2), GamePair::new(first, second)))
+}
+
+pub fn cache_dir(config_dir: &Path, game: GameVersion) -> PathBuf {
+    config_dir.join(format!("data-{}", game.as_str()))
 }
 
 impl GameTables {
@@ -105,7 +163,60 @@ impl GameTables {
         let stats = read_lines::<WireStat>(&dir.join("stats.ndjson"))?;
         let items = read_lines::<WireItem>(&dir.join("items.ndjson"))?;
 
-        Ok(Self::from_wire(stats, items))
+        let mut tables = Self::from_wire(stats, items);
+        tables.augments = load_augments(&dir.join("augments.ndjson"))?;
+
+        Ok(tables)
+    }
+
+    pub fn embedded(game: GameVersion) -> Result<Self, LoadError> {
+        let name = game.as_str();
+        let root = Path::new("<built in>").join(name);
+
+        let stats = parse_bytes::<WireStat>(poe_trader_data::stats(name), &root.join("stats"))?;
+        let items = parse_bytes::<WireItem>(poe_trader_data::items(name), &root.join("items"))?;
+
+        let mut tables = Self::from_wire(stats, items);
+        tables.augments = Self::embedded_augments(game);
+
+        Ok(tables)
+    }
+
+    fn embedded_augments(game: GameVersion) -> Vec<Augment> {
+        let path = Path::new("<built in>").join(game.as_str()).join("augments");
+
+        match parse_bytes::<WireAugment>(poe_trader_data::augments(game.as_str()), &path) {
+            Ok(wire) => augments_from_wire(wire),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn resolve(
+        dir: &str,
+        config_dir: &Path,
+        game: GameVersion,
+    ) -> Result<(Self, Origin), LoadError> {
+        if !dir.trim().is_empty() {
+            return Self::load(Path::new(dir)).map(|t| (t, Origin::Directory));
+        }
+
+        let cache = cache_dir(config_dir, game);
+
+        if cache.join("stats.ndjson").exists() {
+            if let Ok(mut tables) = Self::load(&cache) {
+                if tables.augments.is_empty() {
+                    tables.augments = Self::embedded_augments(game);
+                }
+
+                return Ok((tables, Origin::Cache));
+            }
+        }
+
+        Self::embedded(game).map(|t| (t, Origin::Embedded))
+    }
+
+    pub fn augment_count(&self) -> usize {
+        self.augments.len()
     }
 
     fn from_wire(wire_stats: Vec<WireStat>, wire_items: Vec<WireItem>) -> Self {
@@ -208,6 +319,10 @@ impl GameTables {
 }
 
 impl StatLookup for GameTables {
+    fn stat_count(&self) -> usize {
+        self.stats.len()
+    }
+
     fn stat_by_matcher(&self, template: &str) -> Option<StatHit<'_>> {
         let (stat_idx, matcher_idx) = *self.by_matcher.get(template)?;
 
@@ -219,12 +334,52 @@ impl StatLookup for GameTables {
 }
 
 impl ItemLookup for GameTables {
+    fn item_name_count(&self) -> usize {
+        self.by_name.len()
+    }
+
     fn items_by_name(&self, name: &str, namespace: Namespace, _game: GameVersion) -> Vec<BaseInfo> {
         self.by_name
             .get(&(name.to_lowercase(), namespace))
             .cloned()
             .unwrap_or_default()
     }
+
+    fn augments(&self) -> &[Augment] {
+        &self.augments
+    }
+}
+
+fn load_augments(path: &Path) -> Result<Vec<Augment>, LoadError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    Ok(augments_from_wire(read_lines::<WireAugment>(path)?))
+}
+
+fn augments_from_wire(wire: Vec<WireAugment>) -> Vec<Augment> {
+    wire.into_iter()
+        .map(|w| Augment {
+            reference_name: w.reference_name,
+            name: w.name,
+            effects: w
+                .effects
+                .into_iter()
+                .map(|e| AugmentEffect {
+                    reference: e.reference,
+                    trade_id: e.trade_id,
+                    value: e.value,
+                    categories: e
+                        .categories
+                        .iter()
+                        .filter_map(|c| ItemCategory::parse(c))
+                        .collect(),
+                })
+                .collect(),
+        })
+        .filter(|a: &Augment| !a.effects.is_empty())
+        .collect()
 }
 
 fn read_lines<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>, LoadError> {
@@ -233,6 +388,25 @@ fn read_lines<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>, Loa
         source,
     })?;
 
+    parse_lines(&text, path)
+}
+
+fn parse_bytes<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<Vec<T>, LoadError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| LoadError::Read {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, "not utf8"),
+    })?;
+
+    parse_lines(text, path)
+}
+
+fn parse_lines<T: serde::de::DeserializeOwned>(
+    text: &str,
+    path: &Path,
+) -> Result<Vec<T>, LoadError> {
     let mut out = Vec::new();
 
     for (i, line) in text.lines().enumerate() {
@@ -270,6 +444,220 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
 
         base
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = tempdir().join(name);
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        std::fs::create_dir_all(&dir).unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn both_games_load_from_inside_the_binary() {
+        for game in [GameVersion::Poe1, GameVersion::Poe2] {
+            let tables = GameTables::embedded(game).expect("the built in data parses");
+
+            assert!(
+                tables.stat_count() > 1000,
+                "{game:?} {}",
+                tables.stat_count()
+            );
+            assert!(tables.item_name_count() > 1000, "{game:?}");
+        }
+    }
+
+    #[test]
+    fn the_two_games_do_not_share_a_built_in_table() {
+        let one = GameTables::embedded(GameVersion::Poe1).unwrap();
+        let two = GameTables::embedded(GameVersion::Poe2).unwrap();
+
+        assert_ne!(one.stat_count(), two.stat_count());
+    }
+
+    #[test]
+    fn only_poe2_carries_built_in_augments() {
+        assert_eq!(
+            GameTables::embedded(GameVersion::Poe1)
+                .unwrap()
+                .augment_count(),
+            0
+        );
+        assert!(
+            GameTables::embedded(GameVersion::Poe2)
+                .unwrap()
+                .augment_count()
+                > 0
+        );
+    }
+
+    #[test]
+    fn an_empty_data_dir_falls_back_to_the_built_in_copy() {
+        let config = scratch("resolve-empty");
+
+        let (tables, origin) = GameTables::resolve("", &config, GameVersion::Poe2).unwrap();
+
+        assert_eq!(origin, Origin::Embedded);
+        assert!(tables.stat_count() > 1000);
+    }
+
+    #[test]
+    fn a_named_data_dir_wins_over_everything() {
+        let dir = scratch("resolve-named");
+
+        write(&dir, "stats.ndjson", &[LIFE]);
+        write(&dir, "items.ndjson", &[CHAOS_ORB]);
+
+        let (tables, origin) = GameTables::resolve(
+            dir.to_str().unwrap(),
+            &scratch("resolve-named-cfg"),
+            GameVersion::Poe2,
+        )
+        .unwrap();
+
+        assert_eq!(origin, Origin::Directory);
+        assert_eq!(tables.stat_count(), 1);
+    }
+
+    #[test]
+    fn a_named_data_dir_that_is_missing_is_fatal_rather_than_silently_replaced() {
+        let config = scratch("resolve-missing");
+
+        let got = GameTables::resolve("/nonexistent/poe-trader", &config, GameVersion::Poe2);
+
+        assert!(
+            got.is_err(),
+            "a directory asked for by name must not be swapped out"
+        );
+    }
+
+    #[test]
+    fn the_cache_wins_over_the_built_in_copy() {
+        let config = scratch("resolve-cache");
+        let cache = cache_dir(&config, GameVersion::Poe2);
+
+        std::fs::create_dir_all(&cache).unwrap();
+        write(&cache, "stats.ndjson", &[LIFE, REDUCED]);
+        write(&cache, "items.ndjson", &[CHAOS_ORB]);
+
+        let (tables, origin) = GameTables::resolve("", &config, GameVersion::Poe2).unwrap();
+
+        assert_eq!(origin, Origin::Cache);
+        assert_eq!(tables.stat_count(), 2);
+    }
+
+    #[test]
+    fn a_cache_without_augments_keeps_the_built_in_ones() {
+        let config = scratch("resolve-cache-augments");
+        let cache = cache_dir(&config, GameVersion::Poe2);
+
+        std::fs::create_dir_all(&cache).unwrap();
+        write(&cache, "stats.ndjson", &[LIFE]);
+        write(&cache, "items.ndjson", &[CHAOS_ORB]);
+
+        let (tables, _) = GameTables::resolve("", &config, GameVersion::Poe2).unwrap();
+
+        assert!(
+            tables.augment_count() > 0,
+            "the refresh never writes augments, so the item editor would go empty"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_cache_falls_back_instead_of_refusing_to_start() {
+        let config = scratch("resolve-corrupt");
+        let cache = cache_dir(&config, GameVersion::Poe2);
+
+        std::fs::create_dir_all(&cache).unwrap();
+        write(&cache, "stats.ndjson", &["{not json"]);
+        write(&cache, "items.ndjson", &[CHAOS_ORB]);
+
+        let (tables, origin) = GameTables::resolve("", &config, GameVersion::Poe2).unwrap();
+
+        assert_eq!(origin, Origin::Embedded);
+        assert!(tables.stat_count() > 1000);
+    }
+
+    #[test]
+    fn both_games_are_held_at_once_from_the_built_in_copy() {
+        let (pair, _) = resolve_both("", &scratch("pair-both"), None).expect("both games parse");
+
+        assert!(pair.get(GameVersion::Poe1).stat_count() > 1000);
+        assert!(pair.get(GameVersion::Poe2).stat_count() > 1000);
+        assert_ne!(
+            pair.get(GameVersion::Poe1).stat_count(),
+            pair.get(GameVersion::Poe2).stat_count()
+        );
+    }
+
+    #[test]
+    fn a_named_data_dir_pinned_to_one_game_leaves_the_other_built_in() {
+        let dir = scratch("pair-pinned");
+
+        write(&dir, "stats.ndjson", &[LIFE]);
+        write(&dir, "items.ndjson", &[CHAOS_ORB]);
+
+        let (pair, _) = resolve_both(
+            dir.to_str().unwrap(),
+            &scratch("pair-pinned-cfg"),
+            Some(GameVersion::Poe1),
+        )
+        .unwrap();
+
+        assert_eq!(pair.get(GameVersion::Poe1).stat_count(), 1);
+        assert!(
+            pair.get(GameVersion::Poe2).stat_count() > 1000,
+            "a directory built for one game must not be served to the other"
+        );
+    }
+
+    #[test]
+    fn with_no_data_dir_both_halves_of_the_pair_come_from_inside_the_binary() {
+        let (pair, origin) = resolve_both("", &scratch("pair-empty"), None).unwrap();
+
+        assert_eq!(*origin.get(GameVersion::Poe1), Origin::Embedded);
+        assert_eq!(*origin.get(GameVersion::Poe2), Origin::Embedded);
+        assert!(pair.get(GameVersion::Poe2).augment_count() > 0);
+    }
+
+    #[test]
+    fn one_game_falling_back_does_not_relabel_the_other() {
+        let config = scratch("pair-mixed");
+        let good = cache_dir(&config, GameVersion::Poe1);
+        let bad = cache_dir(&config, GameVersion::Poe2);
+
+        for cache in [&good, &bad] {
+            std::fs::create_dir_all(cache).unwrap();
+            write(cache, "items.ndjson", &[CHAOS_ORB]);
+        }
+
+        write(&good, "stats.ndjson", &[LIFE]);
+        write(&bad, "stats.ndjson", &["{not json"]);
+
+        let (_, origin) = resolve_both("", &config, None).unwrap();
+
+        assert_eq!(*origin.get(GameVersion::Poe1), Origin::Cache);
+        assert_eq!(*origin.get(GameVersion::Poe2), Origin::Embedded);
+    }
+
+    #[test]
+    fn every_origin_names_itself_for_the_log() {
+        for origin in [Origin::Directory, Origin::Cache, Origin::Embedded] {
+            assert!(!origin.as_str().is_empty(), "{origin:?}");
+        }
+    }
+
+    #[test]
+    fn the_cache_directory_is_per_game() {
+        let config = Path::new("/cfg");
+
+        assert_ne!(
+            cache_dir(config, GameVersion::Poe1),
+            cache_dir(config, GameVersion::Poe2)
+        );
     }
 
     const CHARM_SLOT: &str = r##"{"ref": "# Charm Slot", "better": 1, "matchers": [{"string": "# Charm Slots"}, {"string": "# Charm Slot", "value": 1}], "trade": {"ids": {"explicit": ["explicit.stat_2582079000"], "rune": ["rune.stat_554899692"]}}}"##;

@@ -150,15 +150,15 @@ pub struct PoeTraderConfig {
     pub poesessid: String,
     /// Which league to search. The trade site keeps a separate index per league, so a wrong one returns nothing rather than an error. The log watcher can learn it from Client.txt.
     pub league: String,
-    /// Which game to parse for. Either poe1 or poe2.
+    /// poe1, poe2, or auto to read it from the open game window. auto keeps reading it, so alt tabbing between the two games moves the parser, the trade endpoint and the window the overlay attaches to.
     pub game: String,
-    /// Exact title of the game window the overlay attaches to.
+    /// Exact title of the game window the overlay attaches to. Empty derives it from the game, which is what auto detection needs. A title given here pins the window and stops the overlay following the other game.
     pub window_title: String,
     /// Path to Client.txt. The app tails it to learn the current league and character. Empty disables the watcher.
     pub client_log_path: String,
-    /// Directory holding items.ndjson and stats.ndjson.
+    /// Directory holding items.ndjson and stats.ndjson. Empty uses the refreshed cache in config_dir, and failing that the copy built into this binary. A directory named here always wins, and a bad one is a startup failure rather than a silent fallback.
     pub data_dir: String,
-    /// Where user settings and overlay layout are stored.
+    /// Where user settings, the overlay layout and the refreshed data cache are stored. Empty picks the per user config directory for the platform. A double clicked exe starts in an unpredictable working directory, so a relative default would scatter settings files.
     pub config_dir: String,
     /// Key that triggers a price check on the item under the cursor.
     pub price_check_hotkey: String,
@@ -252,14 +252,14 @@ impl PoeTraderConfig {
             .or_else(|| env::var("POE_GAME").ok());
         let raw_game = match raw_game {
             Some(v) => v,
-            None => "poe2".to_string(),
+            None => "auto".to_string(),
         };
         let raw_window_title: Option<String> = None
             .or_else(|| flags.get("window-title").cloned())
             .or_else(|| env::var("POE_WINDOW_TITLE").ok());
         let raw_window_title = match raw_window_title {
             Some(v) => v,
-            None => "Path of Exile 2".to_string(),
+            None => "".to_string(),
         };
         let raw_client_log_path: Option<String> = None
             .or_else(|| flags.get("client-log-path").cloned())
@@ -273,14 +273,14 @@ impl PoeTraderConfig {
             .or_else(|| env::var("POE_DATA_DIR").ok());
         let raw_data_dir = match raw_data_dir {
             Some(v) => v,
-            None => return Err(ConfigError::MissingRequired("data_dir".to_string())),
+            None => "".to_string(),
         };
         let raw_config_dir: Option<String> = None
             .or_else(|| flags.get("config-dir").cloned())
             .or_else(|| env::var("POE_CONFIG_DIR").ok());
         let raw_config_dir = match raw_config_dir {
             Some(v) => v,
-            None => ".".to_string(),
+            None => "".to_string(),
         };
         let raw_price_check_hotkey: Option<String> = None
             .or_else(|| flags.get("price-check-hotkey").cloned())
@@ -437,7 +437,7 @@ pub struct PoeTraderCliConfig {
     pub league: String,
     /// Which game to parse for. Either poe1 or poe2.
     pub game: String,
-    /// Directory holding items.ndjson and stats.ndjson.
+    /// Directory holding items.ndjson and stats.ndjson. Empty uses the refreshed cache in config_dir, and failing that the copy built into this binary. A directory named here always wins, and a bad one is a startup failure rather than a silent fallback.
     pub data_dir: String,
     /// Read item text from this file instead of the clipboard.
     pub item_file: String,
@@ -532,7 +532,7 @@ impl PoeTraderCliConfig {
             .or_else(|| env::var("POE_DATA_DIR").ok());
         let raw_data_dir = match raw_data_dir {
             Some(v) => v,
-            None => return Err(ConfigError::MissingRequired("data_dir".to_string())),
+            None => "".to_string(),
         };
         let raw_item_file: Option<String> = None
             .or_else(|| flags.get("item-file").cloned())

@@ -26,6 +26,8 @@ pub enum OverlayLoopError {
 #[derive(Debug, Clone)]
 pub struct OverlaySettings {
     pub window_title: String,
+    pub pinned_title: bool,
+    pub pinned_game: Option<poe_trader_core::types::GameVersion>,
     pub league: String,
     pub session: String,
     pub site_url: String,
@@ -33,6 +35,8 @@ pub struct OverlaySettings {
     pub log_level: String,
     pub latency: u32,
     pub restore_clipboard: bool,
+    pub data_origin: String,
+    pub network: bool,
 }
 
 #[cfg(windows)]

@@ -117,6 +117,8 @@ pub fn league_from_whisper(body: &str) -> Option<String> {
 #[cfg_attr(test, mockall::automock)]
 pub trait LogReader: Send + Sync {
     fn poll(&mut self) -> Result<Vec<LogEvent>, LogError>;
+
+    fn watch(&mut self, _path: &Path) {}
 }
 
 pub struct NoLog;
@@ -130,6 +132,10 @@ impl LogReader for NoLog {
 impl LogReader for GameLogWatcher {
     fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
         GameLogWatcher::poll(self)
+    }
+
+    fn watch(&mut self, path: &Path) {
+        GameLogWatcher::watch(self, path);
     }
 }
 
@@ -158,6 +164,15 @@ impl GameLogWatcher {
 
     pub fn position(&self) -> u64 {
         self.position
+    }
+
+    pub fn watch(&mut self, path: &Path) {
+        if path == self.path {
+            return;
+        }
+
+        self.path = path.to_path_buf();
+        self.position = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     }
 
     pub fn poll(&mut self) -> Result<Vec<LogEvent>, LogError> {
@@ -428,6 +443,48 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], LogEvent::LevelUp { .. }));
+    }
+
+    #[test]
+    fn watching_a_new_file_moves_the_watcher_and_skips_what_is_already_there() {
+        let first = tempfile("watch-first.txt");
+        let second = tempfile("watch-second.txt");
+
+        write(&first, &format!("{AREA}\n"));
+        write(&second, &format!("{LEVEL}\n"));
+
+        let mut w = GameLogWatcher::from_start(&first);
+
+        assert_eq!(w.poll().unwrap().len(), 1);
+
+        w.watch(&second);
+
+        assert!(
+            w.poll().unwrap().is_empty(),
+            "the other game's backlog must not be replayed as if it just happened"
+        );
+
+        write(&second, &format!("{LEVEL}\n{AREA}\n"));
+
+        assert_eq!(w.poll().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn watching_the_file_it_already_watches_does_not_rewind_it() {
+        let path = tempfile("watch-same.txt");
+
+        write(&path, &format!("{AREA}\n"));
+
+        let mut w = GameLogWatcher::from_start(&path);
+
+        assert_eq!(w.poll().unwrap().len(), 1);
+
+        let at = w.position();
+
+        w.watch(&path);
+
+        assert_eq!(w.position(), at);
+        assert!(w.poll().unwrap().is_empty());
     }
 
     #[test]

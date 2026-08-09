@@ -6,6 +6,7 @@ description = "Overlay, adapters and drivers for poe-trader."
 
 [dependencies]
 poe-trader-core = { path = "../poe-trader-core" }
+poe-trader-data = { path = "../poe-trader-data" }
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
@@ -30,6 +31,7 @@ windows = { workspace = true, features = [
   "Win32_Security",
   "Win32_System_Threading",
   "Win32_System_LibraryLoader",
+  "Win32_System_Console",
 ] }
 
 [dev-dependencies]

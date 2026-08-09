@@ -5,6 +5,8 @@ use std::process::ExitCode;
 const MAIN_BINARY: &str = "src/bin/poe-trader.rs";
 const MAIN_MAX_LINES: usize = 220;
 
+const SIBLING_CRATES: &[&str] = &["poe-trader-core", "poe-trader-data"];
+
 const WAIVED: &[(&str, &str)] = &[
     (
         "src/driver/cli_driver.rs",
@@ -58,7 +60,19 @@ fn main() -> ExitCode {
     let mut sources = Vec::new();
     collect(&src, &root, &mut sources);
 
-    report(&sources, ceiling)
+    let mut everything = Vec::new();
+
+    collect(&src, &root, &mut everything);
+
+    for sibling in SIBLING_CRATES {
+        let dir = root.join("..").join(sibling).join("src");
+
+        if dir.is_dir() {
+            collect(&dir, &root, &mut everything);
+        }
+    }
+
+    report(&sources, &everything, ceiling)
 }
 
 fn collect(dir: &Path, root: &Path, out: &mut Vec<Source>) {
@@ -125,6 +139,198 @@ fn check(sources: &[Source]) -> Vec<Violation> {
     }
 
     found.extend(modules_are_declared(sources));
+
+    found
+}
+
+const UNWIRED_EXEMPT: &[&str] = &["new", "default", "fmt", "from", "parse", "as_str"];
+
+fn production(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut skipping = false;
+    let mut depth: i32 = 0;
+
+    for line in text.lines() {
+        if !skipping && line.trim_start().starts_with("#[cfg(test)]") {
+            skipping = true;
+            depth = 0;
+
+            continue;
+        }
+
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+
+            continue;
+        }
+
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+
+        if depth <= 0 && line.contains('}') {
+            skipping = false;
+        }
+    }
+
+    out
+}
+
+fn public_functions(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+
+    for line in production(text).lines() {
+        let trimmed = line.trim_start();
+
+        let Some(rest) = trimmed.strip_prefix("pub fn ") else {
+            continue;
+        };
+
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+
+        if name.is_empty() || UNWIRED_EXEMPT.contains(&name.as_str()) {
+            continue;
+        }
+
+        out.push(name);
+    }
+
+    out
+}
+
+fn calls_in(text: &str, name: &str) -> usize {
+    production(text)
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+
+            !trimmed.starts_with(&format!("pub fn {name}"))
+                && !trimmed.starts_with(&format!("fn {name}"))
+        })
+        .filter(|line| mentions(line, name))
+        .count()
+}
+
+fn mentions(line: &str, name: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut from = 0;
+
+    while let Some(at) = line[from..].find(name) {
+        let start = from + at;
+        let end = start + name.len();
+
+        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_word_byte(bytes[end]);
+
+        if before_ok && after_ok {
+            return true;
+        }
+
+        from = end;
+    }
+
+    false
+}
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+const NOT_A_CALLER: &str = "src/bin/poe-trader-uiparity.rs";
+
+pub struct Wiring {
+    pub wired: usize,
+    pub total: usize,
+}
+
+impl Wiring {
+    fn percent(&self) -> f64 {
+        match self.total {
+            0 => 100.0,
+            total => (self.wired as f64 / total as f64) * 100.0,
+        }
+    }
+}
+
+fn wiring(everything: &[Source]) -> Wiring {
+    let mut wired = 0;
+    let mut total = 0;
+
+    for source in everything {
+        if is_generated(&source.relative) {
+            continue;
+        }
+
+        for name in public_functions(&source.text) {
+            total += 1;
+
+            let calls: usize = everything
+                .iter()
+                .filter(|other| !is_generated(&other.relative))
+                .filter(|other| other.relative != NOT_A_CALLER)
+                .map(|other| calls_in(&other.text, &name))
+                .sum();
+
+            if calls > 0 {
+                wired += 1;
+            }
+        }
+    }
+
+    Wiring { wired, total }
+}
+
+fn test_counts(everything: &[Source]) -> (usize, usize) {
+    let mut tests = 0;
+    let mut untested = 0;
+
+    for source in everything {
+        if is_generated(&source.relative) {
+            continue;
+        }
+
+        let here = source.text.matches("    #[test]").count();
+
+        tests += here;
+
+        if here == 0 && !public_functions(&source.text).is_empty() {
+            untested += 1;
+        }
+    }
+
+    (tests, untested)
+}
+
+fn no_unwired_public_functions(everything: &[Source]) -> Vec<Violation> {
+    let mut found = Vec::new();
+
+    for source in everything {
+        if is_generated(&source.relative) {
+            continue;
+        }
+
+        for name in public_functions(&source.text) {
+            let calls: usize = everything
+                .iter()
+                .filter(|other| !is_generated(&other.relative))
+                .filter(|other| other.relative != NOT_A_CALLER)
+                .map(|other| calls_in(&other.text, &name))
+                .sum();
+
+            if calls > 0 {
+                continue;
+            }
+
+            found.push(Violation {
+                rule: "no unwired code",
+                path: source.relative.clone(),
+                detail: format!("{name} is public and no production code calls it"),
+            });
+        }
+    }
 
     found
 }
@@ -287,11 +493,23 @@ fn modules_are_declared(sources: &[Source]) -> Vec<Violation> {
         .collect()
 }
 
-fn report(sources: &[Source], ceiling: usize) -> ExitCode {
-    let found = check(sources);
+fn report(sources: &[Source], everything: &[Source], ceiling: usize) -> ExitCode {
+    let mut found = check(sources);
+    found.extend(no_unwired_public_functions(everything));
+
+    let wiring = wiring(everything);
+    let (tests, untested) = test_counts(everything);
 
     println!("poe-trader architecture report\n");
-    println!("  files scanned  : {}", sources.len());
+    println!("  files scanned  : {}", everything.len());
+    println!(
+        "  wired          : {:.1}%  ({} of {} public functions have a caller)",
+        wiring.percent(),
+        wiring.wired,
+        wiring.total
+    );
+    println!("  tests          : {tests}");
+    println!("  files with public code and no test: {untested}");
     println!("  violations     : {}", found.len());
     println!("  ceiling        : {ceiling}\n");
 
@@ -304,12 +522,12 @@ fn report(sources: &[Source], ceiling: usize) -> ExitCode {
     for (rule, violations) in &by_rule {
         println!("{rule} ({})", violations.len());
 
-        for violation in violations.iter().take(12) {
+        for violation in violations.iter().take(120) {
             println!("  {} {}", violation.path, violation.detail);
         }
 
-        if violations.len() > 12 {
-            println!("  and {} more", violations.len() - 12);
+        if violations.len() > 120 {
+            println!("  and {} more", violations.len() - 120);
         }
 
         println!();
@@ -567,5 +785,87 @@ mod tests {
                 .any(|v| v.rule == "layers only depend downward"),
             "the waived rule should be excused: {found:?}"
         );
+    }
+    #[test]
+    fn code_after_a_test_module_is_still_production_code() {
+        let body =
+            "fn early() {}\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\nfn late() {}\n";
+
+        let kept = production(body);
+
+        assert!(kept.contains("fn early"));
+        assert!(
+            kept.contains("fn late"),
+            "a truncating stripper hides the rest of the file"
+        );
+        assert!(!kept.contains("fn helper"));
+    }
+
+    #[test]
+    fn a_nested_brace_inside_a_test_module_does_not_end_it_early() {
+        let body = "#[cfg(test)]\nmod tests {\n    fn a() {\n        if x { y }\n    }\n}\nfn after() {}\n";
+
+        let kept = production(body);
+
+        assert!(!kept.contains("fn a("));
+        assert!(kept.contains("fn after"));
+    }
+
+    #[test]
+    fn a_file_with_no_tests_is_left_whole() {
+        let body = "fn one() {}\nfn two() {}\n";
+
+        assert_eq!(production(body), body);
+    }
+
+    #[test]
+    fn a_definition_does_not_count_as_a_call_to_itself() {
+        assert_eq!(calls_in("pub fn lonely() {}\n", "lonely"), 0);
+    }
+
+    #[test]
+    fn a_use_of_a_function_counts_as_a_call() {
+        assert_eq!(
+            calls_in("pub fn lonely() {}\nfn other() { lonely(); }\n", "lonely"),
+            1
+        );
+    }
+
+    #[test]
+    fn importing_a_function_counts_as_using_it() {
+        assert_eq!(calls_in("use super::{lonely, other};\n", "lonely"), 1);
+    }
+
+    #[test]
+    fn a_longer_name_that_contains_the_short_one_is_not_a_call() {
+        assert_eq!(calls_in("fn other() { lonely_helper(); }\n", "lonely"), 0);
+    }
+
+    #[test]
+    fn a_call_inside_a_test_does_not_keep_a_function_alive() {
+        let body = "pub fn lonely() {}\n#[cfg(test)]\nmod tests {\n    fn t() { lonely(); }\n}\n";
+
+        assert_eq!(calls_in(body, "lonely"), 0);
+    }
+
+    #[test]
+    fn the_capability_catalogue_is_not_treated_as_a_caller() {
+        assert_eq!(
+            NOT_A_CALLER, "src/bin/poe-trader-uiparity.rs",
+            "the catalogue names every symbol it measures, so counting it would \
+             make every measured function look alive"
+        );
+    }
+
+    #[test]
+    fn a_public_function_is_found_by_name() {
+        let names = public_functions("pub fn wired() {}\nfn private() {}\n");
+
+        assert_eq!(names, vec!["wired".to_string()]);
+    }
+
+    #[test]
+    fn a_constructor_is_exempt_because_every_type_has_one() {
+        assert!(public_functions("pub fn new() -> Self { Self }\n").is_empty());
     }
 }

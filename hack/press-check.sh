@@ -24,10 +24,30 @@
 set -uo pipefail
 
 exe="${1:?usage: press-check.sh <exe> [data-dir] [game] [item-file]}"
-data="${2:-data-poe2}"
+data="${2:-}"
 game="${3:-poe2}"
 item="${4:-item.txt}"
 
+# An empty data dir is the normal case now. The exe carries both games inside
+# it, so the flag is only for testing a freshly generated directory. Passing
+# "" here is what proves the shipped default works.
+data_flag=()
+[ -n "$data" ] && data_flag=(--data-dir "$data")
+
+# The game stays pinned here on purpose. Detection is exercised by
+# both-games-check.sh, which is the only place two game windows exist at once.
+# Pinning keeps this script measuring the price check and nothing else.
+#
+# The stand-in must carry the title THIS game uses. The overlay derives its
+# window title from the game now, so a PoE1 run against a window titled
+# "Path of Exile 2" finds nothing and the press goes nowhere. It used to work
+# only because the title was a fixed default that ignored --game.
+case "$game" in
+    poe1) game_window="Path of Exile" ;;
+    *)    game_window="Path of Exile 2" ;;
+esac
+
+items_dir="$(cd "$(dirname "$0")" && pwd)/items"
 dir="$(dirname "$exe")"
 log="$dir/press-check.log"
 fake="$dir/press-check-fake.log"
@@ -40,6 +60,12 @@ exe="./$(basename "$exe")"
 powershell.exe -Command "Get-Process poe-trader* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
 sleep 2
 
+# The item files live in the repo so a fresh machine can run this. They are
+# copied next to the exe because --fake-game reads them from its own directory.
+if [ -f "$items_dir/$item" ]; then
+    cp "$items_dir/$item" "$dir/$item"
+fi
+
 if [ ! -f "$item" ]; then
     echo "FAIL: no item file at $dir/$item"
     exit 1
@@ -49,11 +75,11 @@ fi
 # something else or the copy cannot be told apart from what was already there.
 powershell.exe -Command "Set-Clipboard -Value 'press-check placeholder'" >/dev/null 2>&1
 
-(timeout 130 "$exe" --fake-game "Path of Exile 2" 120 "$item" >"$fake" 2>&1 &)
+(timeout 130 "$exe" --fake-game "$game_window" 120 "$item" >"$fake" 2>&1 &)
 sleep 5
 
 # Debug, so the heartbeat is in the log. It is how a stopped loop is caught.
-(timeout 120 "$exe" --data-dir "$data" --game "$game" --log-level debug >"$log" 2>&1 &)
+(timeout 120 "$exe" "${data_flag[@]}" --game "$game" --log-level debug >"$log" 2>&1 &)
 sleep 12
 
 # Parked somewhere definite before the press, so the pointer check later has a
@@ -64,7 +90,7 @@ sleep 12
 pressed=0
 
 for attempt in 1 2 3; do
-    "$exe" --data-dir "$data" --game "$game" --press-hotkey || {
+    "$exe" "${data_flag[@]}" --game "$game" --press-hotkey || {
         echo "FAIL: the keys were not accepted."
         exit 1
     }
@@ -112,6 +138,26 @@ check "$log" '"msg":"price check hotkey pressed"' "the press never reached the f
 check "$fake" 'answered Ctrl+C' "the overlay never asked the game to copy."
 check "$log" '"msg":"price check finished"' "the price check never finished."
 
+# With no --data-dir the exe must find its own data. A run that quietly needed
+# a folder beside it is the thing this whole change was about.
+# Either origin is correct with no flag. "embedded" is a fresh machine and
+# "cache" is one the weekly refresh has already served. "directory" would mean
+# it silently read a folder nobody asked for.
+if [ -z "$data" ]; then
+    if grep '"msg":"loaded the game data"' "$log" | grep -qE '"origin":"(embedded|cache)"'; then
+        echo "PASS: the exe ran with no data flag and found its own data."
+    else
+        echo "FAIL: with no --data-dir the exe did not find its own data."
+        grep '"msg":"loaded the game data"' "$log" | tail -2
+        fail=1
+    fi
+
+    if grep '"msg":"loaded the game data"' "$log" | grep -q '"origin":"directory"'; then
+        echo "FAIL: with no --data-dir the exe read a directory anyway."
+        fail=1
+    fi
+fi
+
 # One press, one check. Both watchers see the same press and they land a frame
 # apart, so this is the only thing that catches a broken guard.
 presses=$(grep -c '"msg":"price check hotkey pressed"' "$log")
@@ -119,6 +165,45 @@ presses=$(grep -c '"msg":"price check hotkey pressed"' "$log")
 if [ "$presses" -ne 1 ]; then
     echo "FAIL: one press produced $presses price checks. Each one is a request against the rate limit."
     fail=1
+fi
+
+# The panel is editable now. A finished check with no rows on it is a panel the
+# user cannot adjust, which is the whole point of the filter block. Currency
+# goes through the exchange endpoint and has no stats, so only rare items are
+# held to this.
+if [ "$item" != "item-currency.txt" ]; then
+    if grep '"msg":"price check finished"' "$log" | grep -qE '"stat_rows":[1-9]'; then
+        echo "PASS: the filter rows reached the panel."
+    else
+        echo "FAIL: the panel finished with no editable filter rows."
+        grep '"msg":"price check finished"' "$log" | tail -1
+        fail=1
+    fi
+fi
+
+# An item with an empty rune socket must be offered runes to socket. That is the
+# item editor, and it is the one part of the panel that changes the search rather
+# than only narrowing it.
+if [ "$item" = "item-runable.txt" ]; then
+    if grep '"msg":"price check finished"' "$log" | grep -qE '"augments":[1-9]'; then
+        echo "PASS: the item editor offered augments that fit the item."
+    else
+        echo "FAIL: an item with empty rune sockets was offered no augments."
+        grep '"msg":"price check finished"' "$log" | tail -1
+        fail=1
+    fi
+fi
+
+# A search that matched something must come back with the listings behind it,
+# because the suggested price is computed from them and nothing else.
+if grep '"msg":"price check finished"' "$log" | grep -qE '"listings":[1-9]'; then
+    if grep '"msg":"read the listings"' "$log" | grep -qE '"listings":[1-9]'; then
+        echo "PASS: the listings behind the count were read."
+    else
+        echo "FAIL: the search matched items but no listing was read, so no price is offered."
+        grep '"msg":"read the listings"' "$log" | tail -1
+        fail=1
+    fi
 fi
 
 # A refused query still "finishes". The error line is the only thing that

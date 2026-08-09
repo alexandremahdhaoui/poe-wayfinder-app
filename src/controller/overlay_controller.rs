@@ -1,4 +1,11 @@
+use poe_trader_core::controller::filter::augments::Augment;
+use poe_trader_core::controller::filter_view::{self, FilterView, FlagKey, RowKey};
+use poe_trader_core::controller::item_editor::{
+    augment_options, empty_sockets, AugmentOption, ItemEditor,
+};
 use poe_trader_core::controller::price_check::PriceCheck;
+use poe_trader_core::controller::price_summary::{estimate_from, Estimate, Quote};
+use poe_trader_core::controller::rate_limit::LimiterLine;
 
 use crate::adapter::game_window_adapter::{should_draw, GameWindow};
 use crate::types::overlay::{OverlayGeometry, OverlayState, WindowRect};
@@ -11,6 +18,14 @@ pub struct OverlayModel {
     message: Option<String>,
     geometry: OverlayGeometry,
     anchor_cursor: (i32, i32),
+    filters: FilterView,
+    edited: bool,
+    listings: Vec<Quote>,
+    estimate: Option<Estimate>,
+    augments: Vec<AugmentOption>,
+    editor: ItemEditor,
+    limits: Vec<LimiterLine>,
+    note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +43,22 @@ pub trait PanelSource {
     fn total(&self) -> Option<u64>;
 
     fn message(&self) -> Option<&str>;
+
+    fn filters(&self) -> &FilterView;
+
+    fn edited(&self) -> bool;
+
+    fn listings(&self) -> &[Quote];
+
+    fn estimate(&self) -> Option<&Estimate>;
+
+    fn augments(&self) -> &[AugmentOption];
+
+    fn chosen_augment(&self) -> Option<&str>;
+
+    fn limits(&self) -> &[LimiterLine];
+
+    fn pacing_note(&self) -> Option<&str>;
 }
 
 impl PanelSource for OverlayModel {
@@ -45,6 +76,38 @@ impl PanelSource for OverlayModel {
 
     fn message(&self) -> Option<&str> {
         OverlayModel::message(self)
+    }
+
+    fn filters(&self) -> &FilterView {
+        OverlayModel::filters(self)
+    }
+
+    fn edited(&self) -> bool {
+        OverlayModel::edited(self)
+    }
+
+    fn listings(&self) -> &[Quote] {
+        OverlayModel::listings(self)
+    }
+
+    fn estimate(&self) -> Option<&Estimate> {
+        OverlayModel::estimate(self)
+    }
+
+    fn augments(&self) -> &[AugmentOption] {
+        OverlayModel::augments(self)
+    }
+
+    fn chosen_augment(&self) -> Option<&str> {
+        OverlayModel::chosen_augment(self)
+    }
+
+    fn limits(&self) -> &[LimiterLine] {
+        OverlayModel::limits(self)
+    }
+
+    fn pacing_note(&self) -> Option<&str> {
+        OverlayModel::pacing_note(self)
     }
 }
 
@@ -78,11 +141,167 @@ impl OverlayModel {
         self.message = None;
     }
 
+    pub fn filters(&self) -> &FilterView {
+        &self.filters
+    }
+
+    pub fn edited(&self) -> bool {
+        self.edited
+    }
+
+    pub fn set_enabled(&mut self, key: RowKey, enabled: bool) {
+        if let Some(row) = self.filters.row_mut(key) {
+            row.enabled = enabled;
+            self.edited = true;
+        }
+    }
+
+    pub fn set_min(&mut self, key: RowKey, min: Option<f64>) {
+        if let Some(row) = self.filters.row_mut(key) {
+            row.min = min;
+            row.enabled = true;
+            self.edited = true;
+        }
+    }
+
+    pub fn set_max(&mut self, key: RowKey, max: Option<f64>) {
+        if let Some(row) = self.filters.row_mut(key) {
+            row.max = max;
+            row.enabled = true;
+            self.edited = true;
+        }
+    }
+
+    pub fn set_all_stats(&mut self, enabled: bool) {
+        self.filters.set_all_stats(enabled);
+        self.edited = true;
+    }
+
+    pub fn cycle_name(&mut self) {
+        self.filters.cycle_name();
+        self.edited = true;
+    }
+
+    pub fn toggle_online(&mut self) {
+        use poe_trader_core::types::query::Status;
+
+        let Some(check) = self.result.as_mut() else {
+            return;
+        };
+
+        check.query.status = match check.query.status {
+            Status::Online => Status::Any,
+            Status::Any => Status::Online,
+        };
+
+        self.edited = true;
+    }
+
+    pub fn set_flag(&mut self, key: FlagKey, enabled: bool, value: bool) {
+        if let Some(row) = self.filters.flag_mut(key) {
+            row.enabled = enabled;
+            row.value = value;
+            self.edited = true;
+        }
+    }
+
+    pub fn listings(&self) -> &[Quote] {
+        &self.listings
+    }
+
+    pub fn estimate(&self) -> Option<&Estimate> {
+        self.estimate.as_ref()
+    }
+
+    pub fn augments(&self) -> &[AugmentOption] {
+        &self.augments
+    }
+
+    pub fn chosen_augment(&self) -> Option<&str> {
+        self.editor.chosen()
+    }
+
+    pub fn limits(&self) -> &[LimiterLine] {
+        &self.limits
+    }
+
+    pub fn note(&mut self, note: &str) {
+        self.note = Some(note.to_string());
+    }
+
+    pub fn pacing_note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+
+    pub fn set_limits(&mut self, limits: Vec<LimiterLine>) {
+        self.limits = limits;
+    }
+
+    pub fn set_listings(&mut self, listings: Vec<Quote>) {
+        self.estimate = estimate_from(&listings);
+        self.listings = listings;
+    }
+
+    pub fn offer_augments(&mut self, augments: &[Augment]) {
+        self.augments = match self.result.as_ref() {
+            Some(check) => augment_options(augments, &check.item, empty_sockets(&check.item)),
+            None => Vec::new(),
+        };
+    }
+
+    pub fn choose_augment(&mut self, reference_name: &str, augments: &[Augment]) -> bool {
+        let Some(check) = self.result.as_mut() else {
+            return false;
+        };
+
+        let item = check.item.clone();
+        let applied = self
+            .editor
+            .choose(reference_name, augments, &item, &mut check.query);
+
+        if applied {
+            self.rebuild_filters();
+        }
+
+        applied
+    }
+
+    pub fn clear_augment(&mut self) {
+        let Some(check) = self.result.as_mut() else {
+            return;
+        };
+
+        self.editor.clear_augment(&mut check.query);
+        self.rebuild_filters();
+    }
+
+    fn rebuild_filters(&mut self) {
+        if let Some(check) = self.result.as_ref() {
+            self.filters = filter_view::build(check);
+            self.edited = true;
+        }
+    }
+
+    pub fn edited_check(&self) -> Option<PriceCheck> {
+        let mut check = self.result.clone()?;
+
+        filter_view::apply(&self.filters, &mut check.query);
+
+        Some(check)
+    }
+
     pub fn finish(&mut self, result: PriceCheck, total: u64) {
         self.state = OverlayState::Showing;
+        self.filters = filter_view::build(&result);
         self.result = Some(result);
         self.total = Some(total);
         self.message = None;
+        self.edited = false;
+        self.listings = Vec::new();
+        self.estimate = None;
+        self.augments = Vec::new();
+        self.editor = ItemEditor::default();
+        self.note = None;
     }
 
     pub fn fail(&mut self, message: &str) {
@@ -91,6 +310,12 @@ impl OverlayModel {
 
         self.result = None;
         self.total = None;
+        self.filters = FilterView::default();
+        self.edited = false;
+        self.listings = Vec::new();
+        self.estimate = None;
+        self.augments = Vec::new();
+        self.editor = ItemEditor::default();
     }
 
     pub fn warn(&mut self, message: &str) {
@@ -161,6 +386,7 @@ mod tests {
             query: TradeQuery::default(),
             endpoint: Endpoint::Search,
             trade_tag: None,
+            sources: Vec::new(),
         }
     }
 
@@ -356,5 +582,207 @@ mod tests {
         let m = model();
 
         assert_eq!(m.frame_scaled(Some(game(true)), 2.0).rect, None);
+    }
+
+    fn life_check() -> PriceCheck {
+        use poe_trader_core::controller::filter::stat_filters::FilterSource;
+        use poe_trader_core::types::query::{Range, StatFilter, StatGroup};
+        use poe_trader_core::types::stat::StatRoll;
+
+        let mut query = TradeQuery::default();
+        query.stats.push(StatGroup::all(vec![StatFilter::range(
+            "explicit.stat_life",
+            Range::at_least(70.0),
+        )]));
+
+        PriceCheck {
+            item: ParsedItem {
+                item_level: Some(78),
+                is_corrupted: true,
+                ..ParsedItem::default()
+            },
+            query,
+            endpoint: Endpoint::Search,
+            trade_tag: None,
+            sources: vec![FilterSource {
+                id: "explicit.stat_life".into(),
+                text: "+80 to maximum Life".into(),
+                roll: Some(StatRoll {
+                    value: 80.0,
+                    min: 60.0,
+                    max: 100.0,
+                    ..StatRoll::default()
+                }),
+                tier: Some(3),
+                contributors: Vec::new(),
+            }],
+        }
+    }
+
+    fn stat_key() -> RowKey {
+        RowKey::Stat { group: 0, index: 0 }
+    }
+
+    #[test]
+    fn a_finished_check_offers_its_filters_for_editing() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        assert_eq!(m.filters().stats.len(), 1);
+        assert_eq!(m.filters().stats[0].label, "+80 to maximum Life");
+    }
+
+    #[test]
+    fn a_fresh_result_counts_as_unedited() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        assert!(!m.edited());
+    }
+
+    #[test]
+    fn raising_a_minimum_marks_the_panel_edited() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_min(stat_key(), Some(95.0));
+
+        assert!(m.edited());
+    }
+
+    #[test]
+    fn the_edited_minimum_reaches_the_query_that_gets_searched() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_min(stat_key(), Some(95.0));
+
+        let check = m.edited_check().expect("a check");
+
+        assert_eq!(check.query.stats[0].filters[0].range.min, Some(95.0));
+    }
+
+    #[test]
+    fn the_stored_result_is_left_alone_so_an_edit_can_be_undone() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_min(stat_key(), Some(95.0));
+
+        assert_eq!(
+            m.result().expect("a result").query.stats[0].filters[0]
+                .range
+                .min,
+            Some(70.0)
+        );
+    }
+
+    #[test]
+    fn typing_a_minimum_turns_the_filter_on_because_that_is_what_was_meant() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_enabled(stat_key(), false);
+        m.set_min(stat_key(), Some(95.0));
+
+        assert!(!m.edited_check().expect("a check").query.stats[0].filters[0].disabled);
+    }
+
+    #[test]
+    fn turning_a_filter_off_stops_it_constraining_the_search() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_enabled(stat_key(), false);
+
+        assert!(m.edited_check().expect("a check").query.stats[0].filters[0].disabled);
+    }
+
+    #[test]
+    fn a_corrupted_item_offers_a_toggle_that_reaches_the_query() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_flag(FlagKey::Corrupted, true, true);
+
+        assert_eq!(
+            m.edited_check()
+                .expect("a check")
+                .query
+                .filters
+                .misc_filters
+                .corrupted,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn an_item_level_typed_by_hand_reaches_the_query() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_min(
+            RowKey::Numeric(poe_trader_core::controller::filter_view::NumericKey::ItemLevel),
+            Some(84.0),
+        );
+
+        assert_eq!(
+            m.edited_check()
+                .expect("a check")
+                .query
+                .filters
+                .type_filters
+                .ilvl
+                .min,
+            Some(84.0)
+        );
+    }
+
+    #[test]
+    fn a_new_result_replaces_the_filters_and_clears_the_edit_mark() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+        m.set_min(stat_key(), Some(95.0));
+
+        m.finish(check(), 1);
+
+        assert!(!m.edited());
+        assert!(m.filters().stats.is_empty());
+    }
+
+    #[test]
+    fn a_failure_drops_the_filters_along_with_the_result() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.fail("the trade api refused the search");
+
+        assert!(m.filters().is_empty());
+        assert!(m.edited_check().is_none());
+    }
+
+    #[test]
+    fn editing_a_row_that_is_not_there_changes_nothing() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_min(RowKey::Stat { group: 9, index: 9 }, Some(1.0));
+
+        assert!(!m.edited());
+    }
+
+    #[test]
+    fn a_maximum_can_be_set_on_its_own() {
+        let mut m = model();
+        m.finish(life_check(), 57);
+
+        m.set_max(stat_key(), Some(120.0));
+
+        assert_eq!(
+            m.edited_check().expect("a check").query.stats[0].filters[0]
+                .range
+                .max,
+            Some(120.0)
+        );
     }
 }

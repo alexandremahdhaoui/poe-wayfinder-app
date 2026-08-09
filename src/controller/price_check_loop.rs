@@ -86,6 +86,7 @@ mod tests {
             },
             endpoint: Endpoint::Search,
             trade_tag: None,
+            sources: Vec::new(),
         }
     }
 
@@ -95,6 +96,7 @@ mod tests {
             query: TradeQuery::default(),
             endpoint: Endpoint::Search,
             trade_tag: None,
+            sources: Vec::new(),
         }
     }
 

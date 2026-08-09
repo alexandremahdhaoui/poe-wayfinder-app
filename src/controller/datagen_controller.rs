@@ -360,6 +360,132 @@ pub fn item_to_ndjson(record: &ItemRecord) -> String {
     value.to_string()
 }
 
+#[derive(Debug, Deserialize)]
+struct SourceAugmentEffect {
+    categories: Vec<String>,
+    string: String,
+    #[serde(default)]
+    values: Vec<f64>,
+    #[serde(rename = "tradeId", default)]
+    trade_id: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceCraftable {
+    #[serde(default)]
+    category: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceAugmentItem {
+    name: String,
+    #[serde(rename = "refName")]
+    reference_name: String,
+    #[serde(default)]
+    craftable: Option<SourceCraftable>,
+    #[serde(default)]
+    augment: Option<Vec<SourceAugmentEffect>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AugmentEffectRecord {
+    pub reference: String,
+    pub trade_id: String,
+    pub value: f64,
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AugmentRecord {
+    pub name: String,
+    pub reference_name: String,
+    pub effects: Vec<AugmentEffectRecord>,
+}
+
+pub fn build_augments(ndjson: &str) -> Vec<AugmentRecord> {
+    let mut out = Vec::new();
+
+    for line in ndjson.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let Ok(item) = serde_json::from_str::<SourceAugmentItem>(line) else {
+            continue;
+        };
+
+        if item.craftable.and_then(|c| c.category).as_deref() != Some("SoulCore") {
+            continue;
+        }
+
+        let Some(effects) = item.augment else {
+            continue;
+        };
+
+        let effects: Vec<AugmentEffectRecord> = effects
+            .into_iter()
+            .filter(|e| !e.trade_id.is_empty())
+            .filter_map(|e| {
+                let categories: Vec<String> = e
+                    .categories
+                    .iter()
+                    .filter_map(|c| ItemCategory::parse(c).map(|c| c.as_str().to_string()))
+                    .collect();
+
+                if categories.is_empty() {
+                    return None;
+                }
+
+                let trade_id = e.trade_id.first()?.clone();
+
+                Some(AugmentEffectRecord {
+                    reference: e.string,
+                    trade_id,
+                    value: e.values.first().copied().unwrap_or(0.0),
+                    categories,
+                })
+            })
+            .collect();
+
+        if effects.is_empty() {
+            continue;
+        }
+
+        out.push(AugmentRecord {
+            name: item.name,
+            reference_name: item.reference_name,
+            effects,
+        });
+    }
+
+    out.sort_by(|a, b| a.reference_name.cmp(&b.reference_name));
+    out.dedup_by(|a, b| a.reference_name == b.reference_name);
+
+    out
+}
+
+pub fn augment_to_ndjson(record: &AugmentRecord) -> String {
+    let effects: Vec<serde_json::Value> = record
+        .effects
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "reference": e.reference,
+                "tradeId": e.trade_id,
+                "value": e.value,
+                "categories": e.categories,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "name": record.name,
+        "refName": record.reference_name,
+        "effects": effects,
+    })
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,5 +920,103 @@ mod tests {
     fn an_unrecognised_accessory_ending_yields_nothing() {
         assert_eq!(category_from_name("accessory", "Heavy Chain"), None);
         assert_eq!(category_from_name("accessory", ""), None);
+    }
+    const ADEPT_RUNE: &str = r##"{"name":"Adept Rune","refName":"Adept Rune","craftable":{"category":"SoulCore"},"augment":[{"categories":["Body Armour","Bow"],"string":"# to Dexterity","values":[9],"tradeId":["rune.stat_3261801346"]}]}"##;
+
+    const NO_TRADE_ID: &str = r##"{"name":"Mystery Rune","refName":"Mystery Rune","craftable":{"category":"SoulCore"},"augment":[{"categories":["Body Armour"],"string":"# to Nothing","values":[1]}]}"##;
+
+    const NOT_A_RUNE: &str =
+        r##"{"name":"Chaos Orb","refName":"Chaos Orb","craftable":{"category":"Currency"}}"##;
+
+    #[test]
+    fn a_rune_with_a_trade_id_becomes_an_augment() {
+        let got = build_augments(ADEPT_RUNE);
+
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "Adept Rune");
+        assert_eq!(got[0].effects[0].reference, "# to Dexterity");
+        assert_eq!(got[0].effects[0].trade_id, "rune.stat_3261801346");
+        assert_eq!(got[0].effects[0].value, 9.0);
+    }
+
+    #[test]
+    fn an_augment_keeps_every_category_it_fits() {
+        let got = build_augments(ADEPT_RUNE);
+
+        assert!(got[0].effects[0]
+            .categories
+            .contains(&"Body Armour".to_string()));
+        assert!(got[0].effects[0].categories.contains(&"Bow".to_string()));
+    }
+
+    #[test]
+    fn an_effect_with_no_trade_id_is_dropped_because_it_cannot_be_searched() {
+        assert!(build_augments(NO_TRADE_ID).is_empty());
+    }
+
+    #[test]
+    fn an_item_that_is_not_a_socketable_is_not_an_augment() {
+        assert!(build_augments(NOT_A_RUNE).is_empty());
+    }
+
+    #[test]
+    fn a_line_that_is_not_json_is_skipped_rather_than_stopping_the_build() {
+        let body = format!("{ADEPT_RUNE}\n{{not json\n{NOT_A_RUNE}");
+
+        assert_eq!(build_augments(&body).len(), 1);
+    }
+
+    #[test]
+    fn an_empty_line_is_skipped() {
+        assert_eq!(build_augments(&format!("\n{ADEPT_RUNE}\n\n")).len(), 1);
+    }
+
+    #[test]
+    fn the_same_rune_twice_is_written_once() {
+        assert_eq!(
+            build_augments(&format!("{ADEPT_RUNE}\n{ADEPT_RUNE}")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn augments_are_written_in_a_stable_order() {
+        let two = format!(
+            "{ADEPT_RUNE}\n{}",
+            ADEPT_RUNE.replace("Adept Rune", "Abyssal Rune")
+        );
+        let got = build_augments(&two);
+
+        assert_eq!(got[0].reference_name, "Abyssal Rune");
+        assert_eq!(got[1].reference_name, "Adept Rune");
+    }
+
+    #[test]
+    fn an_augment_round_trips_through_ndjson() {
+        let record = &build_augments(ADEPT_RUNE)[0];
+        let line = augment_to_ndjson(record);
+
+        assert!(line.contains("\"refName\":\"Adept Rune\""), "{line}");
+        assert!(line.contains("\"value\":9.0"), "{line}");
+        assert!(line.contains("# to Dexterity"), "{line}");
+        assert!(line.contains("rune.stat_3261801346"), "{line}");
+    }
+
+    #[test]
+    fn a_category_the_parser_does_not_know_is_dropped() {
+        let odd = ADEPT_RUNE.replace("\"Bow\"", "\"Nonsense Category\"");
+        let got = build_augments(&odd);
+
+        assert_eq!(
+            got[0].effects[0].categories,
+            vec!["Body Armour".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_effect_with_no_known_category_at_all_is_dropped() {
+        let odd = ADEPT_RUNE.replace("[\"Body Armour\",\"Bow\"]", "[\"Nonsense\"]");
+
+        assert!(build_augments(&odd).is_empty());
     }
 }

@@ -25,11 +25,19 @@ pub enum StartupError {
     },
 }
 
+pub const AUTO_GAME: &str = "auto";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Validated {
-    pub game: GameVersion,
+    pub game: Option<GameVersion>,
     pub hotkey: Hotkey,
     pub network_disabled: bool,
+}
+
+impl Validated {
+    pub fn starting_game(&self) -> GameVersion {
+        self.game.unwrap_or(GameVersion::Poe2)
+    }
 }
 
 pub fn validate(
@@ -42,9 +50,12 @@ pub fn validate(
         source,
     })?;
 
-    let parsed_game = GameVersion::parse(game).ok_or_else(|| StartupError::Game {
-        game: game.to_string(),
-    })?;
+    let parsed_game = match game.trim() {
+        AUTO_GAME | "" => None,
+        named => Some(GameVersion::parse(named).ok_or_else(|| StartupError::Game {
+            game: game.to_string(),
+        })?),
+    };
 
     let network_disabled = match url_check {
         Ok(()) => false,
@@ -72,7 +83,7 @@ mod tests {
     fn a_good_config_validates() {
         let got = validate("poe2", "Ctrl+D", Ok(())).expect("valid");
 
-        assert_eq!(got.game, GameVersion::Poe2);
+        assert_eq!(got.game, Some(GameVersion::Poe2));
         assert_eq!(got.hotkey.to_string(), "Ctrl+D");
         assert!(!got.network_disabled);
     }
@@ -82,6 +93,24 @@ mod tests {
         let err = validate("poe2", "NotAKey+++", Ok(())).expect_err("a failure");
 
         assert!(err.to_string().contains("NotAKey"), "{err}");
+    }
+
+    #[test]
+    fn auto_means_nothing_is_pinned_and_poe2_is_where_it_starts() {
+        for spelling in ["auto", " auto ", ""] {
+            let got = validate(spelling, "Ctrl+D", Ok(())).expect("valid");
+
+            assert_eq!(got.game, None, "{spelling:?}");
+            assert_eq!(got.starting_game(), GameVersion::Poe2, "{spelling:?}");
+        }
+    }
+
+    #[test]
+    fn a_named_game_stays_pinned_to_itself() {
+        let got = validate("poe1", "Ctrl+D", Ok(())).expect("valid");
+
+        assert_eq!(got.game, Some(GameVersion::Poe1));
+        assert_eq!(got.starting_game(), GameVersion::Poe1);
     }
 
     #[test]

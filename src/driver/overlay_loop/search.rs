@@ -5,6 +5,7 @@ pub struct SearchOutcome {
     pub total: u64,
     pub id: String,
     pub exchange: bool,
+    pub ids: Vec<String>,
 }
 
 impl SearchOutcome {
@@ -53,6 +54,7 @@ mod tests {
             total: 12,
             id: id.to_string(),
             exchange,
+            ids: Vec::new(),
         }
     }
 

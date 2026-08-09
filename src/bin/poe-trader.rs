@@ -1,5 +1,9 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::process::ExitCode;
 
+use poe_trader_app::adapter::config_store_adapter;
+#[cfg(windows)]
 use poe_trader_app::adapter::game_data_adapter::GameTables;
 #[cfg(windows)]
 use poe_trader_app::adapter::http_adapter::HttpAdapter;
@@ -9,9 +13,11 @@ use poe_trader_app::driver::cli_driver;
 use poe_trader_app::driver::overlay_loop::wiring;
 use poe_trader_app::logging::{Logger, Value};
 #[cfg(windows)]
-use poe_trader_core::types::GameVersion;
+use poe_trader_core::types::{GamePair, GameVersion};
 
 fn main() -> ExitCode {
+    cli_driver::attach_console();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if let Some(code) = cli_driver::run_subcommand(&args) {
@@ -22,10 +28,7 @@ fn main() -> ExitCode {
 
     let press = args.iter().any(|a| a == "--press-hotkey");
 
-    let args: Vec<String> = args
-        .into_iter()
-        .filter(|a| a != "--check-clipboard" && a != "--press-hotkey")
-        .collect();
+    let args = wiring::strip_diagnostic_flags(args);
 
     let cfg = match PoeTraderConfig::load(&args) {
         Ok(cfg) => cfg,
@@ -66,40 +69,34 @@ fn main() -> ExitCode {
         log.warn("network is disabled. Pricing will not work.", &[]);
     }
 
+    let game = validated.starting_game();
     let hotkey = validated.hotkey;
-    let game = validated.game;
+    let pinned = validated.game;
 
     if press {
         return cli_driver::press_hotkey(&hotkey);
     }
 
-    let data = match GameTables::load(std::path::Path::new(&cfg.data_dir)) {
-        Ok(data) => data,
-        Err(err) => {
-            log.error(
-                "loading game data",
-                &[
-                    ("data_dir", Value::Str(cfg.data_dir.clone())),
-                    ("error", Value::Str(err.to_string())),
-                ],
-            );
+    let config_dir = config_store_adapter::resolve_dir(&cfg.config_dir);
 
-            return ExitCode::FAILURE;
-        }
+    let Some((data, origin)) = wiring::build_data(&cfg, &config_dir, pinned, &log) else {
+        return ExitCode::FAILURE;
     };
 
-    cli_driver::report_startup(&log, game, &cfg.window_title, &hotkey.to_string(), &data);
+    let title = wiring::window_title(&cfg.window_title, game);
+
+    cli_driver::report_startup(&log, game, &title, &hotkey.to_string(), data.get(game));
 
     #[cfg(windows)]
     if check_clipboard {
-        return cli_driver::check_clipboard_now(game, &data, &log);
+        return cli_driver::check_clipboard_now(game, data.get(game), &log);
     }
 
     #[cfg(not(windows))]
     let _ = check_clipboard;
 
     #[cfg(windows)]
-    return run_overlay(&cfg, game, data, hotkey, http, log);
+    return run_overlay(&cfg, &config_dir, pinned, data, origin, hotkey, http, log);
 
     #[cfg(not(windows))]
     {
@@ -108,7 +105,7 @@ fn main() -> ExitCode {
             &[],
         );
 
-        let _ = (http, hotkey, game, data);
+        let _ = (http, hotkey, game, data, origin);
 
         ExitCode::SUCCESS
     }
@@ -117,35 +114,26 @@ fn main() -> ExitCode {
 #[cfg(windows)]
 fn run_overlay(
     cfg: &PoeTraderConfig,
-    game: GameVersion,
-    data: GameTables,
+    config_dir: &std::path::Path,
+    pinned: Option<GameVersion>,
+    data: GamePair<GameTables>,
+    origin: GamePair<poe_trader_app::adapter::game_data_adapter::Origin>,
     hotkey: poe_trader_app::types::Hotkey,
     http: HttpAdapter,
     log: Logger,
 ) -> ExitCode {
     use poe_trader_app::adapter::clock_adapter::SystemClock;
-    use poe_trader_app::adapter::game_window_adapter::GameWindowAdapter;
     use poe_trader_app::adapter::input_state_adapter::{hold_key_for, SystemInput};
     use poe_trader_app::adapter::window_probe_adapter::SystemWindowProbe;
-    use poe_trader_app::controller::game_state_controller::GameStateController;
     use poe_trader_app::controller::input_controller::InputController;
 
     use poe_trader_app::controller::panel_health_controller::PanelHealthController;
     use poe_trader_app::controller::price_check_controller::PriceCheckController;
-    use poe_trader_app::driver::overlay_loop::{wiring, OverlayLoopDriver, OverlaySettings};
+    use poe_trader_app::driver::overlay_loop::{wiring, OverlayLoopDriver};
 
-    let settings = OverlaySettings {
-        window_title: cfg.window_title.clone(),
-        league: cfg.league.clone(),
-        session: cfg.poesessid.clone(),
-        site_url: cfg.trade_base_url.clone(),
-        data_dir: cfg.data_dir.clone(),
-        log_level: cfg.log_level.clone(),
-        latency: cfg.api_latency_seconds.max(0) as u32,
-        restore_clipboard: cfg.restore_clipboard,
-    };
+    let (window, game) = wiring::build_game_state(cfg, pinned, &log);
 
-    let window = GameStateController::new(GameWindowAdapter::new(&cfg.window_title));
+    let settings = wiring::build_settings_for(cfg, game, pinned, &origin);
 
     let Some(copier) = wiring::build_copier(cfg.restore_clipboard, &log) else {
         return ExitCode::FAILURE;
@@ -165,8 +153,14 @@ fn run_overlay(
     let hold = hold_key_for(hotkey.modifiers());
     let input = InputController::new(SystemInput::new(), hold);
 
-    let logs = wiring::build_logs(&cfg.client_log_path);
-    let stats = data.stat_count();
+    let client_log = wiring::resolve_client_log(&cfg.client_log_path, game, &log);
+    let refresh = wiring::RefreshPlan::new(cfg, config_dir);
+
+    refresh.start(refresh.due_now(), &log);
+
+    let logs = wiring::build_logs(&client_log, wiring::league_is_unknown(config_dir));
+    let remembered = wiring::build_settings(config_dir);
+    let stats = data.get(game).stat_count();
 
     let driver = match OverlayLoopDriver::new(
         settings,
@@ -180,7 +174,9 @@ fn run_overlay(
         health,
         input,
         logs,
+        remembered,
         hold,
+        refresh,
         Logger::new(&cfg.log_level, "poe-trader"),
     ) {
         Ok(driver) => driver,

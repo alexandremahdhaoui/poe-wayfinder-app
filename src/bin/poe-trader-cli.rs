@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use poe_trader_app::adapter::config_store_adapter;
 use poe_trader_app::adapter::game_data_adapter::GameTables;
 use poe_trader_app::adapter::http_adapter::NetworkPolicy;
 use poe_trader_app::adapter::query_json_adapter::{to_exchange_json, to_json};
@@ -70,8 +71,10 @@ fn main() -> ExitCode {
         }
     };
 
-    let data = match GameTables::load(std::path::Path::new(&cfg.data_dir)) {
-        Ok(data) => data,
+    let config_dir = config_store_adapter::resolve_dir("");
+
+    let (data, origin) = match GameTables::resolve(&cfg.data_dir, &config_dir, game) {
+        Ok(found) => found,
         Err(err) => {
             log.error(
                 "loading game data",
@@ -88,6 +91,7 @@ fn main() -> ExitCode {
     log.info(
         "loaded game data",
         &[
+            ("origin", Value::Str(origin.as_str().to_string())),
             ("stats", Value::Int(data.stat_count() as i64)),
             ("item_names", Value::Int(data.item_name_count() as i64)),
         ],

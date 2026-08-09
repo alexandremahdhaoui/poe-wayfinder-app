@@ -58,7 +58,7 @@ impl Default for OverlayGeometry {
             anchor: Anchor::TopRight,
             offset_x: 16.0,
             offset_y: 16.0,
-            width: 400.0,
+            width: 460.0,
             height: 600.0,
         }
     }

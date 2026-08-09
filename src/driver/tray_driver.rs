@@ -1,5 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
+    OpenStatus,
     Research,
     OpenInBrowser,
     TogglePaused,
@@ -58,6 +59,12 @@ pub fn menu(state: &TrayState) -> Vec<MenuItem> {
     if state.stat_count == 0 {
         out.push(MenuItem::status("No game data loaded".to_string()));
     }
+
+    out.push(MenuItem::action(
+        "Open poe-trader",
+        TrayAction::OpenStatus,
+        true,
+    ));
 
     out.push(MenuItem::action(
         if state.paused { "Resume" } else { "Pause" },
@@ -765,7 +772,8 @@ mod render_tests {
             };
 
             let handled = match action {
-                TrayAction::Research
+                TrayAction::OpenStatus
+                | TrayAction::Research
                 | TrayAction::OpenInBrowser
                 | TrayAction::TogglePaused
                 | TrayAction::RebuildData

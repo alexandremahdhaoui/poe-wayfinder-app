@@ -472,7 +472,7 @@ pub fn self_test_hook() -> ExitCode {
 }
 
 #[cfg(windows)]
-pub fn report_hotkey_outlook(
+fn report_hotkey_outlook(
     window: &crate::adapter::game_window_adapter::GameWindowAdapter,
     log: &Logger,
 ) {
@@ -611,7 +611,9 @@ pub fn documents_dir() -> String {
 }
 
 #[cfg(windows)]
-pub fn report_input(log: &Logger) {
+pub fn report_input(log: &Logger, window: &crate::adapter::game_window_adapter::GameWindowAdapter) {
+    report_hotkey_outlook(window, log);
+
     let sent = crate::adapter::game_window_adapter::self_test_send_input();
 
     if sent == 2 {
@@ -643,6 +645,7 @@ pub fn report_startup(
             ("hotkey", Value::Str(hotkey.to_string())),
             ("stats", Value::Int(data.stat_count() as i64)),
             ("item_names", Value::Int(data.item_name_count() as i64)),
+            ("augments", Value::Int(data.augment_count() as i64)),
         ],
     );
 
@@ -710,6 +713,16 @@ pub fn run_subcommand(args: &[String]) -> Option<ExitCode> {
         return Some(move_mouse(x, y));
     }
 
+    if args.first().map(String::as_str) == Some("--focus-window") {
+        let Some(title) = args.get(1).cloned() else {
+            eprintln!("usage: --focus-window <exact title>");
+
+            return Some(ExitCode::FAILURE);
+        };
+
+        return Some(focus_window(&title));
+    }
+
     if args.iter().any(|a| a == "--self-test-hook") {
         return Some(self_test_hook());
     }
@@ -752,6 +765,98 @@ pub fn move_mouse(x: i32, y: i32) -> ExitCode {
 #[cfg(not(windows))]
 pub fn move_mouse(_x: i32, _y: i32) -> ExitCode {
     eprintln!("poe-trader: --move-mouse only works on Windows.");
+
+    ExitCode::FAILURE
+}
+
+#[cfg(windows)]
+pub fn attach_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn attach_console() {}
+
+#[cfg(windows)]
+pub fn focus_window(title: &str) -> ExitCode {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::WindowsAndMessaging::SW_RESTORE;
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow};
+
+    let wanted = HSTRING::from(title);
+
+    let Ok(handle) = (unsafe { FindWindowW(None, &wanted) }) else {
+        eprintln!("poe-trader: no window is titled {title:?}");
+
+        return ExitCode::FAILURE;
+    };
+
+    if handle.is_invalid() {
+        eprintln!("poe-trader: no window is titled {title:?}");
+
+        return ExitCode::FAILURE;
+    }
+
+    unsafe {
+        let _ = ShowWindow(handle, SW_RESTORE);
+    }
+
+    let raised = raise_to_front(handle);
+
+    println!("poe-trader: {title:?} raised={raised}");
+
+    match raised {
+        true => ExitCode::SUCCESS,
+        false => ExitCode::FAILURE,
+    }
+}
+
+#[cfg(windows)]
+fn raise_to_front(handle: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+    };
+
+    if unsafe { SetForegroundWindow(handle) }.as_bool() {
+        return true;
+    }
+
+    let front = unsafe { GetForegroundWindow() };
+    let owner = unsafe { GetWindowThreadProcessId(front, None) };
+    let ours = unsafe { GetCurrentThreadId() };
+
+    if owner == 0 || owner == ours {
+        return false;
+    }
+
+    let attached = unsafe { AttachThreadInput(ours, owner, true) }.as_bool();
+
+    let raised = unsafe {
+        let _ = BringWindowToTop(handle);
+        let _ = SetActiveWindow(handle);
+        let _ = SetFocus(Some(handle));
+
+        SetForegroundWindow(handle).as_bool()
+    };
+
+    if attached {
+        unsafe {
+            let _ = AttachThreadInput(ours, owner, false);
+        }
+    }
+
+    raised
+}
+
+#[cfg(not(windows))]
+pub fn focus_window(_title: &str) -> ExitCode {
+    eprintln!("poe-trader: --focus-window only works on Windows.");
 
     ExitCode::FAILURE
 }

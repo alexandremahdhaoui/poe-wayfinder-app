@@ -67,6 +67,47 @@ impl Settings {
     }
 }
 
+#[cfg_attr(test, mockall::automock)]
+pub trait SettingsStore: Send + Sync {
+    fn load(&self) -> Settings;
+
+    fn save(&self, settings: &Settings) -> Result<(), StoreError>;
+}
+
+impl SettingsStore for ConfigStore {
+    fn load(&self) -> Settings {
+        ConfigStore::load(self)
+    }
+
+    fn save(&self, settings: &Settings) -> Result<(), StoreError> {
+        ConfigStore::save(self, settings)
+    }
+}
+
+pub const APP_DIR: &str = "poe-trader";
+
+pub fn resolve_dir(configured: &str) -> PathBuf {
+    if !configured.trim().is_empty() {
+        return PathBuf::from(configured);
+    }
+
+    default_dir()
+}
+
+pub fn default_dir() -> PathBuf {
+    for key in ["APPDATA", "XDG_CONFIG_HOME"] {
+        if let Some(base) = std::env::var_os(key).filter(|v| !v.is_empty()) {
+            return PathBuf::from(base).join(APP_DIR);
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(home).join(".config").join(APP_DIR);
+    }
+
+    PathBuf::from(".").join(APP_DIR)
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigStore {
     path: PathBuf,
@@ -120,6 +161,21 @@ impl ConfigStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_configured_directory_is_used_as_given() {
+        assert_eq!(resolve_dir("/somewhere"), PathBuf::from("/somewhere"));
+        assert_eq!(resolve_dir("  "), default_dir());
+        assert_eq!(resolve_dir(""), default_dir());
+    }
+
+    #[test]
+    fn the_default_directory_is_named_after_the_app_and_is_not_the_working_directory() {
+        let dir = default_dir();
+
+        assert_eq!(dir.file_name().and_then(|n| n.to_str()), Some(APP_DIR));
+        assert!(dir.parent().is_some(), "{}", dir.display());
+    }
 
     fn tempdir(name: &str) -> PathBuf {
         let dir =

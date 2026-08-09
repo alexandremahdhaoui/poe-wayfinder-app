@@ -158,6 +158,16 @@ test:
           cargo run --quiet --release --bin poe-trader-arch --
           --root . --max 0
 
+  - name: uiparity
+    runner: go://generic-test-runner
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          cargo run --quiet --release --bin poe-trader-uiparity --
+          --min 100
+
   - name: datacheck
     runner: go://generic-test-runner
     spec:

@@ -26,6 +26,16 @@ pub trait GameWindowSource: Send + Sync {
     fn cursor(&self) -> (i32, i32);
 
     fn scale(&self) -> f32;
+
+    fn retarget(&self, _title: &str) {}
+
+    fn open_titles(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn foreground(&self) -> Option<String> {
+        None
+    }
 }
 
 pub fn should_draw(window: &GameWindow) -> bool {
@@ -50,13 +60,13 @@ mod win {
     };
 
     pub struct GameWindowAdapter {
-        title: String,
+        title: std::sync::RwLock<String>,
     }
 
     impl GameWindowAdapter {
         pub fn new(title: &str) -> Self {
             Self {
-                title: title.to_string(),
+                title: std::sync::RwLock::new(title.to_string()),
             }
         }
 
@@ -64,16 +74,22 @@ mod win {
             self.handle().ok().map(|h| h.0 as isize)
         }
 
+        pub fn title(&self) -> String {
+            match self.title.read() {
+                Ok(title) => title.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            }
+        }
+
         fn handle(&self) -> Result<HWND, WindowError> {
-            let title = HSTRING::from(self.title.as_str());
+            let wanted = self.title();
+            let title = HSTRING::from(wanted.as_str());
 
             let handle = unsafe { FindWindowW(None, &title) };
 
             match handle {
                 Ok(h) if !h.is_invalid() => Ok(h),
-                _ => Err(WindowError::NotFound {
-                    title: self.title.clone(),
-                }),
+                _ => Err(WindowError::NotFound { title: wanted }),
             }
         }
     }
@@ -85,7 +101,7 @@ mod win {
             let mut rect = RECT::default();
 
             unsafe { GetWindowRect(handle, &mut rect) }.map_err(|_| WindowError::Rect {
-                title: self.title.clone(),
+                title: self.title(),
             })?;
 
             let foreground = unsafe { GetForegroundWindow() };
@@ -109,6 +125,23 @@ mod win {
             }
 
             (point.x, point.y)
+        }
+
+        fn retarget(&self, title: &str) {
+            let mut held = match self.title.write() {
+                Ok(held) => held,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            *held = title.to_string();
+        }
+
+        fn open_titles(&self) -> Vec<String> {
+            visible_window_titles()
+        }
+
+        fn foreground(&self) -> Option<String> {
+            foreground_title()
         }
 
         fn scale(&self) -> f32 {
@@ -165,6 +198,31 @@ mod win {
 
             Ok(())
         }
+    }
+
+    pub fn foreground_title() -> Option<String> {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+
+        let handle = unsafe { GetForegroundWindow() };
+
+        if handle.is_invalid() {
+            return None;
+        }
+
+        let length = unsafe { GetWindowTextLengthW(handle) };
+
+        if length <= 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; length as usize + 1];
+        let written = unsafe { GetWindowTextW(handle, &mut buffer) };
+
+        if written <= 0 {
+            return None;
+        }
+
+        Some(String::from_utf16_lossy(&buffer[..written as usize]))
     }
 
     pub fn visible_window_titles() -> Vec<String> {
@@ -261,8 +319,8 @@ mod win {
 
 #[cfg(windows)]
 pub use win::{
-    press_combination, self_test_send_input, visible_window_titles, GameWindowAdapter,
-    KeyboardCopyTrigger,
+    foreground_title, press_combination, self_test_send_input, visible_window_titles,
+    GameWindowAdapter, KeyboardCopyTrigger,
 };
 
 #[cfg(test)]
