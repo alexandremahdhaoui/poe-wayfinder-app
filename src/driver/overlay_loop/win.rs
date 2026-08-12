@@ -15,17 +15,20 @@ use crate::controller::price_check_controller::{Prices, SearchResult};
 use crate::controller::price_check_loop;
 use crate::controller::session_controller::Session;
 use crate::controller::settings_controller::RememberedSettings;
+use crate::controller::startup_controller::Press;
 use crate::controller::status_controller::{LeagueSource, Status};
 use crate::driver::hook_driver::HookDriver;
 use crate::driver::hotkey_driver::HotkeyDriver;
 use crate::driver::overlay_placement;
 use crate::driver::overlay_ui_driver::{
-    overlay_viewport, paint, should_paint, status_window, StatusEvent, UiEvent,
+    drop_splash_background, overlay_viewport, paint, should_paint, splash_window, status_window,
+    StatusEvent, UiEvent,
 };
 use crate::driver::tray_driver::{accepts_hotkey, TrayAction, TrayIcon, TrayState};
 use crate::logging::{Logger, Value};
 use crate::types::Hotkey;
 use crate::util::error_chain::render;
+use poe_wayfinder_core::controller::hotkey_match::Binding;
 
 use poe_wayfinder_core::adapter::data_adapter::GameData;
 use poe_wayfinder_core::controller::game_detect;
@@ -40,6 +43,8 @@ const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 100;
 const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
+const SPLASH_HOLD: Duration = Duration::from_millis(2000);
+const SPLASH_FADE: Duration = Duration::from_millis(400);
 
 pub struct OverlayLoopDriver<W, C, P, H, D, I, L, R>
 where
@@ -81,6 +86,12 @@ where
     probe_due: bool,
     last_game_check: Instant,
     status_open: bool,
+    locked_focused: bool,
+    widgets: crate::controller::widgets_controller::Widgets,
+    roles: crate::controller::startup_controller::Validated,
+    awaiting_search: Option<Box<poe_wayfinder_core::controller::price_check::PriceCheck>>,
+    splash_since: Option<Instant>,
+    splash_keyed: bool,
     hotkey_text: String,
     refresh: super::wiring::RefreshPlan,
     last_search: Option<SearchOutcome>,
@@ -105,7 +116,7 @@ where
         game: GameVersion,
         data: GamePair<D>,
         stats: usize,
-        hotkey: &Hotkey,
+        roles: crate::controller::startup_controller::Validated,
         window: W,
         copier: C,
         prices: P,
@@ -119,8 +130,16 @@ where
     ) -> Result<Self, OverlayLoopError> {
         report_window(&window, &log);
 
-        let hotkeys = start_registration(hotkey, &log);
-        let hook = start_hook(hotkey, &log);
+        let hotkeys_wanted = roles.every_hotkey();
+
+        let Some(hotkey) = hotkeys_wanted.first().cloned() else {
+            return Err(OverlayLoopError::Window {
+                message: "no price check hotkey is configured".to_string(),
+            });
+        };
+
+        let hotkeys = start_registration(&hotkey, &log);
+        let hook = start_hook(&hotkeys_wanted, &log);
 
         let tray_state = TrayState {
             game_found: window.window().is_some(),
@@ -130,7 +149,7 @@ where
             stat_count: stats,
         };
 
-        let tray = start_tray(&tray_state, game, hotkey, &log);
+        let tray = start_tray(&tray_state, game, &hotkey, &log);
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -163,6 +182,7 @@ where
             }
         }
 
+        let widgets = opened_widgets(&remembered);
         let window_was_found = window.window().is_some();
 
         Ok(Self {
@@ -194,7 +214,13 @@ where
             was_showing: false,
             probe_due: false,
             last_game_check: Instant::now(),
-            status_open: true,
+            status_open: false,
+            locked_focused: false,
+            widgets,
+            roles,
+            awaiting_search: None,
+            splash_since: Some(Instant::now()),
+            splash_keyed: false,
             hotkey_text: hotkey.to_string(),
             refresh,
             last_search: None,
@@ -203,7 +229,7 @@ where
         })
     }
 
-    pub fn run(mut self) -> Result<(), OverlayLoopError> {
+    pub fn run(self) -> Result<(), OverlayLoopError> {
         let first = self
             .model
             .frame_scaled(self.window.window(), self.window.scale());
@@ -213,9 +239,11 @@ where
             ..eframe::NativeOptions::default()
         };
 
-        let result = eframe::run_simple_native(PANEL_WINDOW_TITLE, native_options, {
-            move |ctx, _frame| self.frame(ctx)
-        });
+        let result = eframe::run_native(
+            PANEL_WINDOW_TITLE,
+            native_options,
+            Box::new(move |_cc| Ok(Box::new(self))),
+        );
 
         result.map_err(|err| OverlayLoopError::Window {
             message: err.to_string(),
@@ -223,6 +251,7 @@ where
     }
 
     fn frame(&mut self, ctx: &egui::Context) {
+        self.advance_search();
         self.heartbeat();
 
         if self.probe_due {
@@ -233,12 +262,19 @@ where
         let asked = self.collect_actions();
         self.dispatch(asked, ctx);
 
-        if self.read_hotkey() {
-            self.run_price_check();
+        match self.read_hotkey() {
+            Some(Press::Check) => self.run_price_check(false),
+            Some(Press::Locked) => self.run_price_check(true),
+            Some(Press::ToggleOverlay) => self.toggle_overlay(),
+            Some(Press::Command { index }) => self.send_command(index),
+            Some(Press::StashSearch { index }) => self.send_stash_search(index),
+            Some(Press::OpenLink { site }) => self.open_link(site),
+            None => {}
         }
 
         self.follow_game();
         self.watch_logs();
+        self.draw_splash(ctx);
         self.draw_status(ctx);
 
         let found = self.window.window().map(|mut window| {
@@ -259,6 +295,8 @@ where
         }
 
         frame.takes_input = self.life.takes_input();
+
+        self.focus_locked_panel(ctx, &frame);
 
         self.report_panel_change(&frame, found);
         self.apply_placement(ctx, &frame);
@@ -317,6 +355,12 @@ where
             return;
         };
 
+        for event in &events {
+            if let Some(happening) = super::wiring::as_happening(event) {
+                self.widgets.note_happening(&happening);
+            }
+        }
+
         if events.is_empty() || !self.session.apply_all(&events) {
             return;
         }
@@ -336,6 +380,8 @@ where
                 ("now", Value::Str(league.to_string())),
             ],
         );
+
+        self.widgets.note_log(&format!("league is now {league}"));
 
         self.settings.league = league.to_string();
         self.tray_state.league = Some(league.to_string());
@@ -461,6 +507,35 @@ where
         }
     }
 
+    fn draw_splash(&mut self, ctx: &egui::Context) {
+        let Some(since) = self.splash_since else {
+            return;
+        };
+
+        let elapsed = since.elapsed();
+
+        let fade = match elapsed.checked_sub(SPLASH_HOLD) {
+            None => 1.0,
+            Some(gone) => 1.0 - (gone.as_secs_f32() / SPLASH_FADE.as_secs_f32()).min(1.0),
+        };
+
+        let skipped = splash_window(ctx, fade);
+
+        if !self.splash_keyed {
+            self.splash_keyed = drop_splash_background();
+        }
+
+        if skipped || fade <= 0.0 {
+            self.splash_since = None;
+            self.show_status(true);
+
+            self.log
+                .info("the splash is done", &[("skipped", Value::Bool(skipped))]);
+        }
+
+        ctx.request_repaint();
+    }
+
     fn show_status(&mut self, open: bool) {
         if self.status_open == open {
             return;
@@ -510,8 +585,23 @@ where
 
         let status = self.status();
 
-        for event in status_window(ctx, &status, std::time::SystemTime::now()) {
+        let names = self.data.get(self.game).every_name();
+        let bindings = self.bindings_shown();
+        let now_ms = crate::util::elapsed::millis() as u64;
+
+        for event in status_window(
+            ctx,
+            &status,
+            std::time::SystemTime::now(),
+            &mut self.widgets,
+            &names,
+            &bindings,
+            now_ms,
+        ) {
             match event {
+                StatusEvent::MarkMap { matcher, set } => {
+                    self.remembered.remember_verdict(&matcher, &set);
+                }
                 StatusEvent::HideToTray => self.show_status(false),
                 StatusEvent::Quit => {
                     self.log.info("quit chosen from the status window", &[]);
@@ -660,19 +750,21 @@ where
         Ok(total)
     }
 
-    fn read_hotkey(&mut self) -> bool {
+    fn read_hotkey(&mut self) -> Option<Press> {
         let by_registration = self.hotkeys.as_mut().is_some_and(|h| h.fired());
-        let by_hook = self.hook.as_mut().is_some_and(|h| h.fired());
+        let by_hook = self.hook.as_mut().and_then(|h| h.fired());
 
-        if !(by_registration || by_hook) {
-            return false;
-        }
+        let press = match (by_registration, by_hook) {
+            (_, Some(index)) => self.roles.role_of(index),
+            (true, None) => Press::Check,
+            (false, None) => return None,
+        };
 
         if !press_coalesce::accept(self.last_press.map(|at| at.elapsed())) {
             self.log
                 .debug("the same press reported twice. Ignored.", &[]);
 
-            return false;
+            return None;
         }
 
         if !accepts_hotkey(&self.tray_state) {
@@ -687,10 +779,167 @@ where
                 ],
             );
 
-            return false;
+            return None;
         }
 
-        true
+        Some(press)
+    }
+
+    fn send_command(&mut self, index: usize) {
+        let Some((_, command)) = self.roles.commands.get(index).cloned() else {
+            return;
+        };
+
+        let action =
+            poe_wayfinder_core::controller::chat::type_in_chat(&command.text, command.send);
+
+        let copier = &mut self.copier;
+
+        let sent = super::wiring::send_chat(&action, |text| copier.put(text).is_ok());
+
+        self.log.info(
+            match sent {
+                true => "sent a chat command",
+                false => "the chat command could not be sent",
+            },
+            &[
+                ("text", Value::Str(command.text.clone())),
+                ("send", Value::Bool(command.send)),
+            ],
+        );
+
+        self.drain_hotkeys();
+    }
+
+    fn bindings_shown(&self) -> Vec<(String, String)> {
+        let mut out = vec![(self.hotkey_text.clone(), "price check".to_string())];
+
+        for locked in &self.roles.locked {
+            out.push((locked.to_string(), "price check, stays open".to_string()));
+        }
+
+        if let Some(overlay) = &self.roles.overlay {
+            out.push((overlay.to_string(), "grab or release the panel".to_string()));
+        }
+
+        for (key, command) in &self.roles.commands {
+            out.push((key.to_string(), command.text.clone()));
+        }
+
+        for (key, preset) in &self.roles.searches {
+            out.push((key.to_string(), format!("stash search {}", preset.text)));
+        }
+
+        for (key, site) in &self.roles.links {
+            out.push((key.to_string(), format!("open the {}", site.as_str())));
+        }
+
+        out
+    }
+
+    fn record_priced(&mut self, listings: u64) {
+        let Some(result) = self.model.result() else {
+            return;
+        };
+
+        let name = match result.item.info.name.is_empty() {
+            true => result.item.info.reference_name.clone(),
+            false => result.item.info.name.clone(),
+        };
+
+        let estimate = self.model.estimate();
+
+        self.widgets
+            .record(poe_wayfinder_core::controller::library::Logged {
+                name,
+                amount: estimate.as_ref().map(|e| e.median),
+                currency: estimate
+                    .as_ref()
+                    .map(|e| e.currency.clone())
+                    .unwrap_or_default(),
+                listings,
+                at_ms: crate::util::elapsed::millis() as u64,
+            });
+
+        self.widgets.check_map(&result.item, 1);
+    }
+
+    fn open_link(&mut self, site: poe_wayfinder_core::controller::item_links::Site) {
+        let text = match self.copier.copy() {
+            Ok(text) => text,
+            Err(message) => {
+                self.log.warn(
+                    "could not copy the item for a reference link",
+                    &[("error", Value::Str(message))],
+                );
+
+                self.drain_hotkeys();
+
+                return;
+            }
+        };
+
+        let reference = price_check(&text, self.data.get(self.game), self.options)
+            .ok()
+            .map(|checked| checked.item.info.reference_name.clone())
+            .unwrap_or_default();
+
+        match poe_wayfinder_core::controller::item_links::url(site, self.game, &reference, &text) {
+            Some(url) => {
+                self.log.info(
+                    "opening a reference site",
+                    &[
+                        ("site", Value::Str(site.as_str().to_string())),
+                        ("url", Value::Str(url.clone())),
+                    ],
+                );
+
+                open_in_browser(&url);
+            }
+            None => self.log.warn(
+                "there is nothing to look up on that site",
+                &[("site", Value::Str(site.as_str().to_string()))],
+            ),
+        }
+
+        self.drain_hotkeys();
+    }
+
+    fn send_stash_search(&mut self, index: usize) {
+        let Some((_, preset)) = self.roles.searches.get(index).cloned() else {
+            return;
+        };
+
+        let action = poe_wayfinder_core::controller::chat::stash_search(&preset.text);
+        let copier = &mut self.copier;
+
+        let sent = super::wiring::send_chat(&action, |text| copier.put(text).is_ok());
+
+        self.log.info(
+            match sent {
+                true => "searched the stash",
+                false => "the stash search could not be sent",
+            },
+            &[("text", Value::Str(preset.text.clone()))],
+        );
+
+        self.drain_hotkeys();
+    }
+
+    fn toggle_overlay(&mut self) {
+        let grabbed = self.life.toggle_locked();
+
+        self.locked_focused = false;
+
+        self.log.info(
+            match grabbed {
+                true => "the overlay key grabbed the panel",
+                false => "the overlay key released the panel",
+            },
+            &[],
+        );
+
+        self.drain_hotkeys();
     }
 
     fn drain_hotkeys(&mut self) {
@@ -705,15 +954,28 @@ where
         self.last_press = Some(Instant::now());
     }
 
-    fn run_price_check(&mut self) {
-        self.log.info("price check hotkey pressed", &[]);
+    fn run_price_check(&mut self, locked: bool) {
+        self.log.info(
+            "price check hotkey pressed",
+            &[
+                crate::util::elapsed::field(),
+                ("locked", Value::Bool(locked)),
+            ],
+        );
 
         let cursor = self.window.cursor();
 
-        self.life.begin(Point {
+        let origin = Point {
             x: cursor.0,
             y: cursor.1,
-        });
+        };
+
+        self.locked_focused = false;
+
+        match locked {
+            true => self.life.begin_locked(origin),
+            false => self.life.begin(origin),
+        }
 
         let Self {
             model,
@@ -721,76 +983,89 @@ where
             data,
             game,
             options,
-            runtime,
-            prices,
-            log,
-            last_search,
             ..
         } = self;
 
         let options = *options;
+        let tables = data.get(*game);
 
-        let outcome = price_check_loop::run(
+        let stage = price_check_loop::prepare(
             model,
             cursor,
             || copier.copy(),
-            |text| price_check(text, data.get(*game), options).map_err(|e| render(&e)),
-            |checked| {
-                log.info(
-                    "searching",
-                    &[
-                        ("url", Value::Str(prices.search_endpoint())),
-                        ("game", Value::Str(game.as_str().to_string())),
-                    ],
-                );
-
-                let (result, exchange) = runtime
-                    .block_on(prices.search_checked(checked))
-                    .map_err(|e| render(&e))
-                    .inspect_err(|message| {
-                        log.error(
-                            "searching the trade site",
-                            &[("error", Value::Str(message.clone()))],
-                        );
-                    })?;
-
-                let total = result.total;
-
-                *last_search = Some(SearchOutcome {
-                    total,
-                    id: result.id,
-                    exchange,
-                    ids: result.result,
-                });
-
-                Ok(total)
-            },
+            |text| price_check(text, tables, options).map_err(|e| render(&e)),
         );
 
-        match outcome {
-            price_check_loop::Outcome::Priced { total } => {
-                self.after_search();
+        let price_check_loop::Stage::Ready(checked) = stage else {
+            self.log.warn(
+                "the price check stopped before it could search",
+                &[
+                    ("why", Value::Str(format!("{stage:?}"))),
+                    (
+                        "message",
+                        Value::Str(self.model.message().unwrap_or_default().to_string()),
+                    ),
+                    crate::util::elapsed::field(),
+                ],
+            );
 
-                let view = self.model.filters();
+            return;
+        };
 
-                self.log.info(
-                    "price check finished",
-                    &[
-                        ("listings", Value::Int(total as i64)),
-                        ("stat_rows", Value::Int(view.stats.len() as i64)),
-                        ("numeric_rows", Value::Int(view.numerics.len() as i64)),
-                        ("flag_rows", Value::Int(view.flags.len() as i64)),
-                        ("enabled", Value::Int(view.enabled_count() as i64)),
-                        ("augments", Value::Int(self.model.augments().len() as i64)),
-                        ("quotes", Value::Int(self.model.listings().len() as i64)),
-                    ],
-                );
-            }
-            other => self.log.warn(
-                "price check did not produce a price",
-                &[("outcome", Value::Str(format!("{other:?}")))],
-            ),
-        }
+        let view = self.model.filters();
+
+        self.log.info(
+            "the panel is up",
+            &[
+                crate::util::elapsed::field(),
+                ("stat_rows", Value::Int(view.stats.len() as i64)),
+                ("numeric_rows", Value::Int(view.numerics.len() as i64)),
+                ("flag_rows", Value::Int(view.flags.len() as i64)),
+            ],
+        );
+
+        self.awaiting_search = Some(checked);
+    }
+
+    fn advance_search(&mut self) {
+        let Some(checked) = self.awaiting_search.take() else {
+            return;
+        };
+
+        self.log.info(
+            "searching",
+            &[
+                ("url", Value::Str(self.prices.search_endpoint())),
+                ("game", Value::Str(self.game.as_str().to_string())),
+                crate::util::elapsed::field(),
+            ],
+        );
+
+        let found = self.search_for(&checked);
+
+        let outcome = price_check_loop::settle(&mut self.model, checked, found);
+
+        let price_check_loop::Outcome::Priced { total } = outcome else {
+            return;
+        };
+
+        self.after_search();
+
+        let view = self.model.filters();
+
+        self.log.info(
+            "price check finished",
+            &[
+                ("listings", Value::Int(total as i64)),
+                ("stat_rows", Value::Int(view.stats.len() as i64)),
+                ("numeric_rows", Value::Int(view.numerics.len() as i64)),
+                ("flag_rows", Value::Int(view.flags.len() as i64)),
+                ("enabled", Value::Int(view.enabled_count() as i64)),
+                ("augments", Value::Int(self.model.augments().len() as i64)),
+                ("quotes", Value::Int(self.model.listings().len() as i64)),
+                crate::util::elapsed::field(),
+            ],
+        );
 
         self.drain_hotkeys();
     }
@@ -950,6 +1225,19 @@ where
         }
     }
 
+    fn focus_locked_panel(&mut self, ctx: &egui::Context, frame: &Frame) {
+        if !self.life.is_locked() || !frame.takes_input || self.locked_focused {
+            return;
+        }
+
+        self.locked_focused = true;
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+
+        self.log
+            .info("the locked panel took focus and will stay open", &[]);
+    }
+
     fn apply_placement(&self, ctx: &egui::Context, frame: &Frame) {
         let placement = overlay_placement::placement(
             frame.rect.map(|r| overlay_placement::Rect {
@@ -1017,6 +1305,37 @@ fn report_window<W: GameState>(window: &W, log: &Logger) {
     }
 }
 
+impl<W, C, P, H, D, I, L, R> eframe::App for OverlayLoopDriver<W, C, P, H, D, I, L, R>
+where
+    W: GameState + 'static,
+    C: Copier + 'static,
+    P: Prices + 'static,
+    H: PanelHealth + 'static,
+    D: GameData + 'static,
+    I: InputState + 'static,
+    L: LogSource + 'static,
+    R: RememberedSettings + 'static,
+{
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame(ctx);
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+}
+
+fn opened_widgets<R: RememberedSettings>(
+    remembered: &R,
+) -> crate::controller::widgets_controller::Widgets {
+    let mut widgets = crate::controller::widgets_controller::Widgets::default();
+
+    widgets.open_notes(&remembered.notes());
+    widgets.remember_verdicts(remembered.map_verdicts());
+
+    widgets
+}
+
 fn start_registration(hotkey: &Hotkey, log: &Logger) -> Option<HotkeyDriver> {
     match HotkeyDriver::start(hotkey) {
         Ok(hotkeys) => {
@@ -1038,12 +1357,22 @@ fn start_registration(hotkey: &Hotkey, log: &Logger) -> Option<HotkeyDriver> {
     }
 }
 
-fn start_hook(hotkey: &Hotkey, log: &Logger) -> Option<HookDriver> {
-    let code = crate::driver::hotkey_driver::virtual_key_code(hotkey.key()).unwrap_or(0);
+pub fn binding_for(hotkey: &Hotkey) -> Binding {
+    Binding {
+        code: crate::driver::hotkey_driver::virtual_key_code(hotkey.key()).unwrap_or(0),
+        modifiers: hook_modifiers(hotkey),
+    }
+}
 
-    match HookDriver::start(code, hook_modifiers(hotkey)) {
+fn start_hook(hotkeys: &[Hotkey], log: &Logger) -> Option<HookDriver> {
+    let bindings: Vec<Binding> = hotkeys.iter().map(binding_for).collect();
+
+    match HookDriver::start(bindings) {
         Ok(hook) => {
-            log.info("watching the hotkey with a keyboard hook as well", &[]);
+            log.info(
+                "watching the hotkeys with a keyboard hook as well",
+                &[("hotkeys", Value::Int(hotkeys.len() as i64))],
+            );
 
             Some(hook)
         }

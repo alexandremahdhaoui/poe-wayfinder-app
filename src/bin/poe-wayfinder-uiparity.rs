@@ -289,6 +289,120 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["TrayAction::RebuildData"],
     },
     Capability {
+        component: "main/src/shortcuts/Shortcuts.ts",
+        name: "a chat line can be sent from a hotkey",
+        domain: &["fn type_in_chat"],
+        ui: &["fn send_command"],
+    },
+    Capability {
+        component: "main/src/shortcuts/text-box.ts",
+        name: "the chat command puts its text through the clipboard",
+        domain: &["fn key_code"],
+        ui: &["fn send_chat"],
+    },
+    Capability {
+        component: "settings/SettingsWindow.vue",
+        name: "every setting is listed with what it does",
+        domain: &["fn switches"],
+        ui: &["Tab::Settings"],
+    },
+    Capability {
+        component: "background/BackgroundTasks.vue",
+        name: "the client log says where you are and who you are",
+        domain: &["fn who_you_are"],
+        ui: &["Tab::Leveling"],
+    },
+    Capability {
+        component: "background/BackgroundTasks.vue",
+        name: "entering a hideout is not announced like entering a zone",
+        domain: &["fn is_hideout"],
+        ui: &["fn as_happening"],
+    },
+    Capability {
+        component: "leveling/WidgetLeveling.vue",
+        name: "the levelling guide follows the character level",
+        domain: &["fn step_for"],
+        ui: &["widgets.levelling_step"],
+    },
+    Capability {
+        component: "map-check/settings-maps.vue",
+        name: "a map verdict is kept for the next map that has that mod",
+        domain: &["fn remember_verdict"],
+        ui: &["StatusEvent::MarkMap"],
+    },
+    Capability {
+        component: "library/WidgetLibrary.vue",
+        name: "every item priced this session is kept with its price",
+        domain: &["fn record"],
+        ui: &["Tab::Library"],
+    },
+    Capability {
+        component: "library/SingleItemSession.vue",
+        name: "the session total is shown per currency",
+        domain: &["fn total_in"],
+        ui: &["widgets.totals"],
+    },
+    Capability {
+        component: "map-check/MapCheck.vue",
+        name: "a map is checked against mods marked dangerous",
+        domain: &["fn review"],
+        ui: &["Tab::Maps"],
+    },
+    Capability {
+        component: "map-check/MapStatButton.vue",
+        name: "a map mod can be marked deadly, warning or good",
+        domain: &["fn set_verdict"],
+        ui: &["widgets.cycle_verdict"],
+    },
+    Capability {
+        component: "item-search/WidgetItemSearch.vue",
+        name: "an item base can be found by name",
+        domain: &["fn search"],
+        ui: &["Tab::Search"],
+    },
+    Capability {
+        component: "notepad/WidgetNotepad.vue",
+        name: "notes are kept and survive a restart",
+        domain: &["fn opened_with"],
+        ui: &["widgets.open_notes"],
+    },
+    Capability {
+        component: "client-log/WidgetClientLog.vue",
+        name: "what the client log said is readable in the app",
+        domain: &["fn note_log"],
+        ui: &["Tab::Log"],
+    },
+    Capability {
+        component: "stopwatch/WidgetStopwatch.vue",
+        name: "a timer can be started, stopped and reset",
+        domain: &["fn toggle"],
+        ui: &["widgets.reset_timer"],
+    },
+    Capability {
+        component: "help/WidgetHelp.vue",
+        name: "every binding in use is listed where it can be read",
+        domain: &["fn entries"],
+        ui: &["fn bindings_shown"],
+    },
+    Capability {
+        component: "item-check/hotkeyable-actions.ts",
+        name: "the item under the cursor opens on a reference site",
+        domain: &["fn url"],
+        ui: &["fn open_link"],
+    },
+    Capability {
+        component: "stash-search/WidgetStashSearch.vue",
+        name: "a stash search preset can be run from a hotkey",
+        domain: &["fn stash_search"],
+        ui: &["fn send_stash_search"],
+    },
+    Capability {
+        component: "overlay/OverlayWindow.vue",
+        name: "the overlay can be grabbed and released without the mouse",
+        domain: &["fn toggle_locked"],
+        ui: &["fn toggle_overlay"],
+    },
+    Capability {
         component: "main/src/windows/game.ts",
         name: "the running game is detected rather than configured",
         domain: &["fn detect_game"],
@@ -734,15 +848,15 @@ mod tests {
     }
 
     #[test]
-    fn a_capability_from_the_electron_shell_names_a_file_under_main() {
+    fn a_capability_from_a_ts_file_names_where_it_lives() {
         for capability in CAPABILITIES {
             if !capability.component.ends_with(".ts") {
                 continue;
             }
 
             assert!(
-                capability.component.starts_with("main/src/"),
-                "{} names {}, which is not where the reference shell lives",
+                capability.component.contains('/'),
+                "{} names {}, which is a bare file name and not a location",
                 capability.name,
                 capability.component
             );

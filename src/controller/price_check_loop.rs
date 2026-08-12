@@ -11,17 +11,18 @@ pub enum Outcome {
     TooBroad,
 }
 
-pub fn run<C, P, S>(
-    model: &mut OverlayModel,
-    cursor: (i32, i32),
-    copy: C,
-    price: P,
-    search: S,
-) -> Outcome
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stage {
+    Stopped(Outcome),
+    Ready(Box<PriceCheck>),
+}
+
+pub const SEARCHING: &str = "Searching the trade site...";
+
+pub fn prepare<C, P>(model: &mut OverlayModel, cursor: (i32, i32), copy: C, price: P) -> Stage
 where
     C: FnOnce() -> Result<String, String>,
     P: FnOnce(&str) -> Result<PriceCheck, String>,
-    S: FnOnce(&PriceCheck) -> Result<u64, String>,
 {
     model.start(cursor);
 
@@ -30,7 +31,7 @@ where
         Err(message) => {
             model.fail(&format!("Could not copy the item: {message}"));
 
-            return Outcome::CopyFailed;
+            return Stage::Stopped(Outcome::CopyFailed);
         }
     };
 
@@ -39,7 +40,7 @@ where
         Err(message) => {
             model.fail(&format!("Could not read the item: {message}"));
 
-            return Outcome::ParseFailed;
+            return Stage::Stopped(Outcome::ParseFailed);
         }
     };
 
@@ -47,17 +48,28 @@ where
         model.finish(checked, 0);
         model.warn("Nothing to search on. The base type is missing from the data file.");
 
-        return Outcome::TooBroad;
+        return Stage::Stopped(Outcome::TooBroad);
     }
 
-    match search(&checked) {
+    model.finish(checked.clone(), 0);
+    model.note(SEARCHING);
+
+    Stage::Ready(Box::new(checked))
+}
+
+pub fn settle(
+    model: &mut OverlayModel,
+    checked: Box<PriceCheck>,
+    found: Result<u64, String>,
+) -> Outcome {
+    match found {
         Ok(total) => {
-            model.finish(checked, total);
+            model.finish(*checked, total);
 
             Outcome::Priced { total }
         }
         Err(message) => {
-            model.finish(checked, 0);
+            model.finish(*checked, 0);
             model.warn(&message);
 
             Outcome::SearchFailed
@@ -72,6 +84,28 @@ mod tests {
     use poe_wayfinder_core::controller::bulk::Endpoint;
     use poe_wayfinder_core::types::item::ParsedItem;
     use poe_wayfinder_core::types::query::{NameField, TradeQuery};
+
+    fn run<C, P, S>(
+        model: &mut OverlayModel,
+        cursor: (i32, i32),
+        copy: C,
+        price: P,
+        search: S,
+    ) -> Outcome
+    where
+        C: FnOnce() -> Result<String, String>,
+        P: FnOnce(&str) -> Result<PriceCheck, String>,
+        S: FnOnce(&PriceCheck) -> Result<u64, String>,
+    {
+        match prepare(model, cursor, copy, price) {
+            Stage::Stopped(outcome) => outcome,
+            Stage::Ready(check) => {
+                let found = search(&check);
+
+                settle(model, check, found)
+            }
+        }
+    }
 
     fn model() -> OverlayModel {
         OverlayModel::new(OverlayGeometry::default())
@@ -102,24 +136,58 @@ mod tests {
 
     const ITEM: &str = "Item Class: Rings\nRarity: Rare\nDoom Loop\nSapphire Ring\n";
 
+    fn ready(m: &mut OverlayModel) -> Stage {
+        prepare(m, (100, 100), || Ok(ITEM.to_string()), |_| Ok(checked()))
+    }
+
     #[test]
     fn a_whole_price_check_reaches_the_panel() {
         let mut m = model();
 
-        let got = run(
-            &mut m,
-            (100, 100),
-            || Ok(ITEM.to_string()),
-            |text| {
-                assert_eq!(text, ITEM);
+        let Stage::Ready(check) = ready(&mut m) else {
+            panic!("a good item is ready to search");
+        };
 
-                Ok(checked())
-            },
-            |_| Ok(42),
-        );
-
-        assert_eq!(got, Outcome::Priced { total: 42 });
+        assert_eq!(settle(&mut m, check, Ok(42)), Outcome::Priced { total: 42 });
         assert_eq!(m.total(), Some(42));
+        assert_eq!(m.state(), OverlayState::Showing);
+    }
+
+    #[test]
+    fn the_panel_is_showing_the_item_before_the_search_runs() {
+        let mut m = model();
+
+        ready(&mut m);
+
+        assert_eq!(
+            m.state(),
+            OverlayState::Showing,
+            "the item and its filters must be on screen before the network is touched"
+        );
+        assert!(!m.filters().stats.is_empty() || m.result().is_some());
+    }
+
+    #[test]
+    fn the_panel_says_it_is_searching_while_the_price_is_still_unknown() {
+        let mut m = model();
+
+        ready(&mut m);
+
+        assert_eq!(m.pacing_note(), Some(SEARCHING));
+        assert_eq!(m.total(), Some(0), "no price is claimed until one is known");
+    }
+
+    #[test]
+    fn a_search_that_fails_leaves_the_item_on_screen() {
+        let mut m = model();
+
+        let Stage::Ready(check) = ready(&mut m) else {
+            panic!("ready");
+        };
+
+        let got = settle(&mut m, check, Err("the trade api refused it".to_string()));
+
+        assert_eq!(got, Outcome::SearchFailed);
         assert_eq!(m.state(), OverlayState::Showing);
     }
 
@@ -127,12 +195,11 @@ mod tests {
     fn the_panel_opens_before_the_slow_work_starts() {
         let mut m = model();
 
-        run(
+        prepare(
             &mut m,
             (100, 100),
             || Err("still busy".to_string()),
             |_| Ok(checked()),
-            |_| Ok(1),
         );
 
         assert_ne!(m.state(), OverlayState::Hidden);
@@ -192,13 +259,13 @@ mod tests {
     fn a_failed_search_still_shows_the_item() {
         let mut m = model();
 
-        let got = run(
-            &mut m,
-            (0, 0),
-            || Ok(ITEM.to_string()),
-            |_| Ok(checked()),
-            |_| Err("429 Too Many Requests".to_string()),
-        );
+        let Stage::Ready(check) =
+            prepare(&mut m, (0, 0), || Ok(ITEM.to_string()), |_| Ok(checked()))
+        else {
+            panic!("ready");
+        };
+
+        let got = settle(&mut m, check, Err("429 Too Many Requests".to_string()));
 
         assert_eq!(got, Outcome::SearchFailed);
         assert!(m.result().is_some(), "the parsed item was thrown away");
@@ -230,12 +297,11 @@ mod tests {
     fn a_query_that_narrows_nothing_names_the_cause() {
         let mut m = model();
 
-        run(
+        prepare(
             &mut m,
             (0, 0),
             || Ok(ITEM.to_string()),
             |_| Ok(unconstrained()),
-            |_| Ok(1),
         );
 
         assert!(m.message().expect("a message").contains("data file"));
@@ -245,12 +311,11 @@ mod tests {
     fn a_query_that_narrows_nothing_still_shows_what_was_read() {
         let mut m = model();
 
-        run(
+        prepare(
             &mut m,
             (0, 0),
             || Ok(ITEM.to_string()),
             |_| Ok(unconstrained()),
-            |_| Ok(1),
         );
 
         assert!(m.result().is_some());

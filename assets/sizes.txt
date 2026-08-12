@@ -1,0 +1,9 @@
+splash.rgba 512 512
+icon-neon-256.rgba 256 256
+icon-neon-48.rgba 48 48
+icon-neon-32.rgba 32 32
+icon-neon-16.rgba 16 16
+icon-tile-256.rgba 256 256
+icon-tile-48.rgba 48 48
+icon-tile-32.rgba 32 32
+icon-tile-16.rgba 16 16

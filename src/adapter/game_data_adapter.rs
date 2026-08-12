@@ -299,6 +299,19 @@ impl GameTables {
         self.stats.len()
     }
 
+    fn collect_names(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .by_name
+            .values()
+            .filter_map(|bases| bases.first().map(|b| b.name.clone()))
+            .collect();
+
+        out.sort();
+        out.dedup();
+
+        out
+    }
+
     pub fn item_name_count(&self) -> usize {
         self.by_name.len()
     }
@@ -334,6 +347,10 @@ impl StatLookup for GameTables {
 }
 
 impl ItemLookup for GameTables {
+    fn every_name(&self) -> Vec<String> {
+        self.collect_names()
+    }
+
     fn item_name_count(&self) -> usize {
         self.by_name.len()
     }
@@ -641,6 +658,22 @@ mod tests {
 
         assert_eq!(*origin.get(GameVersion::Poe1), Origin::Cache);
         assert_eq!(*origin.get(GameVersion::Poe2), Origin::Embedded);
+    }
+
+    #[test]
+    fn every_name_is_listed_once_and_sorted_for_the_search() {
+        let tables = tables();
+        let names = tables.collect_names();
+
+        let mut sorted = names.clone();
+        sorted.sort();
+
+        assert_eq!(names, sorted, "the search shows them in order");
+        assert!(!names.is_empty());
+
+        for (i, name) in names.iter().enumerate() {
+            assert!(!names[i + 1..].contains(name), "{name} appears twice");
+        }
     }
 
     #[test]

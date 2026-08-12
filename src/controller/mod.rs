@@ -14,3 +14,4 @@ pub mod startup_controller;
 pub mod status_controller;
 
 pub use price_check_controller::{PriceCheckController, PriceCheckError, SearchResult};
+pub mod widgets_controller;

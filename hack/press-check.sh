@@ -152,7 +152,33 @@ check "$log" '"msg":"the frame loop is running' "the frame loop never started."
 check "$log" '"msg":"frame loop alive"' "the frame loop started and stopped. The hotkey is never read."
 check "$log" '"msg":"price check hotkey pressed"' "the press never reached the frame loop."
 check "$fake" 'answered Ctrl+C' "the overlay never asked the game to copy."
+check "$log" '"msg":"the panel is up"' "the panel never appeared."
 check "$log" '"msg":"price check finished"' "the price check never finished."
+
+# The whole point of splitting the price check: the panel must appear on the
+# item and its filters, not wait behind a network round trip. Both lines carry
+# elapsed_ms, so this is measured rather than felt.
+panel_at=$(grep '"msg":"the panel is up"' "$log" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
+pressed_at=$(grep '"msg":"price check hotkey pressed"' "$log" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
+done_at=$(grep '"msg":"price check finished"' "$log" | grep -oE '"elapsed_ms":[0-9]+' | head -1 | cut -d: -f2)
+
+if [ -n "$panel_at" ] && [ -n "$pressed_at" ]; then
+    to_panel=$((panel_at - pressed_at))
+
+    if [ "$to_panel" -le 1200 ]; then
+        echo "PASS: the panel was up ${to_panel}ms after the press."
+    else
+        echo "FAIL: the panel took ${to_panel}ms to appear. It must not wait on the search."
+        fail=1
+    fi
+
+    if [ -n "$done_at" ]; then
+        echo "note: the price landed $((done_at - pressed_at))ms after the press, off the critical path."
+    fi
+else
+    echo "FAIL: no elapsed_ms on the press or panel lines, so the delay cannot be measured."
+    fail=1
+fi
 
 # With no --data-dir the exe must find its own data. A run that quietly needed
 # a folder beside it is the thing this whole change was about.

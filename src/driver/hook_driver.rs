@@ -13,11 +13,11 @@ pub enum HookError {
 mod win {
     use super::HookError;
 
-    use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::mpsc::{self, Receiver};
 
     use poe_wayfinder_core::controller::hotkey_match::{
-        fires, is_modifier_code, KeyEvent, Modifiers,
+        Binding, KeyEvent, Modifiers, Reaction, Watcher,
     };
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -28,41 +28,44 @@ mod win {
         WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
-    static WANTED_CODE: AtomicU16 = AtomicU16::new(0);
-    static WANTED_MODS: AtomicU32 = AtomicU32::new(0);
+    pub const MAX_BINDINGS: usize = 8;
 
-    static FIRED: AtomicU32 = AtomicU32::new(0);
+    static FIRED: [AtomicU32; MAX_BINDINGS] = [
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+        AtomicU32::new(0),
+    ];
+
+    static WATCHER: std::sync::Mutex<Option<Watcher>> = std::sync::Mutex::new(None);
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
 
-    fn pack(m: Modifiers) -> u32 {
-        (m.ctrl as u32) | (m.alt as u32) << 1 | (m.shift as u32) << 2 | (m.meta as u32) << 3
-    }
-
-    fn unpack(bits: u32) -> Modifiers {
-        Modifiers {
-            ctrl: bits & 1 != 0,
-            alt: bits & 2 != 0,
-            shift: bits & 4 != 0,
-            meta: bits & 8 != 0,
-        }
-    }
-
     pub struct HookDriver {
-        seen: u32,
+        seen: [u32; MAX_BINDINGS],
         thread_id: u32,
         stopped: Receiver<()>,
     }
 
     impl HookDriver {
-        pub fn start(code: u16, modifiers: Modifiers) -> Result<Self, HookError> {
+        pub fn start(bindings: Vec<Binding>) -> Result<Self, HookError> {
             if INSTALLED.swap(true, Ordering::SeqCst) {
                 return Err(HookError::AlreadyInstalled);
             }
 
-            WANTED_CODE.store(code, Ordering::SeqCst);
-            WANTED_MODS.store(pack(modifiers), Ordering::SeqCst);
-            FIRED.store(0, Ordering::SeqCst);
+            for counter in FIRED.iter() {
+                counter.store(0, Ordering::SeqCst);
+            }
+
+            if let Ok(mut watcher) = WATCHER.lock() {
+                *watcher = Some(Watcher::new(
+                    bindings.into_iter().take(MAX_BINDINGS).collect(),
+                ));
+            }
 
             let (ready_tx, ready_rx) = mpsc::channel();
             let (stop_tx, stop_rx) = mpsc::channel();
@@ -96,7 +99,7 @@ mod win {
 
             match ready_rx.recv() {
                 Ok(Some(thread_id)) => Ok(Self {
-                    seen: 0,
+                    seen: [0; MAX_BINDINGS],
                     thread_id,
                     stopped: stop_rx,
                 }),
@@ -108,13 +111,20 @@ mod win {
             }
         }
 
-        pub fn fired(&mut self) -> bool {
-            let now = FIRED.load(Ordering::SeqCst);
-            let any = now != self.seen;
+        pub fn fired(&mut self) -> Option<usize> {
+            let mut hit = None;
 
-            self.seen = now;
+            for (index, counter) in FIRED.iter().enumerate() {
+                let now = counter.load(Ordering::SeqCst);
 
-            any
+                if now != self.seen[index] && hit.is_none() {
+                    hit = Some(index);
+                }
+
+                self.seen[index] = now;
+            }
+
+            hit
         }
 
         pub fn stop(self) {
@@ -165,10 +175,10 @@ mod win {
             let info = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
             let key = info.vkCode as u16;
 
-            if !track_modifier(key, down) && down {
+            if !track_modifier(key, down) {
                 let event = KeyEvent {
                     code: key,
-                    down: true,
+                    down,
                     modifiers: Modifiers {
                         ctrl: CTRL.load(Ordering::SeqCst),
                         alt: ALT.load(Ordering::SeqCst),
@@ -177,11 +187,22 @@ mod win {
                     },
                 };
 
-                let wanted_code = WANTED_CODE.load(Ordering::SeqCst);
-                let wanted = unpack(WANTED_MODS.load(Ordering::SeqCst));
+                let reaction = match WATCHER.lock() {
+                    Ok(mut held) => match held.as_mut() {
+                        Some(watcher) => watcher.react(event),
+                        None => Reaction::Ignore,
+                    },
+                    Err(_) => Reaction::Ignore,
+                };
 
-                if !is_modifier_code(wanted_code) && fires(event, wanted_code, wanted) {
-                    FIRED.fetch_add(1, Ordering::SeqCst);
+                if let Reaction::Fire { binding } = reaction {
+                    if let Some(counter) = FIRED.get(binding) {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+
+                if reaction.eats_the_key() {
+                    return LRESULT(1);
                 }
             }
         }
@@ -191,7 +212,7 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::HookDriver;
+pub use win::{HookDriver, MAX_BINDINGS};
 
 #[cfg(test)]
 mod tests {

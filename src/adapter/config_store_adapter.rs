@@ -34,6 +34,8 @@ pub struct Settings {
     pub include_offline: bool,
     pub roll_tolerance: f64,
     pub filter_item_level: bool,
+    pub notes: String,
+    pub map_verdicts: Vec<(String, String)>,
 }
 
 impl Default for Settings {
@@ -47,6 +49,8 @@ impl Default for Settings {
             include_offline: false,
             roll_tolerance: 0.1,
             filter_item_level: false,
+            notes: String::new(),
+            map_verdicts: Vec::new(),
         }
     }
 }

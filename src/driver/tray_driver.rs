@@ -594,25 +594,21 @@ mod win {
     const ICON: i32 = 32;
 
     fn draw_icon() -> Option<HICON> {
-        const AMBER: u32 = 0xFF_C8_A0_50;
-        const EDGE: u32 = 0xFF_6B_50_20;
-        const CLEAR: u32 = 0x00_00_00_00;
+        let image = crate::assets::tray_icon();
 
-        let mut pixels = vec![CLEAR; (ICON * ICON) as usize];
+        if !image.is_intact() || image.width as i32 != ICON {
+            return None;
+        }
 
-        let centre = ICON / 2;
-        let radius = centre - 3;
+        let mut pixels = vec![0u32; (ICON * ICON) as usize];
 
-        for y in 0..ICON {
-            for x in 0..ICON {
-                let distance = (x - centre).abs() + (y - centre).abs();
+        for (i, p) in image.rgba.chunks_exact(4).enumerate() {
+            let a = p[3] as u32;
+            let r = p[0] as u32 * a / 255;
+            let g = p[1] as u32 * a / 255;
+            let b = p[2] as u32 * a / 255;
 
-                if distance > radius {
-                    continue;
-                }
-
-                pixels[(y * ICON + x) as usize] = if distance > radius - 3 { EDGE } else { AMBER };
-            }
+            pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
 
         let colour = unsafe {

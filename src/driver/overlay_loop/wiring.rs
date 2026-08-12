@@ -96,6 +96,56 @@ pub fn window_title(configured: &str, game: GameVersion) -> String {
     }
 }
 
+pub fn hotkeys_from(
+    cfg: &PoeWayfinderConfig,
+    log: &Logger,
+) -> Result<
+    crate::controller::startup_controller::Validated,
+    crate::controller::startup_controller::StartupError,
+> {
+    let validated = crate::controller::startup_controller::validate(
+        crate::controller::startup_controller::Declared {
+            game: &cfg.game,
+            hotkey: &cfg.price_check_hotkey,
+            locked: &[
+                &cfg.price_check_locked_hotkey,
+                &cfg.price_check_locked_alt_hotkey,
+            ],
+            overlay: &cfg.overlay_hotkey,
+            commands: &cfg.chat_commands,
+            searches: &cfg.stash_searches,
+            links: &cfg.item_link_hotkeys,
+        },
+        NetworkPolicy::new(
+            cfg.network_enabled,
+            cfg.block_unlisted_hosts,
+            &cfg.allowed_hosts,
+        )
+        .check(&cfg.trade_base_url),
+    )?;
+
+    log.info(
+        "hotkeys",
+        &[
+            ("price_check", Value::Str(validated.hotkey.to_string())),
+            ("locked", Value::Int(validated.locked.len() as i64)),
+            ("commands", Value::Int(validated.commands.len() as i64)),
+            (
+                "overlay",
+                Value::Str(
+                    validated
+                        .overlay
+                        .as_ref()
+                        .map(|h| h.to_string())
+                        .unwrap_or_else(|| "off".to_string()),
+                ),
+            ),
+        ],
+    );
+
+    Ok(validated)
+}
+
 #[cfg(windows)]
 pub fn build_settings_for(
     cfg: &PoeWayfinderConfig,
@@ -145,12 +195,19 @@ pub fn build_game_state(
 
     if game != provisional {
         window.retarget(game);
-
-        log.info(
-            "a game is already running, so the overlay starts on it",
-            &[("game", Value::Str(game.as_str().to_string()))],
-        );
     }
+
+    log.info(
+        "the overlay is watching",
+        &[
+            ("game", Value::Str(game.as_str().to_string())),
+            (
+                "window_title",
+                Value::Str(window_title(&cfg.window_title, game)),
+            ),
+            ("detected", Value::Bool(pinned.is_none())),
+        ],
+    );
 
     (window, game)
 }
@@ -310,6 +367,62 @@ pub fn build_copier(
         CopyTiming::default(),
         restore,
     ))
+}
+
+#[cfg(windows)]
+pub fn send_chat<P>(action: &poe_wayfinder_core::controller::chat::ChatAction, put: P) -> bool
+where
+    P: FnOnce(&str) -> bool,
+{
+    use crate::adapter::game_window_adapter::press_combination;
+    use crate::driver::chat_driver::{key_code, needs_control};
+
+    const CTRL: u16 = 0x11;
+
+    if !put(&action.text) {
+        return false;
+    }
+
+    for key in &action.keys {
+        let modifiers: &[u16] = match needs_control(*key) {
+            true => &[CTRL],
+            false => &[],
+        };
+
+        if press_combination(modifiers, key_code(*key)) == 0 {
+            return false;
+        }
+
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    true
+}
+
+#[cfg(not(windows))]
+pub fn send_chat<P>(_action: &poe_wayfinder_core::controller::chat::ChatAction, _put: P) -> bool
+where
+    P: FnOnce(&str) -> bool,
+{
+    false
+}
+
+pub fn as_happening(
+    event: &crate::adapter::game_log_adapter::LogEvent,
+) -> Option<poe_wayfinder_core::controller::background::Happening> {
+    use crate::adapter::game_log_adapter::LogEvent;
+    use poe_wayfinder_core::controller::background::Happening;
+
+    match event {
+        LogEvent::EnteredArea { name } => Some(Happening::EnteredArea { name: name.clone() }),
+        LogEvent::LevelUp {
+            character, level, ..
+        } => Some(Happening::LevelledUp {
+            character: character.clone(),
+            level: *level,
+        }),
+        LogEvent::Whisper { from, .. } => Some(Happening::Whisper { from: from.clone() }),
+    }
 }
 
 pub fn build_settings(dir: &std::path::Path) -> SettingsController<ConfigStore> {

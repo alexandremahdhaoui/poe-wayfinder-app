@@ -4,6 +4,10 @@ use crate::util::error_chain::render;
 #[cfg_attr(test, mockall::automock)]
 pub trait Copier {
     fn copy(&mut self) -> Result<String, String>;
+
+    fn put(&mut self, _text: &str) -> Result<(), String> {
+        Err("this copier cannot write to the clipboard".to_string())
+    }
 }
 
 pub struct CopyController<C: Clipboard, T: CopyTrigger> {
@@ -25,6 +29,10 @@ impl<C: Clipboard, T: CopyTrigger> CopyController<C, T> {
 }
 
 impl<C: Clipboard, T: CopyTrigger> Copier for CopyController<C, T> {
+    fn put(&mut self, text: &str) -> Result<(), String> {
+        self.clipboard.write(text).map_err(|e| e.to_string())
+    }
+
     fn copy(&mut self) -> Result<String, String> {
         copy_item(
             &mut self.clipboard,

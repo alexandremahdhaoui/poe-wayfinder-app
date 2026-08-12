@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod assets;
 pub mod config;
 pub mod controller;
 pub mod driver;

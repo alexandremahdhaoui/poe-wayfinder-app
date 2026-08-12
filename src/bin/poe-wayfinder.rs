@@ -8,7 +8,6 @@ use poe_wayfinder_app::adapter::game_data_adapter::GameTables;
 #[cfg(windows)]
 use poe_wayfinder_app::adapter::http_adapter::HttpAdapter;
 use poe_wayfinder_app::config::PoeWayfinderConfig;
-use poe_wayfinder_app::controller::startup_controller;
 use poe_wayfinder_app::driver::cli_driver;
 use poe_wayfinder_app::driver::overlay_loop::wiring;
 use poe_wayfinder_app::logging::{Logger, Value};
@@ -46,11 +45,7 @@ fn main() -> ExitCode {
         None => return ExitCode::FAILURE,
     };
 
-    let validated = match startup_controller::validate(
-        &cfg.game,
-        &cfg.price_check_hotkey,
-        http.policy().check(&cfg.trade_base_url),
-    ) {
+    let validated = match wiring::hotkeys_from(&cfg, &log) {
         Ok(validated) => validated,
         Err(err) => {
             log.error(
@@ -70,7 +65,8 @@ fn main() -> ExitCode {
     }
 
     let game = validated.starting_game();
-    let hotkey = validated.hotkey;
+    let hotkey = validated.hotkey.clone();
+    let roles = validated.clone();
     let pinned = validated.game;
 
     if press {
@@ -96,7 +92,17 @@ fn main() -> ExitCode {
     let _ = check_clipboard;
 
     #[cfg(windows)]
-    return run_overlay(&cfg, &config_dir, pinned, data, origin, hotkey, http, log);
+    return run_overlay(
+        &cfg,
+        &config_dir,
+        pinned,
+        data,
+        origin,
+        hotkey,
+        roles,
+        http,
+        log,
+    );
 
     #[cfg(not(windows))]
     {
@@ -105,7 +111,7 @@ fn main() -> ExitCode {
             &[],
         );
 
-        let _ = (http, hotkey, game, data, origin);
+        let _ = (http, hotkey, roles, game, data, origin);
 
         ExitCode::SUCCESS
     }
@@ -119,6 +125,7 @@ fn run_overlay(
     data: GamePair<GameTables>,
     origin: GamePair<poe_wayfinder_app::adapter::game_data_adapter::Origin>,
     hotkey: poe_wayfinder_app::types::Hotkey,
+    roles: poe_wayfinder_app::controller::startup_controller::Validated,
     http: HttpAdapter,
     log: Logger,
 ) -> ExitCode {
@@ -167,7 +174,7 @@ fn run_overlay(
         game,
         data,
         stats,
-        &hotkey,
+        roles,
         window,
         copier,
         prices,

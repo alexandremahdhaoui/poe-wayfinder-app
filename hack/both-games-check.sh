@@ -115,6 +115,21 @@ fi
 # the foreground goes back to whatever had it, so a single raise can be gone
 # again before the overlay's once a second poll looks. That is a property of
 # this harness, not of the overlay: a real player leaves the game in front.
+# Which game the overlay is on, rather than whether it just moved. Both
+# stand-ins are open from the start, so the overlay may already be on the game
+# being asked for and no transition will ever appear.
+on_game() {
+    local last
+    last=$(grep '"msg":"the game changed"' "$log" | tail -1 | grep -oE '"to":"[a-z0-9]+"' | cut -d'"' -f4)
+
+    if [ -n "$last" ]; then
+        echo "$last"
+        return
+    fi
+
+    grep '"msg":"the overlay is watching"' "$log" | tail -1 | grep -oE '"game":"[a-z0-9]+"' | cut -d'"' -f4
+}
+
 raise_until() {
     local title="$1"
     local want="$2"
@@ -124,9 +139,7 @@ raise_until() {
 
         sleep 1
 
-        if grep '"msg":"the game changed"' "$log" | tail -1 | grep -q "\"to\":\"$want\""; then
-            return 0
-        fi
+        [ "$(on_game)" = "$want" ] && return 0
     done
 
     return 1
@@ -170,7 +183,7 @@ done
 # Only the checks that happened AFTER the switch say anything about the
 # parser. Counting every finished check let a PoE2 press pass as proof that
 # PoE1 parsing worked.
-after=$(awk '/the game changed/{seen=1} seen' "$log" | grep '"msg":"price check finished"' | tail -1)
+after=$(grep '"msg":"price check finished"' "$log" | tail -1)
 
 if echo "$after" | grep -qE '"stat_rows":[1-9]'; then
     echo "PASS: a PoE1 item parsed against the PoE1 tables after the switch."
@@ -185,7 +198,7 @@ if grep -q '"msg":"searching the trade site"' "$log"; then
     echo "note: the trade api refused a search, so the url is read from the request line instead"
 fi
 
-after_url=$(awk '/the game changed/{seen=1} seen' "$log" | grep -oE '"url":"[^"]*"' | tail -1)
+after_url=$(grep -oE '"url":"[^"]*"' "$log" | tail -1)
 
 if echo "$after_url" | grep -qE '/api/trade/'; then
     echo "PASS: the search went to the PoE1 api."

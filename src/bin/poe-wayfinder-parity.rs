@@ -18,6 +18,79 @@ enum Status {
 
 const WAIVED: &[(&str, &str)] = &[
     (
+        "checkForUpdates",
+        "Electron's autoUpdater. This ships one unsigned exe with no update channel, and its game data refreshes itself instead.",
+    ),
+    (
+        "openDownloadPage",
+        "opens the reference's release page, part of the same updater",
+    ),
+    (
+        "quitAndInstall",
+        "restarts into a downloaded update, part of the same updater",
+    ),
+    (
+        "configModelValue",
+        "a Vue two way binding onto the config object. Ours reads the generated config struct directly.",
+    ),
+    ("_configModelValue", "the private half of configModelValue, same reason"),
+    ("configProp", "declares a Vue prop bound to a config key, same reason"),
+    (
+        "quit",
+        "closes the Electron app from its own menu. Ours quits from the tray and the launcher, neither of which is a function by that name.",
+    ),
+    (
+        "displayRounding",
+        "rounds a poe.ninja price for display, and poe.ninja is a third party this workspace forbids",
+    ),
+    (
+        "getAvailableCoreCurrencies",
+        "reads the currency list from poe.ninja, same reason",
+    ),
+    ("parseXchg", "parses a poe.ninja exchange blob, same reason"),
+    ("splitJsonBlob", "splits a poe.ninja response, same reason"),
+    (
+        "btnStyle",
+        "returns Vue class names for the map mod button. Ours picks a Color32 inline in the tab.",
+    ),
+    (
+        "newStatIconVisible",
+        "shows a new badge against the reference's own data version, which our flat data file has no counterpart for",
+    ),
+    (
+        "findAllAreaMods",
+        "walks the reference's map mod table to offer every mod for marking. Ours marks what the item actually rolled.",
+    ),
+    (
+        "tagToShowOrder",
+        "sorts the settings list by the reference's stat tags, which our data does not carry",
+    ),
+    (
+        "fuzzyFindHeistGem",
+        "fuzzy matches a heist gem name, and heist is PoE1 content the PoE2 reference dropped",
+    ),
+    (
+        "makeInvisible",
+        "a Vue transition that fades a row out, with no equivalent in an immediate mode panel",
+    ),
+    (
+        "diffItem",
+        "compares two library rows to colour what changed between them, a Vue table concern",
+    ),
+    ("modFilter", "filters the CSV columns from a Vue checkbox list"),
+    ("modToShortMod", "shortens a mod for a CSV column header, part of the same Vue export dialog"),
+    ("flatJoin", "joins Vue menu entries for rendering"),
+    ("menuByType", "groups the settings menu by widget type, which our tabs do by hand"),
+    ("shuffle", "shuffles the settings menu order for the reference's random tip banner"),
+    (
+        "useMarketRatioFinder",
+        "reads the going rate from poe.ninja, a third party this workspace forbids",
+    ),
+    (
+        "mergeWithMarketRatio",
+        "inserts the poe.ninja rate into the listings, so it goes with useMarketRatioFinder",
+    ),
+    (
         "noSourcePseudoToFilter",
         "the pseudo loop in stat_filters.rs builds these inline, not through a named helper",
     ),
@@ -112,6 +185,47 @@ const WAIVED: &[(&str, &str)] = &[
 ];
 
 const ALIASES: &[(&str, &str)] = &[
+    ("fmtTime", "clock"),
+    ("findWidget", "find_widget"),
+    ("enableWidget", "enable_widget"),
+    ("disableWidget", "disable_widget"),
+    ("decisionCreate", "set_verdict"),
+    ("decisionHasColor", "is_coloured"),
+    ("nextDecision", "next"),
+    ("isOutdated", "is_outdated"),
+    ("prepareMapStats", "review"),
+    ("handleClick", "cycle_verdict"),
+    ("toggleSeenStatus", "cycle_verdict"),
+    ("openWiki", "wiki"),
+    ("openPoedb", "poedb"),
+    ("openCoE", "craft_of_exile"),
+    ("getPoe2dbPath", "poedb"),
+    ("encodePoe2dbUri", "encode"),
+    ("registerActions", "open_link"),
+    ("findSimilarItems", "similar_items"),
+    ("findSamePricedItems", "same_priced"),
+    ("findByPrice", "same_priced"),
+    ("findItems", "search"),
+    ("selectItem", "star"),
+    ("clearSelectedItems", "clear_stars"),
+    ("useSelectedItems", "starred"),
+    ("starredItemClick", "toggle_star"),
+    ("buildCsvString", "to_csv"),
+    ("arrayToCsvString", "csv_line"),
+    ("getHeader", "header"),
+    ("startSessionHost", "record"),
+    ("endSessionHost", "clear"),
+    ("getExpPenalty", "penalty"),
+    ("calcBaseSafeZone", "safe_zone"),
+    ("getOverIdeal", "effective_difference"),
+    ("isPrivateLeague", "is_private_league"),
+    ("randomTip", "tip"),
+    ("parseClientLogText", "parse_log_text"),
+    ("parseLogVersion0", "parse_log_line"),
+    ("lessThanVersion", "older_than"),
+    ("getClientLogParseVersion", "parse_version"),
+    ("useRemovable", "dismiss"),
+    ("toggle", "set_enabled"),
     ("isPoeItem", "clipboard_kind"),
     ("isPointInsideRect", "point_in_rect"),
     ("isStashArea", "is_stash_area"),
@@ -297,6 +411,32 @@ fn main() -> ExitCode {
     report(&ref_files, &our_source, floor)
 }
 
+fn script_block(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+
+    while let Some(open) = rest.find("<script") {
+        let after = &rest[open..];
+
+        let Some(body) = after.find('>').map(|i| &after[i + 1..]) else {
+            break;
+        };
+
+        let Some(close) = body.find("</script>") else {
+            out.push_str(body);
+
+            break;
+        };
+
+        out.push_str(&body[..close]);
+        out.push('\n');
+
+        rest = &body[close + "</script>".len()..];
+    }
+
+    out
+}
+
 fn collect_reference(root: &Path, subdirs: &[String]) -> Vec<RefFile> {
     let mut out = Vec::new();
 
@@ -323,7 +463,9 @@ fn collect_ts(dir: &Path, out: &mut Vec<RefFile>) {
             continue;
         }
 
-        if path.extension().is_none_or(|e| e != "ts") {
+        let readable = path.extension().is_some_and(|e| e == "ts" || e == "vue");
+
+        if !readable {
             continue;
         }
 
@@ -335,11 +477,40 @@ fn collect_ts(dir: &Path, out: &mut Vec<RefFile>) {
             continue;
         };
 
+        let source = match path.extension().is_some_and(|e| e == "vue") {
+            true => script_block(&text),
+            false => text.clone(),
+        };
+
         out.push(RefFile {
             lines: text.lines().count(),
-            functions: top_level_functions(&text),
+            functions: top_level_functions(&source),
             path,
         });
+    }
+}
+
+fn arrow_binding(line: &str) -> Option<&str> {
+    let rest = line
+        .strip_prefix("export const ")
+        .or_else(|| line.strip_prefix("const "))?;
+
+    let (name, body) = rest.split_once(" = ")?;
+
+    if name.is_empty() || name.contains(|c: char| !c.is_alphanumeric() && c != '_') {
+        return None;
+    }
+
+    let body = body.strip_prefix("async ").unwrap_or(body);
+
+    let opens_with_arguments = body.starts_with('(')
+        || body
+            .split_once("=>")
+            .is_some_and(|(before, _)| !before.contains(['(', '.', '[']));
+
+    match opens_with_arguments {
+        true => Some(rest),
+        false => None,
     }
 }
 
@@ -351,7 +522,8 @@ fn top_level_functions(text: &str) -> Vec<String> {
             .strip_prefix("export function ")
             .or_else(|| line.strip_prefix("function "))
             .or_else(|| line.strip_prefix("export function* "))
-            .or_else(|| line.strip_prefix("function* "));
+            .or_else(|| line.strip_prefix("function* "))
+            .or_else(|| arrow_binding(line));
 
         let Some(rest) = rest else {
             continue;

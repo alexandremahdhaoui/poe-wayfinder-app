@@ -9,6 +9,17 @@ REF="$WS/reference/Exiled-Exchange-2/renderer/src/web"
 
 rule() { printf '%s\n' "------------------------------------------------------------"; }
 
+# A widget counts as covered when the capability catalogue names it. The
+# price-check and ui capabilities predate the widget backlog and name a bare
+# file rather than a directory, so they are matched separately.
+covered() {
+    case "$1" in
+        price-check|ui) return 0 ;;
+    esac
+
+    grep -q "\"$1/" src/bin/poe-wayfinder-uiparity.rs 2>/dev/null
+}
+
 value() { printf '  %-34s %s\n' "$1" "$2"; }
 
 echo
@@ -63,24 +74,28 @@ if [ -d "$REF" ]; then
         lines=$(find "$dir" \( -name '*.vue' -o -name '*.ts' \) -exec cat {} \; 2>/dev/null | wc -l)
         total=$((total + lines))
 
-        case "$name" in
-            price-check|ui) ported=$((ported + lines)) ;;
-        esac
+        # A widget counts as covered when the capability catalogue names it,
+        # not from a list kept by hand here. uiparity checks each capability is
+        # actually reachable from src/driver, so this cannot drift into a claim.
+        if covered "$name"; then
+            ported=$((ported + lines))
+        fi
     done
 
+    # This counts a widget as covered once the catalogue names it, so it says
+    # which widgets have been started, not how much of each is ported. The line
+    # totals are the upstream size of those widgets, not a claim about ours.
     value "upstream widget lines" "$total"
-    value "in a widget we have" "$ported  ($((ported * 100 / total))%)"
-    value "in a widget we do not have" "$((total - ported))"
+    value "widgets with capabilities" "$ported lines' worth  ($((ported * 100 / total))%)"
+    value "widgets with none" "$((total - ported))"
 
     echo
-    echo "  widgets not started:"
+    echo "  widgets with no capability yet:"
 
     for dir in "$REF"/*/; do
         name=$(basename "$dir")
 
-        case "$name" in
-            price-check|ui) continue ;;
-        esac
+        covered "$name" && continue
 
         lines=$(find "$dir" \( -name '*.vue' -o -name '*.ts' \) -exec cat {} \; 2>/dev/null | wc -l)
         printf '    %-14s %5s lines\n' "$name" "$lines"

@@ -116,7 +116,9 @@ remove_test_artifacts() {
     for f in press-check.log press-check-fake.log item.txt item-poe1.txt \
              item-currency.txt item-runable.txt \
              both-games.log both-games-poe1.log both-games-poe2.log \
-             refresh-1.log refresh-2.log refresh-3.log; do
+             refresh-1.log refresh-2.log refresh-3.log \
+             shot-splash.png shot-key.png shot-settled.png shot-after.png \
+             shot.log shot-fake.log; do
         [ -f "$DEST/$f" ] || continue
 
         remember_size "$DEST/$f"

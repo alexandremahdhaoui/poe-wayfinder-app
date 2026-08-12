@@ -160,8 +160,20 @@ pub struct PoeWayfinderConfig {
     pub data_dir: String,
     /// Where user settings, the overlay layout and the refreshed data cache are stored. Empty picks the per user config directory for the platform. A double clicked exe starts in an unpredictable working directory, so a relative default would scatter settings files.
     pub config_dir: String,
-    /// Key that triggers a price check on the item under the cursor.
+    /// Key that triggers a price check on the item under the cursor. The panel closes again when the pointer moves away.
     pub price_check_hotkey: String,
+    /// Same check, but the panel stays open and takes focus so it can be read and adjusted. Only Escape, a click outside or Dismiss closes it. This is what Awakened PoE Trade and Exiled Exchange 2 both bind. Empty turns it off.
+    pub price_check_locked_hotkey: String,
+    /// Chat lines bound to keys, as key=text separated by semicolons. The line is typed and sent. End it with a literal backslash n to type it and leave it for you to finish. An entry with no key is ignored, so a line can be kept here without a binding.
+    pub chat_commands: String,
+    /// Keys that open the item under the cursor on a reference site, as key=site separated by semicolons. The sites are wiki, poedb and craft of exile. These open your browser rather than being fetched by this app, so the network allowlist does not apply. Empty binds none.
+    pub item_link_hotkeys: String,
+    /// Stash search presets bound to keys, as key=text separated by semicolons, for example "Ctrl+F1=chaos;Ctrl+F2=exalted". Pressing one opens the stash search box and types the text. Empty binds nothing.
+    pub stash_searches: String,
+    /// Grabs the panel that is already on screen so it can be clicked without moving the mouse to it, and releases it again. Does nothing when no panel is up. Empty turns it off.
+    pub overlay_hotkey: String,
+    /// A second binding for the locked check, easier to reach one handed. Empty turns it off.
+    pub price_check_locked_alt_hotkey: String,
     /// Put the old clipboard back after reading the item. The app must copy to read the item, which destroys whatever the user had.
     pub restore_clipboard: bool,
     /// One of debug, info, warn, error.
@@ -186,6 +198,12 @@ impl PoeWayfinderConfig {
         known.insert("data-dir", false);
         known.insert("config-dir", false);
         known.insert("price-check-hotkey", false);
+        known.insert("price-check-locked-hotkey", false);
+        known.insert("chat-commands", false);
+        known.insert("item-link-hotkeys", false);
+        known.insert("stash-searches", false);
+        known.insert("overlay-hotkey", false);
+        known.insert("price-check-locked-alt-hotkey", false);
         known.insert("restore-clipboard", true);
         known.insert("log-level", false);
 
@@ -289,6 +307,48 @@ impl PoeWayfinderConfig {
             Some(v) => v,
             None => "Ctrl+D".to_string(),
         };
+        let raw_price_check_locked_hotkey: Option<String> = None
+            .or_else(|| flags.get("price-check-locked-hotkey").cloned())
+            .or_else(|| env::var("POE_PRICE_CHECK_LOCKED_HOTKEY").ok());
+        let raw_price_check_locked_hotkey = match raw_price_check_locked_hotkey {
+            Some(v) => v,
+            None => "Ctrl+Alt+D".to_string(),
+        };
+        let raw_chat_commands: Option<String> = None
+            .or_else(|| flags.get("chat-commands").cloned())
+            .or_else(|| env::var("POE_CHAT_COMMANDS").ok());
+        let raw_chat_commands = match raw_chat_commands {
+            Some(v) => v,
+            None => "F5=/hideout;F9=/exit".to_string(),
+        };
+        let raw_item_link_hotkeys: Option<String> = None
+            .or_else(|| flags.get("item-link-hotkeys").cloned())
+            .or_else(|| env::var("POE_ITEM_LINK_HOTKEYS").ok());
+        let raw_item_link_hotkeys = match raw_item_link_hotkeys {
+            Some(v) => v,
+            None => "Alt+W=wiki;Alt+B=poedb;Alt+C=craft of exile".to_string(),
+        };
+        let raw_stash_searches: Option<String> = None
+            .or_else(|| flags.get("stash-searches").cloned())
+            .or_else(|| env::var("POE_STASH_SEARCHES").ok());
+        let raw_stash_searches = match raw_stash_searches {
+            Some(v) => v,
+            None => "".to_string(),
+        };
+        let raw_overlay_hotkey: Option<String> = None
+            .or_else(|| flags.get("overlay-hotkey").cloned())
+            .or_else(|| env::var("POE_OVERLAY_HOTKEY").ok());
+        let raw_overlay_hotkey = match raw_overlay_hotkey {
+            Some(v) => v,
+            None => "Shift+Space".to_string(),
+        };
+        let raw_price_check_locked_alt_hotkey: Option<String> = None
+            .or_else(|| flags.get("price-check-locked-alt-hotkey").cloned())
+            .or_else(|| env::var("POE_PRICE_CHECK_LOCKED_ALT_HOTKEY").ok());
+        let raw_price_check_locked_alt_hotkey = match raw_price_check_locked_alt_hotkey {
+            Some(v) => v,
+            None => "Ctrl+Shift+D".to_string(),
+        };
         let raw_restore_clipboard: Option<String> = None
             .or_else(|| flags.get("restore-clipboard").cloned())
             .or_else(|| env::var("POE_RESTORE_CLIPBOARD").ok());
@@ -324,6 +384,12 @@ impl PoeWayfinderConfig {
             data_dir: raw_data_dir,
             config_dir: raw_config_dir,
             price_check_hotkey: raw_price_check_hotkey,
+            price_check_locked_hotkey: raw_price_check_locked_hotkey,
+            chat_commands: raw_chat_commands,
+            item_link_hotkeys: raw_item_link_hotkeys,
+            stash_searches: raw_stash_searches,
+            overlay_hotkey: raw_overlay_hotkey,
+            price_check_locked_alt_hotkey: raw_price_check_locked_alt_hotkey,
             restore_clipboard: parse_bool(&raw_restore_clipboard)?,
             log_level: raw_log_level,
         })
@@ -394,6 +460,36 @@ impl PoeWayfinderConfig {
             "{}:\"{}\"",
             "\"price_check_hotkey\"",
             json_escape(&self.price_check_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"price_check_locked_hotkey\"",
+            json_escape(&self.price_check_locked_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"chat_commands\"",
+            json_escape(&self.chat_commands)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"item_link_hotkeys\"",
+            json_escape(&self.item_link_hotkeys)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"stash_searches\"",
+            json_escape(&self.stash_searches)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"overlay_hotkey\"",
+            json_escape(&self.overlay_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"price_check_locked_alt_hotkey\"",
+            json_escape(&self.price_check_locked_alt_hotkey)
         ));
         pairs.push(format!(
             "{}:{}",

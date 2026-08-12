@@ -1,3 +1,4 @@
+pub mod chat_driver;
 pub mod cli_driver;
 pub mod hook_driver;
 pub mod hotkey_driver;

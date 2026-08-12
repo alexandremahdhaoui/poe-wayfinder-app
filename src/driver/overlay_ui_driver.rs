@@ -6,6 +6,7 @@ use crate::types::overlay::OverlayState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatusEvent {
+    MarkMap { matcher: String, set: String },
     HideToTray,
     Quit,
     RefreshNow,
@@ -195,6 +196,9 @@ mod win {
     use std::time::SystemTime;
 
     use crate::controller::status_controller::{headline, health, rows, Health, Status};
+    use crate::controller::widgets_controller::{Tab, Widgets};
+    use poe_wayfinder_core::controller::map_check::Verdict;
+    use poe_wayfinder_core::controller::settings_view::{bounds_of, sliders, switches};
 
     const PANEL_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(14, 14, 18);
     const SECTION_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(24, 24, 30);
@@ -217,7 +221,8 @@ mod win {
             .with_transparent(true)
             .with_always_on_top()
             .with_taskbar(false)
-            .with_resizable(false);
+            .with_resizable(false)
+            .with_icon(icon_data(crate::assets::window_icon()));
 
         if let Some(rect) = frame.rect {
             builder = builder
@@ -878,18 +883,166 @@ mod win {
     const STATUS_SIZE: [f32; 2] = [560.0, 520.0];
     const STATUS_MIN: [f32; 2] = [440.0, 380.0];
 
+    pub fn icon_data(image: &crate::assets::Image) -> std::sync::Arc<egui::IconData> {
+        std::sync::Arc::new(egui::IconData {
+            rgba: image.rgba.to_vec(),
+            width: image.width,
+            height: image.height,
+        })
+    }
+
     pub fn status_viewport() -> egui::ViewportBuilder {
         egui::ViewportBuilder::default()
             .with_title("PoE Wayfinder")
             .with_inner_size(STATUS_SIZE)
             .with_min_inner_size(STATUS_MIN)
             .with_resizable(true)
+            .with_icon(icon_data(crate::assets::window_icon()))
+    }
+
+    pub const SPLASH_VIEWPORT: &str = "poe-wayfinder-splash";
+    pub const SPLASH_WINDOW_TITLE: &str = "PoE Wayfinder is starting";
+    const SPLASH_SIDE: f32 = 420.0;
+    const SPLASH_HEIGHT: f32 = 500.0;
+
+    fn screen_centre(points_per_pixel: f32) -> egui::Pos2 {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+
+        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) } as f32;
+        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) } as f32;
+
+        let scale = if points_per_pixel > 0.0 {
+            points_per_pixel
+        } else {
+            1.0
+        };
+
+        egui::pos2(
+            (width / scale - SPLASH_SIDE) / 2.0,
+            (height / scale - SPLASH_HEIGHT) / 2.0,
+        )
+    }
+
+    pub fn drop_splash_background() -> bool {
+        use windows::core::HSTRING;
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW,
+            GWL_EXSTYLE, LWA_COLORKEY, WS_EX_LAYERED,
+        };
+
+        let title = HSTRING::from(SPLASH_WINDOW_TITLE);
+
+        let Ok(handle) = (unsafe { FindWindowW(None, &title) }) else {
+            return false;
+        };
+
+        if handle.is_invalid() {
+            return false;
+        }
+
+        unsafe {
+            let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+
+            if style & WS_EX_LAYERED.0 as isize != 0 {
+                return true;
+            }
+
+            SetWindowLongPtrW(handle, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
+
+            SetLayeredWindowAttributes(handle, COLORREF(0x00_00_00), 0, LWA_COLORKEY).is_ok()
+        }
+    }
+
+    pub fn splash_window(ctx: &egui::Context, fade: f32) -> bool {
+        let mut dismissed = false;
+
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of(SPLASH_VIEWPORT),
+            egui::ViewportBuilder::default()
+                .with_title(SPLASH_WINDOW_TITLE)
+                .with_inner_size([SPLASH_SIDE, SPLASH_HEIGHT])
+                .with_position(screen_centre(ctx.pixels_per_point()))
+                .with_decorations(false)
+                .with_transparent(true)
+                .with_always_on_top()
+                .with_taskbar(false)
+                .with_resizable(false),
+            |ctx, _class| {
+                let id = egui::Id::new(SPLASH_VIEWPORT);
+
+                let texture = match ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+                    Some(texture) => texture,
+                    None => {
+                        let image = crate::assets::SPLASH;
+
+                        let loaded = ctx.load_texture(
+                            "splash",
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [image.width as usize, image.height as usize],
+                                image.rgba,
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        );
+
+                        ctx.data_mut(|d| d.insert_temp(id, loaded.clone()));
+
+                        loaded
+                    }
+                };
+
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        let tint = egui::Color32::from_white_alpha((fade * 255.0) as u8);
+
+                        ui.vertical_centered(|ui| {
+                            ui.add(
+                                egui::Image::new(&texture)
+                                    .maintain_aspect_ratio(true)
+                                    .fit_to_exact_size(egui::vec2(SPLASH_SIDE, SPLASH_SIDE))
+                                    .tint(tint),
+                            );
+
+                            egui::Frame::new()
+                                .fill(SECTION_BACKGROUND.gamma_multiply(fade))
+                                .inner_margin(egui::Margin::symmetric(22, 10))
+                                .corner_radius(10)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new("PoE Wayfinder")
+                                            .size(34.0)
+                                            .strong()
+                                            .color(ACCENT.gamma_multiply(fade)),
+                                    );
+                                });
+                        });
+                    });
+
+                if ctx.input(|i| {
+                    i.pointer.any_click()
+                        || i.viewport().close_requested()
+                        || !i.events.is_empty()
+                            && i.events
+                                .iter()
+                                .any(|e| matches!(e, egui::Event::Key { .. }))
+                }) {
+                    dismissed = true;
+                }
+            },
+        );
+
+        dismissed
     }
 
     pub fn status_window(
         ctx: &egui::Context,
         status: &Status,
         now: SystemTime,
+        widgets: &mut Widgets,
+        names: &[String],
+        bindings: &[(String, String)],
+        now_ms: u64,
     ) -> Vec<StatusEvent> {
         let mut events = Vec::new();
 
@@ -909,17 +1062,29 @@ mod win {
                         events.extend(status_actions(ui, status));
                     });
 
-                egui::CentralPanel::default()
+                let from_tabs = egui::CentralPanel::default()
                     .frame(
                         egui::Frame::new()
                             .fill(PANEL_BACKGROUND)
                             .inner_margin(egui::Margin::same(14)),
                     )
                     .show(ctx, |ui| {
+                        widget_tabs(ui, widgets);
+
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .show(ui, |ui| status_body(ui, status, now));
+                            .show(ui, |ui| match widgets.tab {
+                                Tab::Status => {
+                                    status_body(ui, status, now);
+
+                                    Vec::new()
+                                }
+                                _ => widget_body(ui, widgets, names, bindings, now_ms),
+                            })
+                            .inner
                     });
+
+                events.extend(from_tabs.inner);
 
                 if ctx.input(|i| i.viewport().close_requested()) {
                     events.push(StatusEvent::HideToTray);
@@ -930,9 +1095,284 @@ mod win {
         events
     }
 
-    fn status_body(ui: &mut egui::Ui, status: &Status, now: SystemTime) -> Vec<StatusEvent> {
+    pub fn widget_tabs(ui: &mut egui::Ui, widgets: &mut Widgets) {
+        ui.horizontal_wrapped(|ui| {
+            for tab in Tab::every() {
+                let picked = widgets.tab == tab;
+
+                if ui.selectable_label(picked, tab.title()).clicked() {
+                    widgets.show(tab);
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+    }
+
+    pub fn widget_body(
+        ui: &mut egui::Ui,
+        widgets: &mut Widgets,
+        names: &[String],
+        bindings: &[(String, String)],
+        now_ms: u64,
+    ) -> Vec<StatusEvent> {
         let mut events = Vec::new();
 
+        match widgets.tab {
+            Tab::Status => {}
+
+            Tab::Library => {
+                let logged = widgets.logged();
+
+                if logged.is_empty() {
+                    ui.label(egui::RichText::new("Nothing priced yet.").color(MUTED));
+                }
+
+                for total in widgets.totals() {
+                    ui.label(egui::RichText::new(format!("Session total {total}")).color(ACCENT));
+                }
+
+                ui.add_space(4.0);
+
+                for line in logged {
+                    ui.label(line);
+                }
+            }
+
+            Tab::Maps => {
+                ui.label(egui::RichText::new(widgets.map_headline()).color(
+                    match widgets.map_verdict() {
+                        Verdict::Deadly => egui::Color32::from_rgb(226, 96, 96),
+                        Verdict::Warning => WARNING,
+                        _ => MUTED,
+                    },
+                ));
+
+                ui.label(
+                    egui::RichText::new(format!("{} marked", widgets.marked()))
+                        .small()
+                        .color(MUTED),
+                );
+
+                ui.add_space(4.0);
+
+                let mut cycled = None;
+
+                for (index, concern) in widgets.concerns.iter().enumerate() {
+                    let colour = match concern.verdict {
+                        Verdict::Deadly => egui::Color32::from_rgb(226, 96, 96),
+                        Verdict::Warning => WARNING,
+                        Verdict::Good => ONLINE_DOT,
+                        _ => MUTED,
+                    };
+
+                    if ui
+                        .selectable_label(
+                            concern.verdict.is_coloured(),
+                            egui::RichText::new(&concern.text).small().color(colour),
+                        )
+                        .on_hover_text("click to mark it deadly, then warning, then good")
+                        .clicked()
+                    {
+                        cycled = Some(index);
+                    }
+                }
+
+                if let Some(index) = cycled {
+                    if let Some((matcher, set)) = widgets.cycle_verdict(index) {
+                        events.push(StatusEvent::MarkMap { matcher, set });
+                    }
+                }
+            }
+
+            Tab::Search => {
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut widgets.needle);
+                });
+
+                ui.add_space(4.0);
+
+                let mut clicked = None;
+
+                for hit in widgets.hits(names) {
+                    let starred = widgets.starred.is_starred(&hit.name);
+
+                    if ui
+                        .selectable_label(starred, &hit.name)
+                        .on_hover_text("click to keep it in the list")
+                        .clicked()
+                    {
+                        clicked = Some(hit.name.clone());
+                    }
+                }
+
+                if let Some(name) = clicked {
+                    widgets.starred.toggle_star(&name);
+                }
+
+                if !widgets.starred.starred().is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Kept").small().color(MUTED));
+
+                    for name in widgets.starred.starred() {
+                        ui.label(egui::RichText::new(name).small());
+                    }
+
+                    if ui.button("Clear kept").clicked() {
+                        widgets.starred.clear_stars();
+                    }
+                }
+            }
+
+            Tab::Notes => {
+                let mut text = widgets.notepad.text().to_string();
+
+                if ui.text_edit_multiline(&mut text).changed() {
+                    widgets.notepad.write(&text);
+                }
+
+                ui.label(
+                    egui::RichText::new(widgets.note_line())
+                        .small()
+                        .color(MUTED),
+                );
+            }
+
+            Tab::Log => {
+                if widgets.log_lines.is_empty() {
+                    ui.label(egui::RichText::new("The client log is quiet.").color(MUTED));
+                }
+
+                for line in widgets.log_lines.iter().rev().take(40) {
+                    ui.label(egui::RichText::new(line).small());
+                }
+            }
+
+            Tab::Leveling => {
+                ui.label(
+                    egui::RichText::new(widgets.background.who_you_are())
+                        .size(13.0)
+                        .color(ACCENT),
+                );
+                ui.label(
+                    egui::RichText::new(widgets.background.where_you_are())
+                        .small()
+                        .color(MUTED),
+                );
+
+                ui.add_space(8.0);
+
+                match widgets.levelling_step() {
+                    Some(step) => {
+                        ui.label(
+                            egui::RichText::new(format!("Act {}, {}", step.act, step.zone))
+                                .size(15.0)
+                                .color(ACCENT),
+                        );
+                        ui.label(egui::RichText::new(step.doing).small());
+                    }
+                    None => {
+                        ui.label(
+                            egui::RichText::new("No character seen in the client log yet.")
+                                .color(MUTED),
+                        );
+                    }
+                }
+
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Next").small().color(MUTED));
+
+                for step in widgets.levelling_next() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "level {}  act {}  {}",
+                            step.from_level, step.act, step.zone
+                        ))
+                        .small(),
+                    );
+                }
+            }
+
+            Tab::Settings => {
+                ui.label(
+                    egui::RichText::new(
+                        "These live in settings.json beside the app, and in the spec.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+
+                ui.add_space(6.0);
+
+                for field in switches() {
+                    ui.label(egui::RichText::new(field.label()).size(13.0));
+                    ui.label(egui::RichText::new(field.explains()).small().color(MUTED));
+                    ui.add_space(4.0);
+                }
+
+                for field in sliders() {
+                    let bounds = bounds_of(field).expect("a slider has bounds");
+
+                    ui.label(egui::RichText::new(field.label()).size(13.0));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}, between {} and {}",
+                            field.explains(),
+                            bounds.low,
+                            bounds.high
+                        ))
+                        .small()
+                        .color(MUTED),
+                    );
+                    ui.add_space(4.0);
+                }
+            }
+            Tab::Help => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Timer {}", widgets.elapsed(now_ms)))
+                            .size(18.0)
+                            .color(ACCENT),
+                    );
+
+                    if ui
+                        .button(match widgets.stopwatch.is_running() {
+                            true => "Stop",
+                            false => "Start",
+                        })
+                        .clicked()
+                    {
+                        widgets.stopwatch.toggle(now_ms);
+                    }
+
+                    if ui.button("Reset").clicked() {
+                        widgets.reset_timer();
+                    }
+                });
+
+                ui.add_space(8.0);
+
+                let (listed, width) = widgets.help(bindings);
+
+                for entry in listed {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{:width$}   {}",
+                            entry.keys,
+                            entry.does,
+                            width = width
+                        ))
+                        .small()
+                        .monospace(),
+                    );
+                }
+            }
+        }
+        events
+    }
+
+    fn status_body(ui: &mut egui::Ui, status: &Status, now: SystemTime) {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("PoE Wayfinder")
@@ -967,8 +1407,6 @@ mod win {
 
         ui.add_space(8.0);
         rate_limit_line(ui, &status.limits);
-
-        events
     }
 
     fn status_actions(ui: &mut egui::Ui, status: &Status) -> Vec<StatusEvent> {
@@ -1037,7 +1475,10 @@ mod win {
     }
 }
 #[cfg(windows)]
-pub use win::{overlay_viewport, paint, status_viewport, status_window, STATUS_VIEWPORT};
+pub use win::{
+    drop_splash_background, overlay_viewport, paint, splash_window, status_viewport, status_window,
+    widget_body, widget_tabs, SPLASH_VIEWPORT, SPLASH_WINDOW_TITLE, STATUS_VIEWPORT,
+};
 
 #[cfg(test)]
 mod tests {

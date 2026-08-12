@@ -128,6 +128,20 @@ test:
   # 100 percent while PoE1 was missing 23 functions.
   #
   # The floor only ever goes up.
+  # The thirteen widgets. Scanned separately from `parity` because they are
+  # .vue rather than .ts, and they were invisible to the measurement until the
+  # scanner learned to read a script block.
+  - name: parity-widgets
+    runner: go://generic-test-runner
+    spec:
+      command: sh
+      args:
+        - -c
+        - >-
+          cargo run --quiet --release --bin poe-wayfinder-parity --
+          --subdirs web/overlay,web/settings,web/background,web/library,web/map-check,web/item-search,web/item-check,web/client-log,web/stash-search,web/leveling,web/stopwatch,web/notepad,web/help
+          --min 100
+
   - name: parity-poe1
     runner: go://generic-test-runner
     spec:

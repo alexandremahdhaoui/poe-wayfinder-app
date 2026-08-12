@@ -114,6 +114,7 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
     use crate::adapter::clipboard_adapter::{Clipboard, SystemClipboard};
 
     use crate::driver::hook_driver::HookDriver;
+    use poe_wayfinder_core::controller::hotkey_match::Binding;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -197,13 +198,13 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
 
-    let mut copy_watch = match HookDriver::start(
-        0x43,
-        poe_wayfinder_core::controller::hotkey_match::Modifiers {
+    let mut copy_watch = match HookDriver::start(vec![Binding {
+        code: 0x43,
+        modifiers: poe_wayfinder_core::controller::hotkey_match::Modifiers {
             ctrl: true,
             ..Default::default()
         },
-    ) {
+    }]) {
         Ok(watch) => watch,
         Err(err) => {
             eprintln!("fakegame: watching for Ctrl+C: {err}");
@@ -222,7 +223,7 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
             }
         }
 
-        if copy_watch.fired() {
+        if copy_watch.fired().is_some() {
             let wrote = SystemClipboard::new().and_then(|mut c| c.write(item));
 
             match wrote {
@@ -353,6 +354,7 @@ pub fn hook_modifiers(hotkey: &Hotkey) -> poe_wayfinder_core::controller::hotkey
 #[cfg(windows)]
 pub fn self_test_hook() -> ExitCode {
     use crate::driver::hook_driver::HookDriver;
+    use poe_wayfinder_core::controller::hotkey_match::Binding;
     use poe_wayfinder_core::controller::hotkey_match::Modifiers;
 
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -374,7 +376,10 @@ pub fn self_test_hook() -> ExitCode {
         meta: false,
     };
 
-    let mut hook = match HookDriver::start(F24, wanted) {
+    let mut hook = match HookDriver::start(vec![Binding {
+        code: F24,
+        modifiers: wanted,
+    }]) {
         Ok(hook) => hook,
         Err(err) => {
             log.error(
@@ -438,7 +443,7 @@ pub fn self_test_hook() -> ExitCode {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
 
     while std::time::Instant::now() < deadline {
-        if hook.fired() {
+        if hook.fired().is_some() {
             log.info(
                 "a real key press reached the hook and matched. The whole press \
                  path works without anyone touching the keyboard.",
