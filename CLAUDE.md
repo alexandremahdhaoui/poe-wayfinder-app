@@ -83,3 +83,46 @@ so the startup line said `poe2` while the driver watched `poe1`.
 **Injected input is occasionally swallowed before any window sees it.** A press
 check that fails once and passes on retry is that, not a regression. The
 harnesses already retry three times.
+
+## The bugs that a user found and the tests did not
+
+**A focused panel IS the foreground window.** `should_draw` required the GAME
+to be foreground, so the panel stopped drawing the instant it took focus, then
+regained it and oscillated. That one line produced four separate complaints:
+the overlay felt clunky, buttons could not be clicked, the locked panel showed
+nothing until alt tab, and presses seemed to need repeating. Foreground now
+means the game **or any window of our own process**
+(`game_window_adapter::foreground_is_ours`).
+
+**Never use `f64::NAN` as an "unset" marker in a widget.** It caused two
+user-visible bugs from one line:
+
+- `NaN != NaN`, so egui reported `.changed()` on an empty min/max box **every
+  frame**. Both setters force `enabled = true`, so a filter row could never be
+  switched off. The user could see the click do nothing; the log showed the
+  write succeeding.
+- `f64::INFINITY as i64` saturates, so `value.round() as i64` printed
+  **9223372036854775807** in the panel.
+
+`format_value` now refuses any non-finite value, and an edit is only emitted
+when it actually differs from the row.
+
+**egui `.changed()` is not "the user changed it".** Guard every emit with a
+comparison against the value you already hold.
+
+## Instrumentation is the difference between a log and a session
+
+Every bug above needed the user at the keyboard because nothing was logged.
+There were 5 `.debug()` call sites in this crate, 0 in core, and 189 of 192
+debug lines in a real session were the frame heartbeat.
+
+Core is pure and gets no logger, ever. Log the **data core returns**, at the
+driver boundary. `log_request`, `log_estimate`, `log_filter_rows` in
+`overlay_loop::win` are the pattern: one line per decision, carrying the inputs
+and the chosen output.
+
+The acceptance test for a debug line: **could the last four bugs be diagnosed
+from the log alone?**
+
+There is **no `trace` level**. `Level::parse` maps anything unknown to info and
+says nothing, so `--log-level trace` silently produces an info log.
