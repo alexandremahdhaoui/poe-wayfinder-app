@@ -137,7 +137,11 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         };
 
         let body = match &exchange {
-            Some(tag) => serde_json::to_string(&to_exchange_json(tag, &[], checked.query.status)),
+            Some(tag) => serde_json::to_string(&to_exchange_json(
+                tag,
+                &poe_wayfinder_core::controller::bulk::currencies_to_price_in(self.game, tag),
+                checked.query.status,
+            )),
             None => serde_json::to_string(&to_json(&checked.query, self.game)),
         }
         .map_err(PriceCheckError::Decode)?;

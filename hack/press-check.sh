@@ -248,6 +248,17 @@ if grep '"msg":"price check finished"' "$log" | grep -qE '"listings":[1-9]'; the
     fi
 fi
 
+# A price that cannot be read from the log cannot be argued about. "1 to 10
+# div for a worthless item" took a live session to find because the finished
+# line carried listings and quotes but never the number the user was shown.
+if grep '"msg":"price check finished"' "$log" | grep -q '"price":'; then
+    echo "note: it priced the item at $(grep '"msg":"price check finished"' "$log" |
+        tail -1 | grep -oE '"price":"[^"]*"' | cut -d'"' -f4)"
+else
+    echo "FAIL: the finished line carries no price, so a wrong one cannot be diagnosed."
+    fail=1
+fi
+
 # A refused query still "finishes". The error line is the only thing that
 # separates a real answer from one the trade api threw out.
 if grep -q '"msg":"searching the trade site"' "$log"; then

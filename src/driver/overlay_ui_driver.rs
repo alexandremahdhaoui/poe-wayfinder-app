@@ -43,7 +43,15 @@ pub fn modifier_line(text: &str, roll: Option<f64>, decimals: bool) -> String {
     modifier_text(text, roll, decimals)
 }
 
+pub const NO_VALUE: &str = "–";
+pub const NO_LIMIT_ABOVE: &str = "no max";
+pub const NO_LIMIT_BELOW: &str = "no min";
+
 pub fn format_value(value: f64, decimals: bool) -> String {
+    if !value.is_finite() {
+        return NO_VALUE.to_string();
+    }
+
     match decimals {
         true => format!("{value:.2}"),
         false => format!("{}", value.round() as i64),
@@ -180,12 +188,12 @@ pub fn should_paint(frame: &Frame) -> bool {
 mod win {
     use super::{
         format_value, modifier_line, panel_text, rarity_colour, roll_caption, search_button_label,
-        Frame, PanelSource, StatusEvent, UiEvent,
+        Frame, PanelSource, StatusEvent, UiEvent, NO_LIMIT_ABOVE, NO_LIMIT_BELOW,
     };
 
     use eframe::egui;
     use poe_wayfinder_core::controller::filter_view::{
-        influence_labels, tier_label, FilterView, FlagRow, Row,
+        gauge_edit, influence_labels, tier_label, FilterView, FlagRow, Row,
     };
     use poe_wayfinder_core::controller::item_editor::AugmentOption;
     use poe_wayfinder_core::controller::price_summary::{
@@ -211,6 +219,10 @@ mod win {
     const WARNING: egui::Color32 = egui::Color32::from_rgb(240, 180, 60);
     const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 150, 162);
     const ACCENT: egui::Color32 = egui::Color32::from_rgb(226, 200, 130);
+
+    const GAUGE_HIT_HEIGHT: f32 = 14.0;
+    const GAUGE_BAR_HEIGHT: f32 = 6.0;
+    const GAUGE_HANDLE_RADIUS: f32 = 4.0;
 
     const LISTINGS_SHOWN: usize = 8;
     const FOOTER_HEIGHT: f32 = 30.0;
@@ -628,7 +640,7 @@ mod win {
             contributor_line(ui, row);
 
             if row.bounds.is_some() {
-                gauge(ui, row);
+                gauge(ui, row, events);
             }
         });
     }
@@ -663,33 +675,53 @@ mod win {
     }
 
     fn bounds_inputs(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
-        let step = match row.decimals {
-            true => 0.01,
-            false => 1.0,
-        };
+        let step = drag_speed(row);
 
         let mut max = row.max.unwrap_or(f64::NAN);
         let max_widget = egui::DragValue::new(&mut max)
             .speed(step)
-            .custom_formatter(|value, _| match value.is_nan() {
-                true => "max".to_string(),
-                false => format_value(value, row.decimals),
+            .custom_formatter(|value, _| match value.is_finite() {
+                true => format_value(value, row.decimals),
+                false => NO_LIMIT_ABOVE.to_string(),
             });
 
-        if ui.add_sized([52.0, 18.0], max_widget).changed() {
+        if ui
+            .add_sized([56.0, 18.0], max_widget)
+            .on_hover_text("highest value to match. Drag it, or click the bar below.")
+            .changed()
+        {
             events.push(UiEvent::SetMax(row.key, finite(max)));
         }
 
         let mut min = row.min.unwrap_or(f64::NAN);
         let min_widget = egui::DragValue::new(&mut min)
             .speed(step)
-            .custom_formatter(|value, _| match value.is_nan() {
-                true => "min".to_string(),
-                false => format_value(value, row.decimals),
+            .custom_formatter(|value, _| match value.is_finite() {
+                true => format_value(value, row.decimals),
+                false => NO_LIMIT_BELOW.to_string(),
             });
 
-        if ui.add_sized([52.0, 18.0], min_widget).changed() {
+        if ui
+            .add_sized([56.0, 18.0], min_widget)
+            .on_hover_text("lowest value to match. Drag it, or click the bar below.")
+            .changed()
+        {
             events.push(UiEvent::SetMin(row.key, finite(min)));
+        }
+    }
+
+    fn drag_speed(row: &Row) -> f64 {
+        let floor = match row.decimals {
+            true => 0.01,
+            false => 0.05,
+        };
+
+        match row.bounds {
+            Some((low, high)) if high > low => ((high - low) / 120.0).max(floor),
+            _ => match row.decimals {
+                true => 0.01,
+                false => 0.5,
+            },
         }
     }
 
@@ -697,9 +729,36 @@ mod win {
         value.is_finite().then_some(value)
     }
 
-    fn gauge(ui: &mut egui::Ui, row: &Row) {
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 5.0), egui::Sense::hover());
+    fn gauge(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
+        let (hit, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), GAUGE_HIT_HEIGHT),
+            egui::Sense::click_and_drag(),
+        );
+
+        let rect = egui::Rect::from_center_size(
+            hit.center(),
+            egui::vec2(hit.width(), GAUGE_BAR_HEIGHT),
+        );
+
+        if row.bounds.is_some() {
+            response
+                .clone()
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+
+        if let Some(pointer) = response
+            .interact_pointer_pos()
+            .filter(|_| response.clicked() || response.dragged())
+        {
+            let ratio = f64::from((pointer.x - rect.left()) / rect.width().max(1.0));
+
+            if let Some(edit) = gauge_edit(row, ratio) {
+                events.push(match edit.sets_min {
+                    true => UiEvent::SetMin(row.key, Some(edit.value)),
+                    false => UiEvent::SetMax(row.key, Some(edit.value)),
+                });
+            }
+        }
 
         let painter = ui.painter();
 
@@ -740,6 +799,22 @@ mod win {
                 0.0,
                 GAUGE_TICK,
             );
+        }
+
+        if row.enabled {
+            for handle in [row.min.map(&at), row.max.map(&at)].into_iter().flatten() {
+                painter.circle_filled(
+                    egui::pos2(handle, rect.center().y),
+                    GAUGE_HANDLE_RADIUS,
+                    GAUGE_FILL,
+                );
+
+                painter.circle_stroke(
+                    egui::pos2(handle, rect.center().y),
+                    GAUGE_HANDLE_RADIUS,
+                    egui::Stroke::new(1.0_f32, GAUGE_TICK),
+                );
+            }
         }
     }
 
@@ -1490,6 +1565,27 @@ mod tests {
     use poe_wayfinder_core::types::item::{BaseInfo, ItemRarity, ParsedItem, UnknownModifier};
     use poe_wayfinder_core::types::modifier::ModifierType;
     use poe_wayfinder_core::types::query::TradeQuery;
+
+    #[test]
+    fn an_unbounded_value_never_reaches_the_panel_as_a_saturated_integer() {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert_eq!(format_value(value, false), NO_VALUE, "{value}");
+            assert_eq!(format_value(value, true), NO_VALUE, "{value}");
+        }
+    }
+
+    #[test]
+    fn the_saturating_cast_is_what_printed_i64_max_in_the_panel() {
+        assert_eq!(f64::INFINITY.round() as i64, 9_223_372_036_854_775_807);
+        assert_ne!(format_value(f64::INFINITY, false), "9223372036854775807");
+    }
+
+    #[test]
+    fn an_ordinary_value_is_unaffected() {
+        assert_eq!(format_value(17.4, false), "17");
+        assert_eq!(format_value(17.4, true), "17.40");
+        assert_eq!(format_value(-3.0, false), "-3");
+    }
 
     fn check(item: ParsedItem) -> PriceCheck {
         PriceCheck {

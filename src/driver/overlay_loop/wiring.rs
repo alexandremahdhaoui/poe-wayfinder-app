@@ -9,6 +9,7 @@ use crate::controller::settings_controller::{RememberedSettings, SettingsControl
 use crate::logging::{Logger, Value};
 
 use poe_wayfinder_core::controller::game_detect;
+use poe_wayfinder_core::controller::league_list;
 use poe_wayfinder_core::controller::trade_api::TradeUrls;
 use poe_wayfinder_core::types::{GamePair, GameVersion};
 
@@ -85,8 +86,80 @@ pub fn panel_hold() -> bool {
     std::env::args().any(|a| a == "--panel-hold")
 }
 
+pub fn remembered_league(config_dir: &std::path::Path) -> Option<String> {
+    build_settings(config_dir).last_league()
+}
+
 pub fn league_is_unknown(config_dir: &std::path::Path) -> bool {
-    build_settings(config_dir).last_league().is_none()
+    remembered_league(config_dir).is_none()
+}
+
+pub const FALLBACK_LEAGUE: &str = "Standard";
+
+pub fn resolve_league(
+    configured: &str,
+    remembered: Option<String>,
+    fetched: Option<String>,
+) -> String {
+    for candidate in [configured.trim().to_string()]
+        .into_iter()
+        .chain(fetched)
+        .chain(remembered)
+    {
+        if !candidate.trim().is_empty() {
+            return candidate.trim().to_string();
+        }
+    }
+
+    FALLBACK_LEAGUE.to_string()
+}
+
+pub fn fetch_current_league(
+    http: &HttpAdapter,
+    base_url: &str,
+    game: GameVersion,
+    log: &Logger,
+) -> Option<String> {
+    let url = TradeUrls::new(base_url, game).data("leagues");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+
+    let response = runtime
+        .block_on(http.get(&url, &[("accept", "application/json")]))
+        .map_err(|err| {
+            log.warn(
+                "could not read the league list, so the league falls back",
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
+            );
+        })
+        .ok()?;
+
+    if response.status != 200 {
+        log.warn(
+            "the trade api refused the league list, so the league falls back",
+            &[("status", Value::Int(i64::from(response.status)))],
+        );
+
+        return None;
+    }
+
+    let found = league_list::current(&league_list::parse(&response.body));
+
+    log.info(
+        "read the league list",
+        &[
+            ("url", Value::Str(url)),
+            (
+                "current",
+                Value::Str(found.clone().unwrap_or_else(|| "none".to_string())),
+            ),
+        ],
+    );
+
+    found
 }
 
 pub fn window_title(configured: &str, game: GameVersion) -> String {
@@ -628,6 +701,33 @@ fn write_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_league_wins_over_anything_detected() {
+        assert_eq!(
+            resolve_league("Standard", Some("Runes of Aldur".into()), Some("HC".into())),
+            "Standard"
+        );
+    }
+
+    #[test]
+    fn an_unset_league_takes_the_one_the_trade_site_reports() {
+        assert_eq!(
+            resolve_league("", Some("Old League".into()), Some("Runes of Aldur".into())),
+            "Runes of Aldur"
+        );
+    }
+
+    #[test]
+    fn a_league_lookup_that_failed_falls_back_to_the_last_run() {
+        assert_eq!(resolve_league("", Some("Runes of Aldur".into()), None), "Runes of Aldur");
+    }
+
+    #[test]
+    fn knowing_nothing_at_all_searches_standard_rather_than_no_league() {
+        assert_eq!(resolve_league("", None, None), FALLBACK_LEAGUE);
+        assert_eq!(resolve_league("   ", None, None), FALLBACK_LEAGUE);
+    }
 
     #[test]
     fn an_unset_window_title_is_derived_from_the_game() {

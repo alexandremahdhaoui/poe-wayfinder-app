@@ -42,6 +42,10 @@ pub fn should_draw(window: &GameWindow) -> bool {
     window.is_foreground && window.rect.is_visible()
 }
 
+pub fn foreground_is_ours(foreground_pid: u32, our_pid: u32) -> bool {
+    foreground_pid != 0 && foreground_pid == our_pid
+}
+
 #[cfg(windows)]
 mod win {
     use super::{GameWindow, GameWindowSource, WindowError};
@@ -55,9 +59,22 @@ mod win {
         SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C,
         VK_CONTROL,
     };
+    use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetCursorPos, GetForegroundWindow, GetWindowRect,
+        FindWindowW, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
     };
+
+    fn owned_by_this_process(window: HWND) -> bool {
+        if window.is_invalid() {
+            return false;
+        }
+
+        let mut pid = 0u32;
+
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+
+        super::foreground_is_ours(pid, unsafe { GetCurrentProcessId() })
+    }
 
     pub struct GameWindowAdapter {
         title: std::sync::RwLock<String>,
@@ -105,6 +122,7 @@ mod win {
             })?;
 
             let foreground = unsafe { GetForegroundWindow() };
+            let is_foreground = foreground == handle || owned_by_this_process(foreground);
 
             Ok(GameWindow {
                 rect: WindowRect::new(
@@ -113,7 +131,7 @@ mod win {
                     (rect.right - rect.left).max(0) as u32,
                     (rect.bottom - rect.top).max(0) as u32,
                 ),
-                is_foreground: foreground == handle,
+                is_foreground,
             })
         }
 
@@ -348,6 +366,21 @@ mod tests {
     fn a_minimised_window_is_not_drawn_over() {
         assert!(!should_draw(&window(0, 0, 0, 0, true)));
         assert!(!should_draw(&window(0, 0, 1920, 0, true)));
+    }
+
+    #[test]
+    fn our_own_panel_taking_focus_still_counts_as_the_game_being_in_front() {
+        assert!(foreground_is_ours(4242, 4242));
+    }
+
+    #[test]
+    fn another_application_taking_focus_does_not() {
+        assert!(!foreground_is_ours(1234, 4242));
+    }
+
+    #[test]
+    fn a_window_with_no_process_is_not_ours() {
+        assert!(!foreground_is_ours(0, 0));
     }
 
     #[test]

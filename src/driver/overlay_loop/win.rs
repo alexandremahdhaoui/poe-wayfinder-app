@@ -36,12 +36,12 @@ use poe_wayfinder_core::controller::overlay_lifecycle::{
     Input, Lifecycle, Point, Rect as LifeRect,
 };
 use poe_wayfinder_core::controller::press_coalesce;
-use poe_wayfinder_core::controller::price_check::{price_check, PriceCheckOptions};
+use poe_wayfinder_core::controller::price_check::{price_check, PriceCheck, PriceCheckOptions};
 use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
-const HEARTBEAT_FRAMES: i64 = 100;
+const HEARTBEAT_FRAMES: i64 = 600;
 const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
 const SPLASH_HOLD: Duration = Duration::from_millis(2000);
 const SPLASH_FADE: Duration = Duration::from_millis(400);
@@ -162,25 +162,6 @@ where
         model.fail(&format!(
             "Ready. Press {hotkey} with the cursor over an item."
         ));
-
-        let mut settings = settings;
-        let mut prices = prices;
-
-        if let Some(league) = remembered.last_league() {
-            if league != settings.league {
-                log.info(
-                    "using the league remembered from the last run",
-                    &[
-                        ("configured", Value::Str(settings.league.clone())),
-                        ("remembered", Value::Str(league.clone())),
-                    ],
-                );
-
-                prices.set_league(&league);
-
-                settings.league = league;
-            }
-        }
 
         let widgets = opened_widgets(&remembered);
         let window_was_found = window.window().is_some();
@@ -429,9 +410,50 @@ where
                         .unwrap_or(false);
 
                     self.model.set_enabled(key, !enabled);
+
+                    let now = self
+                        .model
+                        .filters()
+                        .numerics
+                        .iter()
+                        .chain(self.model.filters().stats.iter())
+                        .filter(|row| row.key == key)
+                        .map(|row| row.enabled)
+                        .collect::<Vec<_>>();
+
+                    self.log.debug(
+                        "a filter row was toggled",
+                        &[
+                            ("key", Value::Str(format!("{key:?}"))),
+                            ("was", Value::Bool(enabled)),
+                            ("asked_for", Value::Bool(!enabled)),
+                            ("rows_with_this_key", Value::Int(now.len() as i64)),
+                            ("now", Value::Str(format!("{now:?}"))),
+                        ],
+                    );
                 }
-                UiEvent::SetMin(key, value) => self.model.set_min(key, value),
-                UiEvent::SetMax(key, value) => self.model.set_max(key, value),
+                UiEvent::SetMin(key, value) => {
+                    self.log.debug(
+                        "a filter minimum was set, which also enables the row",
+                        &[
+                            ("key", Value::Str(format!("{key:?}"))),
+                            ("value", Value::Str(describe(value))),
+                        ],
+                    );
+
+                    self.model.set_min(key, value);
+                }
+                UiEvent::SetMax(key, value) => {
+                    self.log.debug(
+                        "a filter maximum was set, which also enables the row",
+                        &[
+                            ("key", Value::Str(format!("{key:?}"))),
+                            ("value", Value::Str(describe(value))),
+                        ],
+                    );
+
+                    self.model.set_max(key, value);
+                }
                 UiEvent::ToggleFlag(key) => {
                     let flag = self
                         .model
@@ -1041,6 +1063,8 @@ where
             ],
         );
 
+        self.log_request(&checked);
+
         let found = self.search_for(&checked);
 
         let outcome = price_check_loop::settle(&mut self.model, checked, found);
@@ -1050,6 +1074,11 @@ where
         };
 
         self.after_search();
+
+        self.log_estimate();
+        self.log_filter_rows();
+
+        self.record_priced(total);
 
         let view = self.model.filters();
 
@@ -1063,11 +1092,121 @@ where
                 ("enabled", Value::Int(view.enabled_count() as i64)),
                 ("augments", Value::Int(self.model.augments().len() as i64)),
                 ("quotes", Value::Int(self.model.listings().len() as i64)),
+                ("price", Value::Str(self.priced_at())),
+                ("league", Value::Str(self.settings.league.clone())),
                 crate::util::elapsed::field(),
             ],
         );
 
         self.drain_hotkeys();
+    }
+
+    fn log_request(&self, checked: &PriceCheck) {
+        use poe_wayfinder_core::controller::bulk;
+
+        let have = checked
+            .trade_tag
+            .as_ref()
+            .map(|tag| bulk::currencies_to_price_in(self.game, tag))
+            .unwrap_or_default();
+
+        self.log.debug(
+            "the request being sent",
+            &[
+                ("endpoint", Value::Str(format!("{:?}", checked.endpoint))),
+                (
+                    "trade_tag",
+                    Value::Str(checked.trade_tag.clone().unwrap_or_else(|| "none".into())),
+                ),
+                (
+                    "priced_in",
+                    Value::Str(match have.is_empty() {
+                        true => "anything the seller offers".to_string(),
+                        false => have.join(","),
+                    }),
+                ),
+                (
+                    "stat_filters",
+                    Value::Int(checked.stat_filter_count() as i64),
+                ),
+                (
+                    "item",
+                    Value::Str(checked.item.info.reference_name.clone()),
+                ),
+                ("category", Value::Str(format!("{:?}", checked.item.category))),
+            ],
+        );
+    }
+
+    fn log_filter_rows(&self) {
+        let view = self.model.filters();
+
+        for row in view.stats.iter().chain(view.numerics.iter()) {
+            self.log.debug(
+                "a filter row on the panel",
+                &[
+                    ("label", Value::Str(row.label.clone())),
+                    ("enabled", Value::Bool(row.enabled)),
+                    ("min", Value::Str(describe(row.min))),
+                    ("max", Value::Str(describe(row.max))),
+                    ("roll", Value::Str(describe(row.roll))),
+                    (
+                        "bounds",
+                        Value::Str(row.bounds.map_or_else(
+                            || "none".to_string(),
+                            |(low, high)| format!("{low} to {high}"),
+                        )),
+                    ),
+                ],
+            );
+        }
+    }
+
+    fn log_estimate(&self) {
+        use poe_wayfinder_core::controller::price_summary::price_spread;
+
+        let Some(estimate) = self.model.estimate() else {
+            self.log.debug(
+                "no estimate was formed",
+                &[(
+                    "quotes",
+                    Value::Int(self.model.listings().len() as i64),
+                )],
+            );
+
+            return;
+        };
+
+        self.log.debug(
+            "the estimate behind the headline",
+            &[
+                ("currency", Value::Str(estimate.currency.clone())),
+                ("spread", Value::Str(price_spread(estimate))),
+                ("low", Value::Str(format!("{}", estimate.low))),
+                ("median", Value::Str(format!("{}", estimate.median))),
+                ("high", Value::Str(format!("{}", estimate.high))),
+                ("counted", Value::Int(estimate.counted as i64)),
+                ("outliers_dropped", Value::Int(estimate.outliers as i64)),
+            ],
+        );
+
+        for quote in self.model.listings().iter().take(10) {
+            self.log.debug(
+                "a listing the price came from",
+                &[
+                    ("amount", Value::Str(format!("{}", quote.amount))),
+                    ("currency", Value::Str(quote.currency.clone())),
+                    ("online", Value::Bool(quote.online)),
+                ],
+            );
+        }
+    }
+
+    fn priced_at(&self) -> String {
+        self.model.estimate().map_or_else(
+            || "none".to_string(),
+            poe_wayfinder_core::controller::price_summary::price_spread,
+        )
     }
 
     fn follow_game(&mut self) {
@@ -1442,5 +1581,13 @@ fn open_in_browser(url: &str) {
             PCWSTR::null(),
             SW_SHOWNORMAL,
         );
+    }
+}
+
+fn describe(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.is_finite() => format!("{value}"),
+        Some(value) => format!("NOT FINITE: {value}"),
+        None => "unset".to_string(),
     }
 }

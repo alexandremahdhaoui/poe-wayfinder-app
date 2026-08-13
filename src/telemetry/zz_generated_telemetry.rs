@@ -7,9 +7,7 @@
 
 use std::collections::BTreeMap;
 
-pub const BUCKETS: [f64; 11] = [
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-];
+pub const BUCKETS: [f64; 11] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
 
 /// Render a float the one agreed way. No exponent. No trailing zeros.
 pub fn format_float(f: f64) -> String {
@@ -98,10 +96,7 @@ impl Registry {
     }
 
     pub fn observe(&mut self, name: &str, labels: &[(&str, &str)], v: f64, help: &str) {
-        self.histograms
-            .entry(key_of(name, labels))
-            .or_default()
-            .push(v);
+        self.histograms.entry(key_of(name, labels)).or_default().push(v);
         self.help.insert(name.to_string(), help.to_string());
     }
 
@@ -132,11 +127,7 @@ impl Registry {
 
             for bound in BUCKETS {
                 let count = samples.iter().filter(|s| **s <= bound).count();
-                out.push(format!(
-                    "{} {}",
-                    with_label(k, "le", &format_float(bound)),
-                    count
-                ));
+                out.push(format!("{} {}", with_label(k, "le", &format_float(bound)), count));
             }
             out.push(format!("{} {}", with_label(k, "le", "+Inf"), samples.len()));
             let sum: f64 = samples.iter().sum();
@@ -197,10 +188,7 @@ pub fn parse_trace_parent(s: &str) -> Option<TraceParent> {
     if parts[1].len() != 32 || parts[2].len() != 16 || parts[3].len() != 2 {
         return None;
     }
-    if !parts[1..].iter().all(|p| {
-        p.chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-    }) {
+    if !parts[1..].iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())) {
         return None;
     }
     if parts[1].trim_matches('0').is_empty() || parts[2].trim_matches('0').is_empty() {

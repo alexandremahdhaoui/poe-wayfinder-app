@@ -140,18 +140,34 @@ fn run_overlay(
 
     let (window, game) = wiring::build_game_state(cfg, pinned, &log);
 
-    let settings = wiring::build_settings_for(cfg, game, pinned, &origin);
+    let mut settings = wiring::build_settings_for(cfg, game, pinned, &origin);
 
     let Some(copier) = wiring::build_copier(cfg.restore_clipboard, &log) else {
         return ExitCode::FAILURE;
     };
+
+    let league = wiring::resolve_league(
+        &cfg.league,
+        wiring::remembered_league(config_dir),
+        match cfg.league.trim().is_empty() {
+            true => wiring::fetch_current_league(&http, &cfg.trade_base_url, game, &log),
+            false => None,
+        },
+    );
+
+    log.info(
+        "searching this league",
+        &[("league", Value::Str(league.clone()))],
+    );
+
+    settings.league.clone_from(&league);
 
     let prices = PriceCheckController::new(
         http,
         SystemClock::new(),
         &cfg.trade_base_url,
         game,
-        &cfg.league,
+        &league,
     )
     .with_session(&cfg.poesessid)
     .with_latency(settings.latency);
