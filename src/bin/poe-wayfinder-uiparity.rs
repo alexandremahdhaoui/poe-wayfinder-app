@@ -454,13 +454,13 @@ const CAPABILITIES: &[Capability] = &[
         component: "UiCheckbox.vue",
         name: "a filter's state is visible at a glance",
         domain: &["pub enabled"],
-        ui: &["fn checkbox"],
+        ui: &["mod_line(ui, row"],
     },
     Capability {
         component: "Popover.vue",
         name: "hovering a filter explains where its numbers came from",
         domain: &["fn roll_caption"],
-        ui: &["on_hover_text"],
+        ui: &["roll_caption(row)"],
     },
     Capability {
         component: "ItemModifierText.vue",

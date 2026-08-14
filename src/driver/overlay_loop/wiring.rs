@@ -26,9 +26,7 @@ pub fn build_logger(level: &str, service: &str) -> Logger {
                 ("using", Value::Str("info".to_string())),
                 (
                     "known",
-                    Value::Str(
-                        crate::controller::startup_controller::KNOWN_LOG_LEVELS.join(","),
-                    ),
+                    Value::Str(crate::controller::startup_controller::KNOWN_LOG_LEVELS.join(",")),
                 ),
             ],
         );
@@ -210,9 +208,7 @@ pub fn league_for(
             ("configured", Value::Str(cfg.league.clone())),
             (
                 "remembered",
-                Value::Str(
-                    remembered_league(config_dir).unwrap_or_else(|| "none".to_string()),
-                ),
+                Value::Str(remembered_league(config_dir).unwrap_or_else(|| "none".to_string())),
             ),
         ],
     );

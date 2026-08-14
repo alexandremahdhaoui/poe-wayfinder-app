@@ -81,7 +81,10 @@ mod tests {
 
     #[test]
     fn leading_blank_lines_are_skipped_so_the_field_is_never_empty() {
-        assert_eq!(first_line("\n\n  Orb of Augmentation\n"), "Orb of Augmentation");
+        assert_eq!(
+            first_line("\n\n  Orb of Augmentation\n"),
+            "Orb of Augmentation"
+        );
         assert_eq!(first_line(""), "empty");
         assert_eq!(first_line("   \n  "), "empty");
     }

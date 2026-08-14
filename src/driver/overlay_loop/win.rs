@@ -1187,11 +1187,11 @@ where
                     "stat_filters",
                     Value::Int(checked.stat_filter_count() as i64),
                 ),
+                ("item", Value::Str(checked.item.info.reference_name.clone())),
                 (
-                    "item",
-                    Value::Str(checked.item.info.reference_name.clone()),
+                    "category",
+                    Value::Str(format!("{:?}", checked.item.category)),
                 ),
-                ("category", Value::Str(format!("{:?}", checked.item.category))),
             ],
         );
     }
@@ -1244,10 +1244,7 @@ where
         let Some(estimate) = self.model.estimate() else {
             self.log.debug(
                 "no estimate was formed",
-                &[(
-                    "quotes",
-                    Value::Int(self.model.listings().len() as i64),
-                )],
+                &[("quotes", Value::Int(self.model.listings().len() as i64))],
             );
 
             return;
@@ -1423,10 +1420,7 @@ where
                 "the panel window could not be measured, so its placement is unchecked",
                 &[
                     ("panel_title", Value::Str(PANEL_WINDOW_TITLE.to_string())),
-                    (
-                        "game_title",
-                        Value::Str(self.settings.window_title.clone()),
-                    ),
+                    ("game_title", Value::Str(self.settings.window_title.clone())),
                 ],
             );
 
@@ -1741,10 +1735,7 @@ fn log_parsed(log: &Logger, parsed: &Result<PriceCheck, String>) {
         "what the parser made of the item",
         &[
             ("name", Value::Str(checked.item.info.name.clone())),
-            (
-                "base",
-                Value::Str(checked.item.info.reference_name.clone()),
-            ),
+            ("base", Value::Str(checked.item.info.reference_name.clone())),
             ("rarity", Value::Str(format!("{:?}", checked.item.rarity))),
             (
                 "category",
@@ -1757,10 +1748,7 @@ fn log_parsed(log: &Logger, parsed: &Result<PriceCheck, String>) {
             ),
             ("corrupted", Value::Bool(checked.item.is_corrupted)),
             ("unidentified", Value::Bool(checked.item.is_unidentified)),
-            (
-                "modifiers",
-                Value::Int(checked.item.modifiers.len() as i64),
-            ),
+            ("modifiers", Value::Int(checked.item.modifiers.len() as i64)),
             (
                 "unknown_modifiers",
                 Value::Int(checked.item.unknown_modifiers.len() as i64),
@@ -1769,18 +1757,12 @@ fn log_parsed(log: &Logger, parsed: &Result<PriceCheck, String>) {
                 "data_trade_tag",
                 Value::Str(text(&checked.item.info.trade_tag)),
             ),
-            (
-                "routed_to",
-                Value::Str(format!("{:?}", checked.endpoint)),
-            ),
+            ("routed_to", Value::Str(format!("{:?}", checked.endpoint))),
             (
                 "stat_filters",
                 Value::Int(checked.stat_filter_count() as i64),
             ),
-            (
-                "searchable",
-                Value::Bool(checked.constrains_something()),
-            ),
+            ("searchable", Value::Bool(checked.constrains_something())),
         ],
     );
 }

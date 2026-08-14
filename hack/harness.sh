@@ -105,7 +105,8 @@ press_until() {
 
     local before attempt
 
-    before=$(grep -c '"msg":"price check hotkey pressed"' "$log" 2>/dev/null || echo 0)
+    before=$(grep -c '"msg":"price check hotkey pressed"' "$log" 2>/dev/null)
+    before=${before:-0}
 
     for attempt in 1 2 3; do
         "$exe" "$@" --press-hotkey >/dev/null 2>&1
@@ -117,7 +118,8 @@ press_until() {
             waited=$((waited + 1))
 
             local now
-            now=$(grep -c '"msg":"price check hotkey pressed"' "$log" 2>/dev/null || echo 0)
+            now=$(grep -c '"msg":"price check hotkey pressed"' "$log" 2>/dev/null)
+            now=${now:-0}
 
             [ "$now" -gt "$before" ] && return 0
         done

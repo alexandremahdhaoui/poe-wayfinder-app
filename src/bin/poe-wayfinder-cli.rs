@@ -63,7 +63,10 @@ fn main() -> ExitCode {
                 "reading item file",
                 &[
                     ("path", Value::Str(cfg.item_file.clone())),
-                    ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                    (
+                        "error",
+                        Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                    ),
                 ],
             );
 
@@ -80,7 +83,10 @@ fn main() -> ExitCode {
                 "loading game data",
                 &[
                     ("data_dir", Value::Str(cfg.data_dir.clone())),
-                    ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                    (
+                        "error",
+                        Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                    ),
                 ],
             );
 
@@ -104,7 +110,10 @@ fn main() -> ExitCode {
                 "parsing item text",
                 &[
                     ("path", Value::Str(cfg.item_file.clone())),
-                    ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                    (
+                        "error",
+                        Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                    ),
                 ],
             );
 
@@ -170,7 +179,10 @@ fn main() -> ExitCode {
         Err(err) => {
             log.error(
                 "serialising the trade query",
-                &[("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err)))],
+                &[(
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                )],
             );
 
             return ExitCode::FAILURE;
@@ -189,7 +201,10 @@ fn main() -> ExitCode {
         Err(err) => {
             log.error(
                 "starting the runtime",
-                &[("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err)))],
+                &[(
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                )],
             );
 
             return ExitCode::FAILURE;

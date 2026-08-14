@@ -54,12 +54,12 @@ mod win {
 
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C,
         VK_CONTROL,
     };
-    use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
         FindWindowW, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
     };

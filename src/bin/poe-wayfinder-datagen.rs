@@ -81,7 +81,10 @@ async fn run() -> ExitCode {
             "trade_base_url is refused by the network policy",
             &[
                 ("url", Value::Str(cfg.trade_base_url.clone())),
-                ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                (
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                ),
             ],
         );
 
@@ -109,7 +112,10 @@ async fn run() -> ExitCode {
         Err(err) => {
             log.error(
                 "building http client",
-                &[("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err)))],
+                &[(
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                )],
             );
 
             return ExitCode::FAILURE;
@@ -138,7 +144,10 @@ async fn run() -> ExitCode {
         Err(err) => {
             log.error(
                 "building trade tags",
-                &[("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err)))],
+                &[(
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                )],
             );
 
             return ExitCode::FAILURE;
@@ -148,7 +157,13 @@ async fn run() -> ExitCode {
     let stats = match build_stats(&stats_body) {
         Ok(stats) => stats,
         Err(err) => {
-            log.error("building stats", &[("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err)))]);
+            log.error(
+                "building stats",
+                &[(
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                )],
+            );
 
             return ExitCode::FAILURE;
         }
@@ -157,7 +172,13 @@ async fn run() -> ExitCode {
     let items = match build_items(&items_body, &trade_tags) {
         Ok(items) => items,
         Err(err) => {
-            log.error("building items", &[("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err)))]);
+            log.error(
+                "building items",
+                &[(
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                )],
+            );
 
             return ExitCode::FAILURE;
         }
@@ -170,7 +191,10 @@ async fn run() -> ExitCode {
             "creating the output directory",
             &[
                 ("out_dir", Value::Str(cfg.out_dir.clone())),
-                ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                (
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                ),
             ],
         );
 
@@ -192,7 +216,10 @@ async fn run() -> ExitCode {
                 "writing the data file",
                 &[
                     ("path", Value::Str(path.display().to_string())),
-                    ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                    (
+                        "error",
+                        Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                    ),
                 ],
             );
 
@@ -259,7 +286,10 @@ fn write_augments(out_dir: &Path, game: GameVersion, log: &Logger) {
                 "reading the augment source",
                 &[
                     ("path", Value::Str(source.display().to_string())),
-                    ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                    (
+                        "error",
+                        Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                    ),
                 ],
             );
 
@@ -276,7 +306,10 @@ fn write_augments(out_dir: &Path, game: GameVersion, log: &Logger) {
             "writing the augment file",
             &[
                 ("path", Value::Str(path.display().to_string())),
-                ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                (
+                    "error",
+                    Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                ),
             ],
         );
 
@@ -300,7 +333,10 @@ async fn fetch(http: &HttpAdapter, url: &str, log: &Logger) -> Option<String> {
                 "fetching a data table",
                 &[
                     ("url", Value::Str(url.to_string())),
-                    ("error", Value::Str(poe_wayfinder_app::util::error_chain::render(&err))),
+                    (
+                        "error",
+                        Value::Str(poe_wayfinder_app::util::error_chain::render(&err)),
+                    ),
                 ],
             );
 

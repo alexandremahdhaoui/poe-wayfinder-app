@@ -102,7 +102,9 @@ fn parse_flags(
                 out.insert(name, args[i].clone());
             }
             None => {
-                return Err(ConfigError::Parse(format!("reading flag {name:?}: missing value")))
+                return Err(ConfigError::Parse(format!(
+                    "reading flag {name:?}: missing value"
+                )))
             }
         }
 
@@ -209,176 +211,154 @@ impl PoeWayfinderConfig {
 
         let raw_network_enabled: Option<String> = None
             .or_else(|| flags.get("network-enabled").cloned())
-            .or_else(|| env::var("POE_NETWORK_ENABLED").ok())
-            ;
+            .or_else(|| env::var("POE_NETWORK_ENABLED").ok());
         let raw_network_enabled = match raw_network_enabled {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_block_unlisted_hosts: Option<String> = None
             .or_else(|| flags.get("block-unlisted-hosts").cloned())
-            .or_else(|| env::var("POE_BLOCK_UNLISTED_HOSTS").ok())
-            ;
+            .or_else(|| env::var("POE_BLOCK_UNLISTED_HOSTS").ok());
         let raw_block_unlisted_hosts = match raw_block_unlisted_hosts {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_allowed_hosts: Option<String> = None
             .or_else(|| flags.get("allowed-hosts").cloned())
-            .or_else(|| env::var("POE_ALLOWED_HOSTS").ok())
-            ;
+            .or_else(|| env::var("POE_ALLOWED_HOSTS").ok());
         let raw_allowed_hosts = match raw_allowed_hosts {
             Some(v) => v,
             None => "www.pathofexile.com".to_string(),
         };
         let raw_trade_base_url: Option<String> = None
             .or_else(|| flags.get("trade-base-url").cloned())
-            .or_else(|| env::var("POE_TRADE_BASE_URL").ok())
-            ;
+            .or_else(|| env::var("POE_TRADE_BASE_URL").ok());
         let raw_trade_base_url = match raw_trade_base_url {
             Some(v) => v,
             None => "https://www.pathofexile.com".to_string(),
         };
         let raw_user_agent: Option<String> = None
             .or_else(|| flags.get("user-agent").cloned())
-            .or_else(|| env::var("POE_USER_AGENT").ok())
-            ;
+            .or_else(|| env::var("POE_USER_AGENT").ok());
         let raw_user_agent = match raw_user_agent {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_api_latency_seconds: Option<String> = None
             .or_else(|| flags.get("api-latency-seconds").cloned())
-            .or_else(|| env::var("POE_API_LATENCY_SECONDS").ok())
-            ;
+            .or_else(|| env::var("POE_API_LATENCY_SECONDS").ok());
         let raw_api_latency_seconds = match raw_api_latency_seconds {
             Some(v) => v,
             None => "2".to_string(),
         };
         let raw_poesessid: Option<String> = None
             .or_else(|| flags.get("poesessid").cloned())
-            .or_else(|| env::var("POE_SESSION_ID").ok())
-            ;
+            .or_else(|| env::var("POE_SESSION_ID").ok());
         let raw_poesessid = match raw_poesessid {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_league: Option<String> = None
             .or_else(|| flags.get("league").cloned())
-            .or_else(|| env::var("POE_LEAGUE").ok())
-            ;
+            .or_else(|| env::var("POE_LEAGUE").ok());
         let raw_league = match raw_league {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_game: Option<String> = None
             .or_else(|| flags.get("game").cloned())
-            .or_else(|| env::var("POE_GAME").ok())
-            ;
+            .or_else(|| env::var("POE_GAME").ok());
         let raw_game = match raw_game {
             Some(v) => v,
             None => "auto".to_string(),
         };
         let raw_window_title: Option<String> = None
             .or_else(|| flags.get("window-title").cloned())
-            .or_else(|| env::var("POE_WINDOW_TITLE").ok())
-            ;
+            .or_else(|| env::var("POE_WINDOW_TITLE").ok());
         let raw_window_title = match raw_window_title {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_client_log_path: Option<String> = None
             .or_else(|| flags.get("client-log-path").cloned())
-            .or_else(|| env::var("POE_CLIENT_LOG_PATH").ok())
-            ;
+            .or_else(|| env::var("POE_CLIENT_LOG_PATH").ok());
         let raw_client_log_path = match raw_client_log_path {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_data_dir: Option<String> = None
             .or_else(|| flags.get("data-dir").cloned())
-            .or_else(|| env::var("POE_DATA_DIR").ok())
-            ;
+            .or_else(|| env::var("POE_DATA_DIR").ok());
         let raw_data_dir = match raw_data_dir {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_config_dir: Option<String> = None
             .or_else(|| flags.get("config-dir").cloned())
-            .or_else(|| env::var("POE_CONFIG_DIR").ok())
-            ;
+            .or_else(|| env::var("POE_CONFIG_DIR").ok());
         let raw_config_dir = match raw_config_dir {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_price_check_hotkey: Option<String> = None
             .or_else(|| flags.get("price-check-hotkey").cloned())
-            .or_else(|| env::var("POE_PRICE_CHECK_HOTKEY").ok())
-            ;
+            .or_else(|| env::var("POE_PRICE_CHECK_HOTKEY").ok());
         let raw_price_check_hotkey = match raw_price_check_hotkey {
             Some(v) => v,
             None => "Ctrl+D".to_string(),
         };
         let raw_price_check_locked_hotkey: Option<String> = None
             .or_else(|| flags.get("price-check-locked-hotkey").cloned())
-            .or_else(|| env::var("POE_PRICE_CHECK_LOCKED_HOTKEY").ok())
-            ;
+            .or_else(|| env::var("POE_PRICE_CHECK_LOCKED_HOTKEY").ok());
         let raw_price_check_locked_hotkey = match raw_price_check_locked_hotkey {
             Some(v) => v,
             None => "Ctrl+Alt+D".to_string(),
         };
         let raw_chat_commands: Option<String> = None
             .or_else(|| flags.get("chat-commands").cloned())
-            .or_else(|| env::var("POE_CHAT_COMMANDS").ok())
-            ;
+            .or_else(|| env::var("POE_CHAT_COMMANDS").ok());
         let raw_chat_commands = match raw_chat_commands {
             Some(v) => v,
             None => "F5=/hideout;F9=/exit".to_string(),
         };
         let raw_item_link_hotkeys: Option<String> = None
             .or_else(|| flags.get("item-link-hotkeys").cloned())
-            .or_else(|| env::var("POE_ITEM_LINK_HOTKEYS").ok())
-            ;
+            .or_else(|| env::var("POE_ITEM_LINK_HOTKEYS").ok());
         let raw_item_link_hotkeys = match raw_item_link_hotkeys {
             Some(v) => v,
             None => "Alt+W=wiki;Alt+B=poedb;Alt+C=craft of exile".to_string(),
         };
         let raw_stash_searches: Option<String> = None
             .or_else(|| flags.get("stash-searches").cloned())
-            .or_else(|| env::var("POE_STASH_SEARCHES").ok())
-            ;
+            .or_else(|| env::var("POE_STASH_SEARCHES").ok());
         let raw_stash_searches = match raw_stash_searches {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_overlay_hotkey: Option<String> = None
             .or_else(|| flags.get("overlay-hotkey").cloned())
-            .or_else(|| env::var("POE_OVERLAY_HOTKEY").ok())
-            ;
+            .or_else(|| env::var("POE_OVERLAY_HOTKEY").ok());
         let raw_overlay_hotkey = match raw_overlay_hotkey {
             Some(v) => v,
             None => "Shift+Space".to_string(),
         };
         let raw_price_check_locked_alt_hotkey: Option<String> = None
             .or_else(|| flags.get("price-check-locked-alt-hotkey").cloned())
-            .or_else(|| env::var("POE_PRICE_CHECK_LOCKED_ALT_HOTKEY").ok())
-            ;
+            .or_else(|| env::var("POE_PRICE_CHECK_LOCKED_ALT_HOTKEY").ok());
         let raw_price_check_locked_alt_hotkey = match raw_price_check_locked_alt_hotkey {
             Some(v) => v,
             None => "Ctrl+Shift+D".to_string(),
         };
         let raw_restore_clipboard: Option<String> = None
             .or_else(|| flags.get("restore-clipboard").cloned())
-            .or_else(|| env::var("POE_RESTORE_CLIPBOARD").ok())
-            ;
+            .or_else(|| env::var("POE_RESTORE_CLIPBOARD").ok());
         let raw_restore_clipboard = match raw_restore_clipboard {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_log_level: Option<String> = None
             .or_else(|| flags.get("log-level").cloned())
-            .or_else(|| env::var("POE_LOG_LEVEL").ok())
-            ;
+            .or_else(|| env::var("POE_LOG_LEVEL").ok());
         let raw_log_level = match raw_log_level {
             Some(v) => v,
             None => "info".to_string(),
@@ -390,10 +370,12 @@ impl PoeWayfinderConfig {
             allowed_hosts: raw_allowed_hosts,
             trade_base_url: raw_trade_base_url,
             user_agent: raw_user_agent,
-            api_latency_seconds: raw_api_latency_seconds
-                .trim()
-                .parse()
-                .map_err(|_| ConfigError::Parse(format!("parsing api_latency_seconds {:?} as int", raw_api_latency_seconds)))?,
+            api_latency_seconds: raw_api_latency_seconds.trim().parse().map_err(|_| {
+                ConfigError::Parse(format!(
+                    "parsing api_latency_seconds {:?} as int",
+                    raw_api_latency_seconds
+                ))
+            })?,
             poesessid: raw_poesessid,
             league: raw_league,
             game: raw_game,
@@ -416,28 +398,108 @@ impl PoeWayfinderConfig {
     /// Render the resolved config in the canonical cross language form.
     pub fn json(&self) -> String {
         let mut pairs: Vec<String> = Vec::new();
-        pairs.push(format!("{}:{}", "\"network_enabled\"", self.network_enabled));
-        pairs.push(format!("{}:{}", "\"block_unlisted_hosts\"", self.block_unlisted_hosts));
-        pairs.push(format!("{}:\"{}\"", "\"allowed_hosts\"", json_escape(&self.allowed_hosts)));
-        pairs.push(format!("{}:\"{}\"", "\"trade_base_url\"", json_escape(&self.trade_base_url)));
-        pairs.push(format!("{}:\"{}\"", "\"user_agent\"", json_escape(&self.user_agent)));
-        pairs.push(format!("{}:{}", "\"api_latency_seconds\"", self.api_latency_seconds));
-        pairs.push(format!("{}:\"{}\"", "\"poesessid\"", json_escape(&self.poesessid)));
-        pairs.push(format!("{}:\"{}\"", "\"league\"", json_escape(&self.league)));
+        pairs.push(format!(
+            "{}:{}",
+            "\"network_enabled\"", self.network_enabled
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"block_unlisted_hosts\"", self.block_unlisted_hosts
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"allowed_hosts\"",
+            json_escape(&self.allowed_hosts)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"trade_base_url\"",
+            json_escape(&self.trade_base_url)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"user_agent\"",
+            json_escape(&self.user_agent)
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"api_latency_seconds\"", self.api_latency_seconds
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"poesessid\"",
+            json_escape(&self.poesessid)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"league\"",
+            json_escape(&self.league)
+        ));
         pairs.push(format!("{}:\"{}\"", "\"game\"", json_escape(&self.game)));
-        pairs.push(format!("{}:\"{}\"", "\"window_title\"", json_escape(&self.window_title)));
-        pairs.push(format!("{}:\"{}\"", "\"client_log_path\"", json_escape(&self.client_log_path)));
-        pairs.push(format!("{}:\"{}\"", "\"data_dir\"", json_escape(&self.data_dir)));
-        pairs.push(format!("{}:\"{}\"", "\"config_dir\"", json_escape(&self.config_dir)));
-        pairs.push(format!("{}:\"{}\"", "\"price_check_hotkey\"", json_escape(&self.price_check_hotkey)));
-        pairs.push(format!("{}:\"{}\"", "\"price_check_locked_hotkey\"", json_escape(&self.price_check_locked_hotkey)));
-        pairs.push(format!("{}:\"{}\"", "\"chat_commands\"", json_escape(&self.chat_commands)));
-        pairs.push(format!("{}:\"{}\"", "\"item_link_hotkeys\"", json_escape(&self.item_link_hotkeys)));
-        pairs.push(format!("{}:\"{}\"", "\"stash_searches\"", json_escape(&self.stash_searches)));
-        pairs.push(format!("{}:\"{}\"", "\"overlay_hotkey\"", json_escape(&self.overlay_hotkey)));
-        pairs.push(format!("{}:\"{}\"", "\"price_check_locked_alt_hotkey\"", json_escape(&self.price_check_locked_alt_hotkey)));
-        pairs.push(format!("{}:{}", "\"restore_clipboard\"", self.restore_clipboard));
-        pairs.push(format!("{}:\"{}\"", "\"log_level\"", json_escape(&self.log_level)));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"window_title\"",
+            json_escape(&self.window_title)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"client_log_path\"",
+            json_escape(&self.client_log_path)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"data_dir\"",
+            json_escape(&self.data_dir)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"config_dir\"",
+            json_escape(&self.config_dir)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"price_check_hotkey\"",
+            json_escape(&self.price_check_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"price_check_locked_hotkey\"",
+            json_escape(&self.price_check_locked_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"chat_commands\"",
+            json_escape(&self.chat_commands)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"item_link_hotkeys\"",
+            json_escape(&self.item_link_hotkeys)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"stash_searches\"",
+            json_escape(&self.stash_searches)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"overlay_hotkey\"",
+            json_escape(&self.overlay_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"price_check_locked_alt_hotkey\"",
+            json_escape(&self.price_check_locked_alt_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"restore_clipboard\"", self.restore_clipboard
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"log_level\"",
+            json_escape(&self.log_level)
+        ));
         pairs.sort();
 
         // Built by hand rather than with format! so the generator never has to
@@ -500,96 +562,84 @@ impl PoeWayfinderCliConfig {
 
         let raw_network_enabled: Option<String> = None
             .or_else(|| flags.get("network-enabled").cloned())
-            .or_else(|| env::var("POE_NETWORK_ENABLED").ok())
-            ;
+            .or_else(|| env::var("POE_NETWORK_ENABLED").ok());
         let raw_network_enabled = match raw_network_enabled {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_block_unlisted_hosts: Option<String> = None
             .or_else(|| flags.get("block-unlisted-hosts").cloned())
-            .or_else(|| env::var("POE_BLOCK_UNLISTED_HOSTS").ok())
-            ;
+            .or_else(|| env::var("POE_BLOCK_UNLISTED_HOSTS").ok());
         let raw_block_unlisted_hosts = match raw_block_unlisted_hosts {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_allowed_hosts: Option<String> = None
             .or_else(|| flags.get("allowed-hosts").cloned())
-            .or_else(|| env::var("POE_ALLOWED_HOSTS").ok())
-            ;
+            .or_else(|| env::var("POE_ALLOWED_HOSTS").ok());
         let raw_allowed_hosts = match raw_allowed_hosts {
             Some(v) => v,
             None => "www.pathofexile.com".to_string(),
         };
         let raw_trade_base_url: Option<String> = None
             .or_else(|| flags.get("trade-base-url").cloned())
-            .or_else(|| env::var("POE_TRADE_BASE_URL").ok())
-            ;
+            .or_else(|| env::var("POE_TRADE_BASE_URL").ok());
         let raw_trade_base_url = match raw_trade_base_url {
             Some(v) => v,
             None => "https://www.pathofexile.com".to_string(),
         };
         let raw_user_agent: Option<String> = None
             .or_else(|| flags.get("user-agent").cloned())
-            .or_else(|| env::var("POE_USER_AGENT").ok())
-            ;
+            .or_else(|| env::var("POE_USER_AGENT").ok());
         let raw_user_agent = match raw_user_agent {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_api_latency_seconds: Option<String> = None
             .or_else(|| flags.get("api-latency-seconds").cloned())
-            .or_else(|| env::var("POE_API_LATENCY_SECONDS").ok())
-            ;
+            .or_else(|| env::var("POE_API_LATENCY_SECONDS").ok());
         let raw_api_latency_seconds = match raw_api_latency_seconds {
             Some(v) => v,
             None => "2".to_string(),
         };
         let raw_poesessid: Option<String> = None
             .or_else(|| flags.get("poesessid").cloned())
-            .or_else(|| env::var("POE_SESSION_ID").ok())
-            ;
+            .or_else(|| env::var("POE_SESSION_ID").ok());
         let raw_poesessid = match raw_poesessid {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_league: Option<String> = None
             .or_else(|| flags.get("league").cloned())
-            .or_else(|| env::var("POE_LEAGUE").ok())
-            ;
+            .or_else(|| env::var("POE_LEAGUE").ok());
         let raw_league = match raw_league {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_game: Option<String> = None
             .or_else(|| flags.get("game").cloned())
-            .or_else(|| env::var("POE_GAME").ok())
-            ;
+            .or_else(|| env::var("POE_GAME").ok());
         let raw_game = match raw_game {
             Some(v) => v,
             None => "poe2".to_string(),
         };
         let raw_data_dir: Option<String> = None
             .or_else(|| flags.get("data-dir").cloned())
-            .or_else(|| env::var("POE_DATA_DIR").ok())
-            ;
+            .or_else(|| env::var("POE_DATA_DIR").ok());
         let raw_data_dir = match raw_data_dir {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_item_file: Option<String> = None
             .or_else(|| flags.get("item-file").cloned())
-            .or_else(|| env::var("POE_ITEM_FILE").ok())
-            ;
+            .or_else(|| env::var("POE_ITEM_FILE").ok());
         let raw_item_file = match raw_item_file {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_log_level: Option<String> = None
             .or_else(|| flags.get("log-level").cloned())
-            .or_else(|| env::var("POE_LOG_LEVEL").ok())
-            ;
+            .or_else(|| env::var("POE_LOG_LEVEL").ok());
         let raw_log_level = match raw_log_level {
             Some(v) => v,
             None => "info".to_string(),
@@ -601,10 +651,12 @@ impl PoeWayfinderCliConfig {
             allowed_hosts: raw_allowed_hosts,
             trade_base_url: raw_trade_base_url,
             user_agent: raw_user_agent,
-            api_latency_seconds: raw_api_latency_seconds
-                .trim()
-                .parse()
-                .map_err(|_| ConfigError::Parse(format!("parsing api_latency_seconds {:?} as int", raw_api_latency_seconds)))?,
+            api_latency_seconds: raw_api_latency_seconds.trim().parse().map_err(|_| {
+                ConfigError::Parse(format!(
+                    "parsing api_latency_seconds {:?} as int",
+                    raw_api_latency_seconds
+                ))
+            })?,
             poesessid: raw_poesessid,
             league: raw_league,
             game: raw_game,
@@ -617,18 +669,59 @@ impl PoeWayfinderCliConfig {
     /// Render the resolved config in the canonical cross language form.
     pub fn json(&self) -> String {
         let mut pairs: Vec<String> = Vec::new();
-        pairs.push(format!("{}:{}", "\"network_enabled\"", self.network_enabled));
-        pairs.push(format!("{}:{}", "\"block_unlisted_hosts\"", self.block_unlisted_hosts));
-        pairs.push(format!("{}:\"{}\"", "\"allowed_hosts\"", json_escape(&self.allowed_hosts)));
-        pairs.push(format!("{}:\"{}\"", "\"trade_base_url\"", json_escape(&self.trade_base_url)));
-        pairs.push(format!("{}:\"{}\"", "\"user_agent\"", json_escape(&self.user_agent)));
-        pairs.push(format!("{}:{}", "\"api_latency_seconds\"", self.api_latency_seconds));
-        pairs.push(format!("{}:\"{}\"", "\"poesessid\"", json_escape(&self.poesessid)));
-        pairs.push(format!("{}:\"{}\"", "\"league\"", json_escape(&self.league)));
+        pairs.push(format!(
+            "{}:{}",
+            "\"network_enabled\"", self.network_enabled
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"block_unlisted_hosts\"", self.block_unlisted_hosts
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"allowed_hosts\"",
+            json_escape(&self.allowed_hosts)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"trade_base_url\"",
+            json_escape(&self.trade_base_url)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"user_agent\"",
+            json_escape(&self.user_agent)
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"api_latency_seconds\"", self.api_latency_seconds
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"poesessid\"",
+            json_escape(&self.poesessid)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"league\"",
+            json_escape(&self.league)
+        ));
         pairs.push(format!("{}:\"{}\"", "\"game\"", json_escape(&self.game)));
-        pairs.push(format!("{}:\"{}\"", "\"data_dir\"", json_escape(&self.data_dir)));
-        pairs.push(format!("{}:\"{}\"", "\"item_file\"", json_escape(&self.item_file)));
-        pairs.push(format!("{}:\"{}\"", "\"log_level\"", json_escape(&self.log_level)));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"data_dir\"",
+            json_escape(&self.data_dir)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"item_file\"",
+            json_escape(&self.item_file)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"log_level\"",
+            json_escape(&self.log_level)
+        ));
         pairs.sort();
 
         // Built by hand rather than with format! so the generator never has to
@@ -685,80 +778,70 @@ impl PoeWayfinderDatagenConfig {
 
         let raw_network_enabled: Option<String> = None
             .or_else(|| flags.get("network-enabled").cloned())
-            .or_else(|| env::var("POE_NETWORK_ENABLED").ok())
-            ;
+            .or_else(|| env::var("POE_NETWORK_ENABLED").ok());
         let raw_network_enabled = match raw_network_enabled {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_block_unlisted_hosts: Option<String> = None
             .or_else(|| flags.get("block-unlisted-hosts").cloned())
-            .or_else(|| env::var("POE_BLOCK_UNLISTED_HOSTS").ok())
-            ;
+            .or_else(|| env::var("POE_BLOCK_UNLISTED_HOSTS").ok());
         let raw_block_unlisted_hosts = match raw_block_unlisted_hosts {
             Some(v) => v,
             None => "true".to_string(),
         };
         let raw_allowed_hosts: Option<String> = None
             .or_else(|| flags.get("allowed-hosts").cloned())
-            .or_else(|| env::var("POE_ALLOWED_HOSTS").ok())
-            ;
+            .or_else(|| env::var("POE_ALLOWED_HOSTS").ok());
         let raw_allowed_hosts = match raw_allowed_hosts {
             Some(v) => v,
             None => "www.pathofexile.com".to_string(),
         };
         let raw_trade_base_url: Option<String> = None
             .or_else(|| flags.get("trade-base-url").cloned())
-            .or_else(|| env::var("POE_TRADE_BASE_URL").ok())
-            ;
+            .or_else(|| env::var("POE_TRADE_BASE_URL").ok());
         let raw_trade_base_url = match raw_trade_base_url {
             Some(v) => v,
             None => "https://www.pathofexile.com".to_string(),
         };
         let raw_user_agent: Option<String> = None
             .or_else(|| flags.get("user-agent").cloned())
-            .or_else(|| env::var("POE_USER_AGENT").ok())
-            ;
+            .or_else(|| env::var("POE_USER_AGENT").ok());
         let raw_user_agent = match raw_user_agent {
             Some(v) => v,
             None => "".to_string(),
         };
         let raw_api_latency_seconds: Option<String> = None
             .or_else(|| flags.get("api-latency-seconds").cloned())
-            .or_else(|| env::var("POE_API_LATENCY_SECONDS").ok())
-            ;
+            .or_else(|| env::var("POE_API_LATENCY_SECONDS").ok());
         let raw_api_latency_seconds = match raw_api_latency_seconds {
             Some(v) => v,
             None => "2".to_string(),
         };
         let raw_tables_dir: Option<String> = None
             .or_else(|| flags.get("tables-dir").cloned())
-            .or_else(|| env::var("POE_TABLES_DIR").ok())
-            ;
+            .or_else(|| env::var("POE_TABLES_DIR").ok());
         let raw_tables_dir = match raw_tables_dir {
             Some(v) => v,
             None => return Err(ConfigError::MissingRequired("tables_dir".to_string())),
         };
         let raw_out_dir: Option<String> = None
             .or_else(|| flags.get("out-dir").cloned())
-            .or_else(|| env::var("POE_OUT_DIR").ok())
-            ;
+            .or_else(|| env::var("POE_OUT_DIR").ok());
         let raw_out_dir = match raw_out_dir {
             Some(v) => v,
             None => return Err(ConfigError::MissingRequired("out_dir".to_string())),
         };
         let raw_game: Option<String> = None
             .or_else(|| flags.get("game").cloned())
-            .or_else(|| env::var("POE_GAME").ok())
-            ;
+            .or_else(|| env::var("POE_GAME").ok());
         let raw_game = match raw_game {
             Some(v) => v,
             None => "poe2".to_string(),
         };
         let raw_log_level: Option<String> = None
             .or_else(|| flags.get("log-level").cloned())
-            .or_else(|| env::var("POE_LOG_LEVEL").ok())
-            ;
+            .or_else(|| env::var("POE_LOG_LEVEL").ok());
         let raw_log_level = match raw_log_level {
             Some(v) => v,
             None => "info".to_string(),
@@ -770,10 +853,12 @@ impl PoeWayfinderDatagenConfig {
             allowed_hosts: raw_allowed_hosts,
             trade_base_url: raw_trade_base_url,
             user_agent: raw_user_agent,
-            api_latency_seconds: raw_api_latency_seconds
-                .trim()
-                .parse()
-                .map_err(|_| ConfigError::Parse(format!("parsing api_latency_seconds {:?} as int", raw_api_latency_seconds)))?,
+            api_latency_seconds: raw_api_latency_seconds.trim().parse().map_err(|_| {
+                ConfigError::Parse(format!(
+                    "parsing api_latency_seconds {:?} as int",
+                    raw_api_latency_seconds
+                ))
+            })?,
             tables_dir: raw_tables_dir,
             out_dir: raw_out_dir,
             game: raw_game,
@@ -784,16 +869,49 @@ impl PoeWayfinderDatagenConfig {
     /// Render the resolved config in the canonical cross language form.
     pub fn json(&self) -> String {
         let mut pairs: Vec<String> = Vec::new();
-        pairs.push(format!("{}:{}", "\"network_enabled\"", self.network_enabled));
-        pairs.push(format!("{}:{}", "\"block_unlisted_hosts\"", self.block_unlisted_hosts));
-        pairs.push(format!("{}:\"{}\"", "\"allowed_hosts\"", json_escape(&self.allowed_hosts)));
-        pairs.push(format!("{}:\"{}\"", "\"trade_base_url\"", json_escape(&self.trade_base_url)));
-        pairs.push(format!("{}:\"{}\"", "\"user_agent\"", json_escape(&self.user_agent)));
-        pairs.push(format!("{}:{}", "\"api_latency_seconds\"", self.api_latency_seconds));
-        pairs.push(format!("{}:\"{}\"", "\"tables_dir\"", json_escape(&self.tables_dir)));
-        pairs.push(format!("{}:\"{}\"", "\"out_dir\"", json_escape(&self.out_dir)));
+        pairs.push(format!(
+            "{}:{}",
+            "\"network_enabled\"", self.network_enabled
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"block_unlisted_hosts\"", self.block_unlisted_hosts
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"allowed_hosts\"",
+            json_escape(&self.allowed_hosts)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"trade_base_url\"",
+            json_escape(&self.trade_base_url)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"user_agent\"",
+            json_escape(&self.user_agent)
+        ));
+        pairs.push(format!(
+            "{}:{}",
+            "\"api_latency_seconds\"", self.api_latency_seconds
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"tables_dir\"",
+            json_escape(&self.tables_dir)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"out_dir\"",
+            json_escape(&self.out_dir)
+        ));
         pairs.push(format!("{}:\"{}\"", "\"game\"", json_escape(&self.game)));
-        pairs.push(format!("{}:\"{}\"", "\"log_level\"", json_escape(&self.log_level)));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"log_level\"",
+            json_escape(&self.log_level)
+        ));
         pairs.sort();
 
         // Built by hand rather than with format! so the generator never has to

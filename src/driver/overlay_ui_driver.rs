@@ -187,8 +187,8 @@ pub fn should_paint(frame: &Frame) -> bool {
 #[cfg(windows)]
 mod win {
     use super::{
-        format_value, modifier_line, panel_text, rarity_colour, search_button_label, Frame,
-        PanelSource, StatusEvent, UiEvent, NO_LIMIT_ABOVE, NO_LIMIT_BELOW,
+        format_value, modifier_line, panel_text, rarity_colour, roll_caption, search_button_label,
+        Frame, PanelSource, StatusEvent, UiEvent, NO_LIMIT_ABOVE, NO_LIMIT_BELOW,
     };
 
     use eframe::egui;
@@ -644,6 +644,18 @@ mod win {
         });
     }
 
+    fn toggle_hint(row: &Row) -> String {
+        let action = match row.enabled {
+            true => "click to drop this from the search",
+            false => "click to search on this again",
+        };
+
+        match roll_caption(row) {
+            Some(caption) => format!("{caption}\n{action}"),
+            None => action.to_string(),
+        }
+    }
+
     fn dim(colour: egui::Color32, enabled: bool) -> egui::Color32 {
         match enabled {
             true => colour,
@@ -658,12 +670,13 @@ mod win {
         });
 
         let response = ui
-            .add(egui::Label::new(text).truncate().sense(egui::Sense::click()))
+            .add(
+                egui::Label::new(text)
+                    .truncate()
+                    .sense(egui::Sense::click()),
+            )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(match row.enabled {
-                true => "click to drop this from the search",
-                false => "click to search on this again",
-            });
+            .on_hover_text(toggle_hint(row));
 
         if row.enabled {
             ui.painter().rect_filled(
@@ -696,13 +709,20 @@ mod win {
     fn bounds_inputs(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
         let step = drag_speed(row);
 
-        let mut max = row.max.unwrap_or(f64::NAN);
-        let max_widget = egui::DragValue::new(&mut max)
-            .speed(step)
-            .custom_formatter(|value, _| match value.is_finite() {
-                true => format_value(value, row.decimals),
-                false => NO_LIMIT_ABOVE.to_string(),
-            });
+        let max_unset = row.max.is_none();
+        let mut max = row
+            .max
+            .or_else(|| row.bounds.map(|(_, high)| high))
+            .unwrap_or(0.0);
+
+        let decimals = row.decimals;
+        let max_widget =
+            egui::DragValue::new(&mut max)
+                .speed(step)
+                .custom_formatter(move |value, _| match max_unset || !value.is_finite() {
+                    true => NO_LIMIT_ABOVE.to_string(),
+                    false => format_value(value, decimals),
+                });
 
         if ui
             .add_sized([56.0, 18.0], max_widget)
@@ -713,13 +733,19 @@ mod win {
             events.push(UiEvent::SetMax(row.key, finite(max)));
         }
 
-        let mut min = row.min.unwrap_or(f64::NAN);
-        let min_widget = egui::DragValue::new(&mut min)
-            .speed(step)
-            .custom_formatter(|value, _| match value.is_finite() {
-                true => format_value(value, row.decimals),
-                false => NO_LIMIT_BELOW.to_string(),
-            });
+        let min_unset = row.min.is_none();
+        let mut min = row
+            .min
+            .or_else(|| row.bounds.map(|(low, _)| low))
+            .unwrap_or(0.0);
+
+        let min_widget =
+            egui::DragValue::new(&mut min)
+                .speed(step)
+                .custom_formatter(move |value, _| match min_unset || !value.is_finite() {
+                    true => NO_LIMIT_BELOW.to_string(),
+                    false => format_value(value, decimals),
+                });
 
         if ui
             .add_sized([56.0, 18.0], min_widget)
@@ -756,12 +782,10 @@ mod win {
             egui::Sense::click_and_drag(),
         );
 
-        let rect = egui::Rect::from_center_size(
-            hit.center(),
-            egui::vec2(hit.width(), GAUGE_BAR_HEIGHT),
-        );
+        let rect =
+            egui::Rect::from_center_size(hit.center(), egui::vec2(hit.width(), GAUGE_BAR_HEIGHT));
 
-        if row.bounds.is_some() {
+        if row.bounds.is_some() && row.enabled {
             response
                 .clone()
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -769,7 +793,7 @@ mod win {
 
         if let Some(pointer) = response
             .interact_pointer_pos()
-            .filter(|_| response.clicked() || response.dragged())
+            .filter(|_| row.enabled && (response.clicked() || response.dragged()))
         {
             let ratio = f64::from((pointer.x - rect.left()) / rect.width().max(1.0));
 
