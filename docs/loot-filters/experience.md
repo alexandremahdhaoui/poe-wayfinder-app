@@ -7,8 +7,9 @@ hidden, and reload the filter, without leaving the game. The target is five
 seconds from keypress to loot behaving differently. Today it takes 30 to 60
 seconds and a trip through a browser.
 
-Every flow below runs on files on the player's own disk. None of them calls a
-third party.
+Every flow below runs on files on the player's own disk. The overlay calls
+nothing and downloads nothing. That is settled, permanently, and section 8
+records what it costs and what it buys.
 
 Read `scope.md` in this directory first. It carries the research and the source
 URLs. This document is the customer requirements only.
@@ -106,8 +107,8 @@ open.
 | J6 | Reload after editing the file in a text editor | Player edited by hand and wants it live. |
 | J7 | Know my filter is stale | New league started. Filter is from the last one. |
 
-J1 through J6 need no network. J7 needs only the file's modified date to warn,
-and a network host to fix.
+Every job runs offline. J7 needs only the file's modified date. The overlay
+warns. The player fixes it in a browser, once, out of game.
 
 ## 3. The interactions
 
@@ -186,10 +187,11 @@ changed. Section 7 explains why that line matters.
 | Step | User does | User sees | Overlay does |
 |---|---|---|---|
 | 1 | Opens the Filter tab | `3-STRICT is 94 days old. Filters usually update every league.` | Reads the file's modified date. Nothing more. |
-| 2 | Nothing | No download button in the default build | Nothing. The default build adds no host. |
+| 2 | Nothing | `Filters live in <full path>. Drop a newer file there and press Refresh.` | Nothing. It shows the path. There is no download button. |
 
-If the user approves a host later, this is where a `Fetch latest` button goes.
-It is the only place in the design that would need one.
+The overlay never downloads a filter. Getting a fresh file is a one time task
+the player does in a browser, out of game. The overlay's job starts once the
+file is on disk.
 
 ## 4. Acceptance criteria
 
@@ -315,27 +317,56 @@ click for that exact reason. Criterion A7 is the test that keeps it true.
 statement is that every flow sits inside the rules GGG published, and that GGG
 reserves the right to change them.
 
-## 8. The FilterBlade decision, in one place
+## 8. Where filter files come from
 
-`scope.md` section 11.1 carries the detail. Here is the question in one line.
+**The player supplies the files. The overlay never downloads one.** This is
+settled and it is not revisited. `scope.md` sections 6, 8 and 11 carry the
+decision and the evidence.
 
-**Do you want the overlay to call filterblade.xyz, and if so, do we ask the
-maintainer first?**
+Fetching is the one job that ever wanted a network host, and it is the one job
+players already do fine. It happens once, out of game, in a browser. Doing it
+mid map is not the problem. Everything after the file lands on disk is the
+problem, and that is what sections 1 through 7 solve.
 
-Pick one.
+### 8.1 The three cases the player can be in
 
-| Answer | What we do next |
+| Case | What the player sees | What the overlay does |
+|---|---|---|
+| **They already have filters.** Almost everyone. | The full panel. Switch, explain, edit, reload. | Lists the directory. Where the files came from does not matter. |
+| **They download a file and drop it in.** | They save it into the filter directory, alt tab back, press `Refresh`, and it appears in the list. No restart. | Rescans the directory. Nothing else. |
+| **They have no filter at all.** | The empty state below. | Shows the path. Creates nothing. Downloads nothing. |
+
+The empty state, verbatim:
+
+```
+No filters found.
+
+Looked in:
+  C:\Users\<you>\Documents\My Games\Path of Exile 2\
+
+Put a .filter file in that folder, then press Refresh.
+Path of Exile has an official guide at pathofexile.com/item-filter/about
+```
+
+The path is shown in full so the player can paste it into Explorer. The overlay
+does not create the directory. The game creates it on first run, so a missing
+directory means the game has not run yet, and making one ourselves would hide
+that.
+
+### 8.2 What the offline choice costs the player
+
+Stated plainly, so nobody is surprised.
+
+| Cost | Size |
 |---|---|
-| **Ask first** | I draft one message to NeverSink asking for a documented endpoint and permission for a free desktop overlay. We ship sections 1 through 7 while waiting. |
-| **Approve the host** | You name `filterblade.xyz` for the allowlist. We build against public pages only, with no documented contract and no permission. |
-| **Stay local** | We ship sections 1 through 7 and stop. Nothing calls out. |
+| A player with exactly one filter file gets no strictness ladder | Small. They drop in more files once and it never comes back. |
+| A stale filter gets a warning, not a fix | Small. The warning is the part they did not have before. |
+| No FilterBlade tiering model and no auto update | Real, and accepted. `scope.md` section 6 records why. |
 
-**Recommendation: ask first.** Every job in section 2 already ships without
-them. FilterBlade publishes no API, forbids modification of its code without
-permission, reserves the right to block access, and charges 3 US dollars a
-month for automated delivery because it loads their servers. One message turns
-all of that from a risk into an agreement. A no costs us nothing, because the
-feature already shipped.
+What it buys is larger. Every flow in section 3 works with the network off,
+nothing breaks when somebody else's server changes, and the overlay spends no
+bandwidth belonging to anyone else.
 
-`api.exiledexchange2.dev` is permanently banned and is not an option in any
-answer.
+`filterblade.xyz`, `github.com` and GGG's `/item-filter` endpoints are all out.
+`api.exiledexchange2.dev` is permanently banned. None of them appears anywhere
+in this design, and none is a future enhancement.
