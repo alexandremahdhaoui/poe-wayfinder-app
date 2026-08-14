@@ -19,6 +19,8 @@
 
 set -uo pipefail
 
+source "$(cd "$(dirname "$0")" && pwd)/harness.sh"
+
 exe="${1:?usage: refresh-check.sh <exe>}"
 
 dir="$(dirname "$exe")"
@@ -35,21 +37,15 @@ cfg="refresh-check-config"
 rm -rf "$cfg"
 mkdir -p "$cfg"
 
-# Kill the overlay on the way out as well as on the way in.
+# Kills any leftover overlay and arms the trap that kills this one however the
+# script ends. The reasoning lives in harness.sh.
 #
-# `timeout` no longer stops it. The exe is windows subsystem now, so launched
-# from WSL there is no parent console to attach to, the process detaches from
-# the interop proxy, and timeout kills the proxy while the Windows process runs
-# on forever. One orphan reached 26900 frames against a 120 second timeout.
-#
-# It matters more than a stray process: a leftover overlay owns the hotkey
-# registration and answers the next run's press itself, which reads as that run
-# passing when it never started.
-stop_overlays() {
-    powershell.exe -Command "Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
-}
-
-trap stop_overlays EXIT INT TERM
+# This script used to arm the trap WITHOUT killing on entry, which is half the
+# rule and the wrong half. A leftover overlay from the previous harness holds
+# the same config directory this one is about to build, so the "second launch
+# fetched nothing" assertion below was being measured against a cache another
+# process was still writing.
+arm_harness
 
 fail=0
 
@@ -58,8 +54,19 @@ say_fail() {
     fail=1
 }
 
+# `timeout` does NOT stop a windows subsystem exe launched from WSL. It kills
+# the interop proxy and the Windows process runs on forever. So each of the
+# three launches below was still alive while the next one started: three
+# overlays sharing one config directory, one of them still fetching, and the
+# throttle assertion measuring a cache another process was writing.
+#
+# Killing after each launch is what makes the three launches three launches
+# rather than one long overlapping mess.
 run() {
     timeout 75 "$exe" --config-dir "$cfg" --log-level debug >"$1" 2>&1
+
+    stop_overlays
+    sleep 2
 }
 
 echo "first launch, empty config directory"
@@ -146,6 +153,17 @@ fi
 if grep -q '"msg":"loading game data"' "$dir/refresh-3.log"; then
     say_fail "a corrupt cache stopped the exe starting."
 fi
+
+# A refresh rebuilds the stat and item tables from what the trade api returns,
+# so it is a place a bad number can enter the data rather than the panel. Cheap
+# to check here and it costs nothing when it passes.
+for launch in 1 2 3; do
+    assert_numbers_are_real "$dir/refresh-$launch.log" >/dev/null || {
+        echo "FAIL: launch $launch logged a value that cannot be a real number."
+        assert_numbers_are_real "$dir/refresh-$launch.log"
+        fail=1
+    }
+done
 
 rm -rf "$cfg"
 

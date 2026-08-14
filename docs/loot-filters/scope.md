@@ -2,18 +2,29 @@
 
 ## The headline
 
-Build the whole feature with no third party. Loot filters are plain text files
-in a directory the overlay already resolves, and both games reload them from a
-chat command the overlay already knows how to send. Nothing about the core
-experience needs FilterBlade.
+The overlay manages loot filters entirely from local files. It calls nothing.
+This is the whole design, not the first of several options.
 
-FilterBlade publishes no public API. Its own terms forbid redistributing or
-modifying its code without permission, and its maintainers charge money for
-automated filter delivery because it loads their servers. Calling it would
-break the workspace rule "No private third party" and would put our users'
-traffic on a volunteer's server without an agreement. We do not call it.
+Two findings make it work, and both are already in the codebase.
 
-One decision is left for the user. Section 8 states it.
+**One. `/itemfilter <name>` switches filters in both PoE1 and PoE2, instantly.**
+The overlay already sends chat commands through
+`poe-wayfinder-core/src/controller/chat.rs` and
+`poe-wayfinder-app/src/driver/chat_driver.rs`. Switching strictness becomes one
+keypress instead of a browser trip and a menu trip.
+
+**Two. `game_config_adapter.rs` already resolves the filter directory.** It
+builds `Documents\My Games\Path of Exile` and
+`Documents\My Games\Path of Exile 2` today, for the game config ini. Filters sit
+in that same directory. There is no path discovery work to do.
+
+Everything else follows. A `.filter` file is line oriented text, so parsing it,
+explaining a match and splicing one edit are all pure functions that belong in
+`poe-wayfinder-core`.
+
+The allowlist does not change. It stays `www.pathofexile.com`. The overlay never
+downloads a filter. Section 11 records the decisions behind that and why they
+are closed.
 
 ## 1. Problem
 
@@ -55,7 +66,8 @@ piece needed is present.
 
 ## 3. Non goals
 
-- No FilterBlade integration. Section 6 explains why.
+- No FilterBlade integration in this scope. It stays a live option the user can
+  approve later. Section 6 and section 11 lay out what it would take.
 - No filter authoring from scratch. We edit and explain filters the player
   already has. We do not become a filter generator.
 - No automatic download of NeverSink filters in the default build. That is the
@@ -218,32 +230,34 @@ so it costs a few bucks", at 3 US dollars a month.
 
 - Source: https://github.com/NeverSinkDev/NeverSink-Filter-for-PoE2
 
-### 6.4 Why this matters, stated plainly
+### 6.4 What calling FilterBlade would cost
 
-Four reasons, in order of weight.
+FilterBlade is not banned. It is unapproved. Four costs decide whether it is
+worth approving.
 
-**One. The workspace forbids it.** `CLAUDE.md` says "No private third party"
-and names the reference's own `api.exiledexchange2.dev` as the example of what
-we refuse. filterblade.xyz is the same shape of thing. A design that depends on
-it is a design that violates a rule the project already paid for.
-
-**Two. There is no contract to depend on.** An endpoint with no published
+**One. There is no contract to depend on.** An endpoint with no published
 documentation carries no promise. It can change shape, move, or vanish in any
-release, and we would find out from a user whose overlay broke. We would be
-building on something the owner never agreed to keep still.
+release, and we would find out from a user whose overlay broke.
 
-**Three. The maintainers charge for exactly this.** They say automated delivery
-loads their servers and they price it at 3 dollars a month. Pointing our users
-at their servers for free is taking that cost from volunteers without asking.
-It is rude before it is anything else.
+**Two. The maintainers charge for exactly this.** They say automated delivery
+loads their servers and they price it at 3 US dollars a month. Sending our
+users at their servers for free moves that cost onto volunteers who did not
+agree to it.
 
-**Four. Their terms already say no.** They forbid redistributing or modifying
-their code without explicit permission, and they reserve the right to block
-access for any reason. Building a dependency on a service whose owner has
-reserved the right to cut it off is building on sand.
+**Three. Their published terms point the other way.** They forbid
+redistributing or modifying their code without explicit permission, and they
+reserve the right to block access for any reason. Asking first turns that from
+a risk into an agreement.
 
-None of this is a limitation we regret. Almost everything the player wants is
-in files on their own disk. Section 8 is the small remainder.
+**Four. We would have to guess the endpoints.** No documentation exists, and
+probing or reading their bundles is off limits. That leaves one honest route.
+Ask the maintainer.
+
+The good news is the size of the remainder. Almost everything the player wants
+sits in files on their own disk. Section 11 sizes what is left.
+
+`api.exiledexchange2.dev` is a separate matter. It is permanently banned and is
+not an option for anything.
 
 ## 7. Research: the official GGG API and GGG's terms
 
@@ -328,10 +342,11 @@ already has a coalescing rule for double reported presses in
 | `www.pathofexile.com/item-filter/about` | The condition and action grammar | GGG documentation, read by a human, encoded as a table in our source | Yes. Already the only allowed host, and we read it at development time, not at runtime. |
 | `github.com` NeverSink releases | Fresh filter files, seven strictness levels | MIT | **No today.** Not on the allowlist. Public, documented, MIT, and a stable release URL, so it is a defensible addition. Needs the user's explicit approval. |
 | `api.pathofexile.com` item filter endpoints | Account synced filters and GGG side validation | GGG official API, public client with PKCE | **No today.** Not on the allowlist. Needs an OAuth client registration and the user's explicit approval. |
-| `filterblade.xyz` | Its editor model, tiering, and auto update | Explicitly forbids redistribution and modification without permission. No documented API. | **No, and recommended never.** See section 6.4. |
+| `filterblade.xyz` | Its editor model, tiering, and auto update | Explicitly forbids redistribution and modification without permission. No documented API. | **No today. Not banned.** Live option. Needs the user's explicit approval by host name, and needs an answer from the maintainer first. See section 6.4 and 11. |
+| `api.exiledexchange2.dev` | Nothing we want | The fork maintainer's own server | **Permanently banned.** Never an option. |
 
 The default build adds nothing to the allowlist. Everything in section 2 works
-offline.
+offline. Only the user adds a host, by name, case by case.
 
 ## 9. Where each piece lives
 
@@ -405,15 +420,33 @@ switched to. Anything else is a guess and must be labelled as one.
 human pressed a key. Any code path that could fire it without a press is a
 terms of use risk. Test for it.
 
-## 11. The decision for the user
+## 11. The decisions for the user
 
 Everything in section 2 ships with no third party and no allowlist change.
-Build that first and ship it.
+Build that first and ship it. Nothing below blocks that work.
 
-One question is left. It is not urgent and it does not block the work above.
+Only the user adds a host to the allowlist, by name, case by case. Two hosts
+are on the table.
 
-**Should the overlay be allowed to download NeverSink filters from GitHub
-Releases?**
+### 11.1 filterblade.xyz
+
+The user said "we can probably use filterblade". Here is what that would take.
+
+| Route | What happens | Cost | Risk |
+|---|---|---|---|
+| **Approve the host now** | We add `filterblade.xyz` and build against endpoints we infer from public pages only | Fast | High. No documented contract. Their terms forbid modification and reserve the right to block us. We would be spending a volunteer's server budget without asking. |
+| **Ask the maintainer first** | Open a GitHub issue or use the Contact page. Ask for a documented endpoint and permission for a free desktop overlay to call it | One message and a wait | Low. A yes gives us a contract. A no costs nothing, because section 2 already shipped. |
+| **Stay local only** | Ship section 2 and stop | None | None. Loses the FilterBlade tiering model and auto update. |
+
+**Recommendation: ask the maintainer first.** Ship section 2 while waiting. It
+costs one message. It turns an undocumented dependency into an agreement, and
+it is the only route that respects the terms they published. Approving the host
+before asking buys speed we do not need, since the offline feature already
+covers goals 1 through 7.
+
+### 11.2 github.com
+
+**Should the overlay download NeverSink filters from GitHub Releases?**
 
 | | Ship without it | Add `github.com` to the allowlist |
 |---|---|---|
@@ -426,12 +459,13 @@ Releases?**
 
 **Recommendation: ship without it, then add it behind a setting that defaults
 off.** The offline feature is the large majority of the value and it carries no
-risk at all. GitHub is a defensible second host because it is documented,
-public, MIT licensed and not somebody's personal machine. That is a different
-thing from filterblade.xyz and the distinction is the point. Put it behind a
-setting so the default build still adds no host, and let the player turn it on
-knowing what it does.
+risk at all. GitHub is a documented, stable, public, MIT licensed source and it
+runs on Microsoft's machines rather than a volunteer's. Put it behind a setting
+that defaults off, so the default build still adds no host. Let the player turn
+it on knowing what it does.
 
-The `api.pathofexile.com` OAuth path is a third option and should wait. It buys
-account sync and GGG side validation for the price of an OAuth registration and
-a login flow. Revisit it once the offline feature has users.
+### 11.3 api.pathofexile.com
+
+A third option and it should wait. It buys account synced filters and GGG side
+validation for the price of an OAuth client registration and a browser login
+flow. Revisit once the offline feature has users.

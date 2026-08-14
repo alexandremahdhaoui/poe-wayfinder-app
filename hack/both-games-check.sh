@@ -19,6 +19,8 @@
 
 set -uo pipefail
 
+source "$(cd "$(dirname "$0")" && pwd)/harness.sh"
+
 exe="${1:?usage: both-games-check.sh <exe>}"
 
 dir="$(dirname "$exe")"
@@ -42,26 +44,11 @@ check() {
     fail=1
 }
 
-# A leftover overlay owns the hotkey registration and answers the press itself,
-# which reads as this run passing when it never started.
-# Kill the overlay on the way out as well as on the way in.
-#
-# `timeout` no longer stops it. The exe is windows subsystem now, so launched
-# from WSL there is no parent console to attach to, the process detaches from
-# the interop proxy, and timeout kills the proxy while the Windows process runs
-# on forever. One orphan reached 26900 frames against a 120 second timeout.
-#
-# It matters more than a stray process: a leftover overlay owns the hotkey
-# registration and answers the next run's press itself, which reads as that run
-# passing when it never started.
-stop_overlays() {
-    powershell.exe -Command "Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
-}
-
-trap stop_overlays EXIT INT TERM
-
-stop_overlays
-sleep 2
+# Kills any leftover overlay and arms the trap that kills this one however the
+# script ends. The reasoning lives in harness.sh. It matters most here: this
+# script opens THREE processes and a leftover fourth from a previous run would
+# answer the press meant for one of them.
+arm_harness
 
 for item in item.txt item-poe1.txt; do
     [ -f "$items_dir/$item" ] && cp "$items_dir/$item" "$dir/$item"
@@ -76,7 +63,16 @@ sleep 3
 
 # No --data-dir, no --game, no --window-title. That is the whole point.
 (timeout 280 "$exe" --log-level debug >"$log" 2>&1 &)
-sleep 12
+
+# Waited for rather than slept through. This run loads BOTH games' tables
+# before the loop starts, so it is the slowest startup of any harness and the
+# one most likely to be pressed at before it is listening.
+if ! wait_for 60 "$log" '"msg":"the frame loop is running'; then
+    echo "FAIL: the overlay never started reading the hotkey."
+    echo "      Nothing below was measured."
+    echo "Logs: $log, $fake2 and $fake1"
+    exit 1
+fi
 
 check "$log" '"msg":"loaded the game data"' \
     "the exe started with no arguments at all." \
@@ -163,22 +159,12 @@ check "$log" '"window_title":"Path of Exile"' \
 "$exe" --move-mouse 1400 900 >/dev/null 2>&1
 sleep 1
 
-for attempt in 1 2 3; do
-    "$exe" --press-hotkey >/dev/null 2>&1
+press_until "$exe" "$log"
 
-    for _ in 1 2 3 4 5 6; do
-        sleep 1
-        grep -q '"msg":"price check hotkey pressed"' "$log" && break 2
-    done
-
-    echo "note: press $attempt did not land, retrying"
-done
-
-for _ in $(seq 1 45); do
-    grep -q '"msg":"price check finished"' "$log" && break
-    grep -q '"msg":"price check did not produce a price"' "$log" && break
-    sleep 1
-done
+# Waits for any of the three ways a check can end, rather than only for
+# "finished" plus a line this app has never logged, which made both failure
+# paths burn the whole budget before asserting anything.
+wait_for_check_to_settle 60 "$log"
 
 # Only the checks that happened AFTER the switch say anything about the
 # parser. Counting every finished check let a PoE2 press pass as proof that
@@ -227,6 +213,18 @@ if [ "$checks" -gt "$presses" ]; then
     echo "FAIL: $presses presses produced $checks checks. Each extra one costs a request against the rate limit."
     fail=1
 fi
+
+# A game switch rebuilds the filter rows against the other game's tables, which
+# is a place a bound can come back wrong. Both games in one log, so this is the
+# cheapest place to catch a saturated bound that only PoE1 produces.
+assert_numbers_are_real "$log" || fail=1
+
+assert_currency_is_named "$log" || fail=1
+
+# Both stand-ins get 290 seconds against a run that needs about 200, but
+# raise_until can spend 30 of those retrying, so say so plainly when one dies
+# rather than letting it read as a detection failure.
+assert_stand_in_survived "$log" || fail=1
 
 if [ "$fail" -eq 0 ]; then
     echo
