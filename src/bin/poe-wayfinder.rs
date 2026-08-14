@@ -10,7 +10,9 @@ use poe_wayfinder_app::adapter::http_adapter::HttpAdapter;
 use poe_wayfinder_app::config::PoeWayfinderConfig;
 use poe_wayfinder_app::driver::cli_driver;
 use poe_wayfinder_app::driver::overlay_loop::wiring;
-use poe_wayfinder_app::logging::{Logger, Value};
+#[cfg(windows)]
+use poe_wayfinder_app::logging::Logger;
+use poe_wayfinder_app::logging::Value;
 #[cfg(windows)]
 use poe_wayfinder_core::types::{GamePair, GameVersion};
 
@@ -38,7 +40,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let log = Logger::new(&cfg.log_level, "poe-wayfinder");
+    let log = wiring::build_logger(&cfg.log_level, "poe-wayfinder");
 
     let http = match wiring::build_http(&cfg, &log) {
         Some(http) => http,
@@ -146,28 +148,14 @@ fn run_overlay(
         return ExitCode::FAILURE;
     };
 
-    let league = wiring::resolve_league(
-        &cfg.league,
-        wiring::remembered_league(config_dir),
-        match cfg.league.trim().is_empty() {
-            true => wiring::fetch_current_league(&http, &cfg.trade_base_url, game, &log),
-            false => None,
-        },
-    );
-
-    log.info(
-        "searching this league",
-        &[("league", Value::Str(league.clone()))],
-    );
-
-    settings.league.clone_from(&league);
+    settings.league = wiring::league_for(cfg, config_dir, &http, game, &log);
 
     let prices = PriceCheckController::new(
         http,
         SystemClock::new(),
         &cfg.trade_base_url,
         game,
-        &league,
+        &settings.league,
     )
     .with_session(&cfg.poesessid)
     .with_latency(settings.latency);

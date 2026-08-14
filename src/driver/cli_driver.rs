@@ -59,7 +59,7 @@ pub fn self_test_hotkey() -> ExitCode {
         Err(err) => {
             log.error(
                 "registering the self test hotkey",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             return ExitCode::FAILURE;
@@ -384,7 +384,7 @@ pub fn self_test_hook() -> ExitCode {
         Err(err) => {
             log.error(
                 "installing the keyboard hook",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             return ExitCode::FAILURE;
@@ -521,7 +521,7 @@ pub fn check_clipboard_now(game: GameVersion, data: &GameTables, log: &Logger) -
         Err(err) => {
             log.error(
                 "opening the clipboard",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             return ExitCode::FAILURE;
@@ -538,7 +538,7 @@ pub fn check_clipboard_now(game: GameVersion, data: &GameTables, log: &Logger) -
         Err(err) => {
             log.error(
                 "reading the clipboard",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             return ExitCode::FAILURE;
@@ -601,7 +601,7 @@ pub fn check_clipboard_now(game: GameVersion, data: &GameTables, log: &Logger) -
         Err(err) => {
             log.error(
                 "parsing the clipboard item",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             ExitCode::FAILURE

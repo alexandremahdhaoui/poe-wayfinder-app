@@ -23,6 +23,8 @@
 
 set -uo pipefail
 
+source "$(cd "$(dirname "$0")" && pwd)/harness.sh"
+
 exe="${1:?usage: press-check.sh <exe> [data-dir] [game] [item-file]}"
 data="${2:-}"
 game="${3:-poe2}"
@@ -55,26 +57,11 @@ fake="$dir/press-check-fake.log"
 cd "$dir" || exit 1
 exe="./$(basename "$exe")"
 
-# A leftover overlay owns the hotkey registration and answers the press itself,
-# which reads as this run passing when it never started. Cost an hour once.
-# Kill the overlay on the way out as well as on the way in.
-#
-# `timeout` no longer stops it. The exe is windows subsystem now, so launched
-# from WSL there is no parent console to attach to, the process detaches from
-# the interop proxy, and timeout kills the proxy while the Windows process runs
-# on forever. One orphan reached 26900 frames against a 120 second timeout.
-#
-# It matters more than a stray process: a leftover overlay owns the hotkey
-# registration and answers the next run's press itself, which reads as that run
-# passing when it never started.
-stop_overlays() {
-    powershell.exe -Command "Get-Process poe-wayfinder* -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1
-}
-
-trap stop_overlays EXIT INT TERM
-
-stop_overlays
-sleep 2
+# Kills any leftover overlay and arms the trap that kills this one however the
+# script ends. A leftover overlay owns the hotkey registration and answers this
+# run's press itself, which reads as this run passing when it never started.
+# The reasoning lives in harness.sh so all seven harnesses share one copy.
+arm_harness
 
 # The item files live in the repo so a fresh machine can run this. They are
 # copied next to the exe because --fake-game reads them from its own directory.
@@ -91,51 +78,46 @@ fi
 # something else or the copy cannot be told apart from what was already there.
 powershell.exe -Command "Set-Clipboard -Value 'press-check placeholder'" >/dev/null 2>&1
 
-(timeout 130 "$exe" --fake-game "$game_window" 120 "$item" >"$fake" 2>&1 &)
-sleep 5
+# 200 seconds against a run that needs about 90. The stand-in has to outlive
+# every assertion, including the pointer one at the very bottom. It used to get
+# 120 and the budget above it added up to 83, which is not enough margin: a slow
+# search pushed the pointer assertion past the stand-in's death and the panel
+# closed because its game vanished, which reads as a pass for the wrong reason.
+(timeout 210 "$exe" --fake-game "$game_window" 200 "$item" >"$fake" 2>&1 &)
+
+wait_for 20 "$fake" 'fakegame' || echo "note: the stand-in printed nothing yet, continuing"
 
 # Debug, so the heartbeat is in the log. It is how a stopped loop is caught.
-(timeout 120 "$exe" "${data_flag[@]}" --game "$game" --log-level debug >"$log" 2>&1 &)
-sleep 12
+(timeout 180 "$exe" "${data_flag[@]}" --game "$game" --log-level debug >"$log" 2>&1 &)
+
+# Waited for rather than slept through. `sleep 12` is wasted time on a warm run
+# and not enough on a cold one, and a press sent before the loop starts goes
+# nowhere and looks exactly like a broken hotkey.
+if ! wait_for 60 "$log" '"msg":"the frame loop is running'; then
+    echo "FAIL: the overlay never started reading the hotkey, so nothing below was measured."
+    echo "Logs: $log and $fake"
+    exit 1
+fi
 
 # Parked somewhere definite before the press, so the pointer check later has a
 # real distance to travel. Leaving it wherever it happened to be meant the
 # check once compared a position against itself and read as a failure.
 "$exe" --move-mouse 1400 900 >/dev/null 2>&1
 
-pressed=0
-
-for attempt in 1 2 3; do
-    "$exe" "${data_flag[@]}" --game "$game" --press-hotkey || {
-        echo "FAIL: the keys were not accepted."
-        exit 1
-    }
-
-    # Injected input is occasionally swallowed before any window sees it, which
-    # looks exactly like a broken hotkey. Retrying separates the two.
-    for _ in 1 2 3 4 5 6; do
-        sleep 1
-
-        if grep -q '"msg":"price check hotkey pressed"' "$log"; then
-            pressed=1
-            break
-        fi
-    done
-
-    [ "$pressed" -eq 1 ] && break
-
-    echo "note: press $attempt did not land, retrying"
-done
+# Injected input is occasionally swallowed before any window sees it, which
+# looks exactly like a broken hotkey. Three attempts separates the two.
+press_until "$exe" "$log" "${data_flag[@]}" --game "$game"
 
 # The search is paced by the rate limiter, which is not optional. Waited for
 # rather than slept through, so the pointer check below still happens while the
 # game window exists. Sleeping a fixed 45s outlived the stand in and made the
 # panel close for the wrong reason.
-for _ in $(seq 1 45); do
-    grep -q '"msg":"price check finished"' "$log" && break
-    grep -q '"msg":"price check did not produce a price"' "$log" && break
-    sleep 1
-done
+#
+# It waits for any of the three ways a check can end. It used to wait for
+# "price check finished" or "price check did not produce a price", and the
+# second of those is not a line this app has ever logged, so both failure paths
+# burned the whole 45 seconds before asserting anything.
+wait_for_check_to_settle 60 "$log"
 
 fail=0
 
@@ -270,25 +252,42 @@ fi
 # The panel must go away when the user looks elsewhere. It is the rule that
 # makes the overlay usable rather than a window stuck over the game, and no
 # unit test can see it because it needs a real pointer.
-# The panel must go away when the user looks elsewhere. It is the rule that
-# makes the overlay usable rather than a window stuck over the game, and no
-# unit test can see it because it needs a real pointer.
 #
 # Asserted on the lifecycle's own transition rather than on whether the panel
 # is drawn. The window also stops being drawn when the game loses focus, and
 # counting that passed once for the wrong reason.
+#
+# 30,30 is a corner of the desktop, not a position worked out from a logged
+# rect. The rect in the log is in logical points and --move-mouse takes logical
+# coordinates it then scales by the real DPI, so anything derived from a rect
+# lands somewhere else on a scaled display. All this needs is "far away".
 if grep -q '"msg":"price check hotkey pressed"' "$log"; then
     "$exe" --move-mouse 30 30 >/dev/null 2>&1
-    sleep 3
 
-    if grep '"msg":"the panel lifecycle moved"' "$log" | grep -q '"to":"Closed"'; then
+    if wait_for 10 "$log" '"to":"Closed"'; then
         echo "PASS: the panel closed when the pointer moved away."
     else
         echo "FAIL: the panel never closed after the pointer moved away."
+        echo "      It then sits on top of the game and eats clicks meant for it."
         grep '"msg":"the panel lifecycle moved"' "$log" | tail -3
         fail=1
     fi
 fi
+
+# A bound nobody could have rolled. A filter row printed 9223372036854775807,
+# which is i64::MAX out of `f64::INFINITY as i64`. The user gets a filter the
+# trade site can never match and no error anywhere says so.
+assert_numbers_are_real "$log" || fail=1
+
+# A price in a raw trade id rather than a currency. The empty exchange `have`
+# list gave "~99 waystone-3". exchange-check.sh proves the outgoing request;
+# this catches the same thing arriving by any other route, on every item file.
+assert_currency_is_named "$log" || fail=1
+
+# Last, because it explains away every failure above when it fires. A stand-in
+# that died mid run takes the panel with it, and half these assertions are
+# about the panel.
+assert_stand_in_survived "$log" || fail=1
 
 if [ "$fail" -eq 0 ]; then
     echo "PASS: press, copy, parse, filter and search all ran."

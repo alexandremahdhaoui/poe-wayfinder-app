@@ -29,6 +29,17 @@ pub enum StartupError {
 
 pub const AUTO_GAME: &str = "auto";
 
+pub const KNOWN_LOG_LEVELS: &[&str] = &["debug", "info", "warn", "warning", "error"];
+
+pub fn unknown_log_level(configured: &str) -> Option<String> {
+    let named = configured.trim().to_ascii_lowercase();
+
+    match named.is_empty() || KNOWN_LOG_LEVELS.contains(&named.as_str()) {
+        true => None,
+        false => Some(named),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Validated {
     pub game: Option<GameVersion>,
@@ -318,6 +329,26 @@ mod tests {
             },
             url_check,
         )
+    }
+
+    #[test]
+    fn every_level_the_logger_understands_is_accepted_without_a_warning() {
+        for level in ["debug", "info", "warn", "warning", "error", "  DEBUG "] {
+            assert_eq!(unknown_log_level(level), None, "{level}");
+        }
+    }
+
+    #[test]
+    fn an_unset_level_is_not_reported_because_the_default_is_deliberate() {
+        assert_eq!(unknown_log_level(""), None);
+        assert_eq!(unknown_log_level("   "), None);
+    }
+
+    #[test]
+    fn trace_is_reported_because_the_generated_logger_silently_makes_it_info() {
+        assert_eq!(unknown_log_level("trace"), Some("trace".to_string()));
+        assert_eq!(unknown_log_level("TRACE"), Some("trace".to_string()));
+        assert_eq!(unknown_log_level("verbose"), Some("verbose".to_string()));
     }
 
     #[test]

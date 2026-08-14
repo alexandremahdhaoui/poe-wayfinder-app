@@ -1,6 +1,7 @@
 pub mod copy_controller;
 pub mod data_refresh_controller;
 pub mod datagen_controller;
+pub mod frame_watch_controller;
 pub mod game_state_controller;
 pub mod input_controller;
 pub mod log_watch_controller;

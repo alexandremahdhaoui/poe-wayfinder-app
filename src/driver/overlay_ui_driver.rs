@@ -187,8 +187,8 @@ pub fn should_paint(frame: &Frame) -> bool {
 #[cfg(windows)]
 mod win {
     use super::{
-        format_value, modifier_line, panel_text, rarity_colour, roll_caption, search_button_label,
-        Frame, PanelSource, StatusEvent, UiEvent, NO_LIMIT_ABOVE, NO_LIMIT_BELOW,
+        format_value, modifier_line, panel_text, rarity_colour, search_button_label, Frame,
+        PanelSource, StatusEvent, UiEvent, NO_LIMIT_ABOVE, NO_LIMIT_BELOW,
     };
 
     use eframe::egui;
@@ -223,6 +223,11 @@ mod win {
     const GAUGE_HIT_HEIGHT: f32 = 14.0;
     const GAUGE_BAR_HEIGHT: f32 = 6.0;
     const GAUGE_HANDLE_RADIUS: f32 = 4.0;
+
+    const MOD_ENABLED: egui::Color32 = egui::Color32::from_rgb(224, 224, 232);
+    const MOD_DISABLED: egui::Color32 = egui::Color32::from_rgb(112, 112, 124);
+    const MOD_UNDERLINE: egui::Color32 = egui::Color32::from_rgb(72, 132, 196);
+    const DISABLED_FADE: f32 = 0.45;
 
     const LISTINGS_SHOWN: usize = 8;
     const FOOTER_HEIGHT: f32 = 30.0;
@@ -603,9 +608,7 @@ mod win {
 
     fn numeric_row(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
         ui.horizontal(|ui| {
-            checkbox(ui, row, events);
-
-            ui.label(egui::RichText::new(&row.label).small());
+            mod_line(ui, row, &row.label.clone(), events);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 bounds_inputs(ui, row, events);
@@ -616,23 +619,19 @@ mod win {
     fn stat_row(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                checkbox(ui, row, events);
-
                 let label = modifier_line(&row.label, row.roll, row.decimals);
 
-                ui.add(
-                    egui::Label::new(egui::RichText::new(label).small().color(match row.enabled {
-                        true => egui::Color32::from_rgb(214, 214, 222),
-                        false => MUTED,
-                    }))
-                    .truncate(),
-                );
+                mod_line(ui, row, &label, events);
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     bounds_inputs(ui, row, events);
 
                     if let Some(tier) = tier_label(row.tier) {
-                        ui.label(egui::RichText::new(tier).small().color(ACCENT));
+                        ui.label(
+                            egui::RichText::new(tier)
+                                .small()
+                                .color(dim(ACCENT, row.enabled)),
+                        );
                     }
                 });
             });
@@ -645,6 +644,43 @@ mod win {
         });
     }
 
+    fn dim(colour: egui::Color32, enabled: bool) -> egui::Color32 {
+        match enabled {
+            true => colour,
+            false => colour.gamma_multiply(DISABLED_FADE),
+        }
+    }
+
+    fn mod_line(ui: &mut egui::Ui, row: &Row, label: &str, events: &mut Vec<UiEvent>) {
+        let text = egui::RichText::new(label).small().color(match row.enabled {
+            true => MOD_ENABLED,
+            false => MOD_DISABLED,
+        });
+
+        let response = ui
+            .add(egui::Label::new(text).truncate().sense(egui::Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(match row.enabled {
+                true => "click to drop this from the search",
+                false => "click to search on this again",
+            });
+
+        if row.enabled {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(response.rect.left() - 3.0, response.rect.bottom() + 1.0),
+                    egui::pos2(response.rect.right() + 3.0, response.rect.bottom() + 2.0),
+                ),
+                0.0,
+                MOD_UNDERLINE,
+            );
+        }
+
+        if response.clicked() {
+            events.push(UiEvent::ToggleRow(row.key));
+        }
+    }
+
     fn contributor_line(ui: &mut egui::Ui, row: &Row) {
         if row.contributors.len() < 2 {
             return;
@@ -655,23 +691,6 @@ mod win {
                 .small()
                 .color(MUTED),
         );
-    }
-
-    fn checkbox(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
-        let mark = match row.enabled {
-            true => "☑",
-            false => "☐",
-        };
-
-        let hover = roll_caption(row).unwrap_or_else(|| "switch this filter".to_string());
-
-        if ui
-            .add(egui::Button::new(mark).frame(false))
-            .on_hover_text(hover)
-            .clicked()
-        {
-            events.push(UiEvent::ToggleRow(row.key));
-        }
     }
 
     fn bounds_inputs(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
@@ -689,6 +708,7 @@ mod win {
             .add_sized([56.0, 18.0], max_widget)
             .on_hover_text("highest value to match. Drag it, or click the bar below.")
             .changed()
+            && finite(max) != row.max
         {
             events.push(UiEvent::SetMax(row.key, finite(max)));
         }
@@ -705,6 +725,7 @@ mod win {
             .add_sized([56.0, 18.0], min_widget)
             .on_hover_text("lowest value to match. Drag it, or click the bar below.")
             .changed()
+            && finite(min) != row.min
         {
             events.push(UiEvent::SetMin(row.key, finite(min)));
         }
@@ -762,7 +783,7 @@ mod win {
 
         let painter = ui.painter();
 
-        painter.rect_filled(rect, 3.0, GAUGE_TRACK);
+        painter.rect_filled(rect, 3.0, dim(GAUGE_TRACK, row.enabled));
 
         let Some((low, high)) = row.bounds else {
             return;
@@ -784,7 +805,7 @@ mod win {
                     egui::pos2(right, rect.bottom()),
                 ),
                 3.0,
-                GAUGE_FILL,
+                dim(GAUGE_FILL, row.enabled),
             );
         }
 
@@ -797,7 +818,7 @@ mod win {
                     egui::pos2(x + 1.0, rect.bottom() + 1.0),
                 ),
                 0.0,
-                GAUGE_TICK,
+                dim(GAUGE_TICK, row.enabled),
             );
         }
 

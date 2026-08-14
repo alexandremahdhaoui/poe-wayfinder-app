@@ -15,6 +15,28 @@ use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 use std::time::Duration;
 
+pub fn build_logger(level: &str, service: &str) -> Logger {
+    let log = Logger::new(level, service);
+
+    if let Some(unknown) = crate::controller::startup_controller::unknown_log_level(level) {
+        log.warn(
+            "that log level is not one this build knows, so info is used instead",
+            &[
+                ("asked_for", Value::Str(unknown)),
+                ("using", Value::Str("info".to_string())),
+                (
+                    "known",
+                    Value::Str(
+                        crate::controller::startup_controller::KNOWN_LOG_LEVELS.join(","),
+                    ),
+                ),
+            ],
+        );
+    }
+
+    log
+}
+
 pub fn build_http(cfg: &PoeWayfinderConfig, log: &Logger) -> Option<HttpAdapter> {
     let policy = NetworkPolicy::new(
         cfg.network_enabled,
@@ -41,7 +63,7 @@ pub fn build_http(cfg: &PoeWayfinderConfig, log: &Logger) -> Option<HttpAdapter>
         Err(err) => {
             log.error(
                 "building http client",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             return None;
@@ -96,22 +118,106 @@ pub fn league_is_unknown(config_dir: &std::path::Path) -> bool {
 
 pub const FALLBACK_LEAGUE: &str = "Standard";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeagueFrom {
+    Configured,
+    TradeApi,
+    LastRun,
+    Fallback,
+}
+
+impl LeagueFrom {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeagueFrom::Configured => "configured",
+            LeagueFrom::TradeApi => "trade api",
+            LeagueFrom::LastRun => "last run",
+            LeagueFrom::Fallback => "fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct League {
+    pub name: String,
+    pub from: LeagueFrom,
+}
+
 pub fn resolve_league(
     configured: &str,
     remembered: Option<String>,
     fetched: Option<String>,
-) -> String {
-    for candidate in [configured.trim().to_string()]
-        .into_iter()
-        .chain(fetched)
-        .chain(remembered)
-    {
-        if !candidate.trim().is_empty() {
-            return candidate.trim().to_string();
+) -> League {
+    let ordered = [
+        (LeagueFrom::Configured, Some(configured.to_string())),
+        (LeagueFrom::TradeApi, fetched),
+        (LeagueFrom::LastRun, remembered),
+    ];
+
+    for (from, candidate) in ordered {
+        let Some(name) = candidate else {
+            continue;
+        };
+
+        if !name.trim().is_empty() {
+            return League {
+                name: name.trim().to_string(),
+                from,
+            };
         }
     }
 
-    FALLBACK_LEAGUE.to_string()
+    League {
+        name: FALLBACK_LEAGUE.to_string(),
+        from: LeagueFrom::Fallback,
+    }
+}
+
+pub fn league_for(
+    cfg: &PoeWayfinderConfig,
+    config_dir: &std::path::Path,
+    http: &HttpAdapter,
+    game: GameVersion,
+    log: &Logger,
+) -> String {
+    let asked = cfg.league.trim().is_empty();
+
+    let league = resolve_league(
+        &cfg.league,
+        remembered_league(config_dir),
+        match asked {
+            true => fetch_current_league(http, &cfg.trade_base_url, game, log),
+            false => None,
+        },
+    );
+
+    if league.from == LeagueFrom::Fallback {
+        log.warn(
+            "nothing named a league, so the search falls back to Standard",
+            &[
+                ("configured", Value::Str(cfg.league.clone())),
+                ("using", Value::Str(league.name.clone())),
+                ("network", Value::Bool(cfg.network_enabled)),
+            ],
+        );
+    }
+
+    log.info(
+        "searching this league",
+        &[
+            ("league", Value::Str(league.name.clone())),
+            ("source", Value::Str(league.from.as_str().to_string())),
+            ("configured", Value::Str(cfg.league.clone())),
+            (
+                "remembered",
+                Value::Str(
+                    remembered_league(config_dir).unwrap_or_else(|| "none".to_string()),
+                ),
+            ),
+        ],
+    );
+
+    league.name
 }
 
 pub fn fetch_current_league(
@@ -301,7 +407,7 @@ pub fn build_data(
                 "loading game data",
                 &[
                     ("data_dir", Value::Str(cfg.data_dir.clone())),
-                    ("error", Value::Str(err.to_string())),
+                    ("error", Value::Str(crate::util::error_chain::render(&err))),
                 ],
             );
 
@@ -427,7 +533,7 @@ pub fn build_copier(
         Err(err) => {
             log.error(
                 "opening the clipboard",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
 
             return None;
@@ -545,10 +651,33 @@ impl RefreshPlan {
 
     pub fn start(&self, games: Vec<GameVersion>, log: &Logger) {
         if !self.network_enabled || games.is_empty() {
-            log.debug("nothing to refresh", &[]);
+            log.debug(
+                "no data refresh was started, so the data stays as it loaded",
+                &[
+                    ("network", Value::Bool(self.network_enabled)),
+                    ("games_due", Value::Int(games.len() as i64)),
+                ],
+            );
 
             return;
         }
+
+        log.debug(
+            "refreshing the game data in the background",
+            &[
+                (
+                    "games",
+                    Value::Str(
+                        games
+                            .iter()
+                            .map(|g| g.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                ),
+                ("url", Value::Str(self.trade_base_url.clone())),
+            ],
+        );
 
         let policy = NetworkPolicy::new(
             self.network_enabled,
@@ -661,7 +790,7 @@ async fn refresh_one(
             "could not write the refreshed data",
             &[
                 ("path", Value::Str(cache.display().to_string())),
-                ("error", Value::Str(err.to_string())),
+                ("error", Value::Str(crate::util::error_chain::render(&err))),
             ],
         );
 
@@ -704,29 +833,48 @@ mod tests {
 
     #[test]
     fn a_named_league_wins_over_anything_detected() {
-        assert_eq!(
-            resolve_league("Standard", Some("Runes of Aldur".into()), Some("HC".into())),
-            "Standard"
-        );
+        let got = resolve_league("Standard", Some("Runes of Aldur".into()), Some("HC".into()));
+
+        assert_eq!(got.name, "Standard");
+        assert_eq!(got.from, LeagueFrom::Configured);
     }
 
     #[test]
     fn an_unset_league_takes_the_one_the_trade_site_reports() {
-        assert_eq!(
-            resolve_league("", Some("Old League".into()), Some("Runes of Aldur".into())),
-            "Runes of Aldur"
-        );
+        let got = resolve_league("", Some("Old League".into()), Some("Runes of Aldur".into()));
+
+        assert_eq!(got.name, "Runes of Aldur");
+        assert_eq!(got.from, LeagueFrom::TradeApi);
     }
 
     #[test]
     fn a_league_lookup_that_failed_falls_back_to_the_last_run() {
-        assert_eq!(resolve_league("", Some("Runes of Aldur".into()), None), "Runes of Aldur");
+        let got = resolve_league("", Some("Runes of Aldur".into()), None);
+
+        assert_eq!(got.name, "Runes of Aldur");
+        assert_eq!(got.from, LeagueFrom::LastRun);
     }
 
     #[test]
     fn knowing_nothing_at_all_searches_standard_rather_than_no_league() {
-        assert_eq!(resolve_league("", None, None), FALLBACK_LEAGUE);
-        assert_eq!(resolve_league("   ", None, None), FALLBACK_LEAGUE);
+        for spelling in ["", "   "] {
+            let got = resolve_league(spelling, None, None);
+
+            assert_eq!(got.name, FALLBACK_LEAGUE);
+            assert_eq!(got.from, LeagueFrom::Fallback);
+        }
+    }
+
+    #[test]
+    fn every_source_a_league_can_come_from_has_a_name_a_log_reader_can_read() {
+        for from in [
+            LeagueFrom::Configured,
+            LeagueFrom::TradeApi,
+            LeagueFrom::LastRun,
+            LeagueFrom::Fallback,
+        ] {
+            assert!(!from.as_str().is_empty(), "{from:?}");
+        }
     }
 
     #[test]

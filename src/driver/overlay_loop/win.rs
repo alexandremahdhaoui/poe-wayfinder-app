@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -6,6 +8,7 @@ use super::search::SearchOutcome;
 use super::{OverlayLoopError, OverlaySettings};
 
 use crate::controller::copy_controller::Copier;
+use crate::controller::frame_watch_controller::{FrameWatch, Verdict};
 use crate::controller::game_state_controller::GameState;
 use crate::controller::input_controller::InputState;
 use crate::controller::log_watch_controller::LogSource;
@@ -42,6 +45,7 @@ use poe_wayfinder_core::types::{GamePair, GameVersion};
 const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const HEARTBEAT_FRAMES: i64 = 600;
+const STALL_LOOK_EVERY: Duration = Duration::from_millis(1000);
 const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
 const SPLASH_HOLD: Duration = Duration::from_millis(2000);
 const SPLASH_FADE: Duration = Duration::from_millis(400);
@@ -97,6 +101,7 @@ where
     last_search: Option<SearchOutcome>,
     pending: Vec<UiEvent>,
     hold_open: bool,
+    ticked_at: Arc<AtomicU64>,
 }
 
 impl<W, C, P, H, D, I, L, R> OverlayLoopDriver<W, C, P, H, D, I, L, R>
@@ -165,6 +170,7 @@ where
 
         let widgets = opened_widgets(&remembered);
         let window_was_found = window.window().is_some();
+        let ticked_at = watch_for_a_stall(&settings.log_level);
 
         Ok(Self {
             window,
@@ -207,6 +213,7 @@ where
             last_search: None,
             pending: Vec::new(),
             hold_open: super::wiring::panel_hold(),
+            ticked_at,
         })
     }
 
@@ -232,6 +239,9 @@ where
     }
 
     fn frame(&mut self, ctx: &egui::Context) {
+        self.ticked_at
+            .store(crate::util::elapsed::millis() as u64, Ordering::Relaxed);
+
         self.advance_search();
         self.heartbeat();
 
@@ -342,7 +352,30 @@ where
             }
         }
 
-        if events.is_empty() || !self.session.apply_all(&events) {
+        if events.is_empty() {
+            return;
+        }
+
+        let changed = self.session.apply_all(&events);
+
+        self.log.debug(
+            "the game log said something",
+            &[
+                ("events", Value::Int(events.len() as i64)),
+                ("changed_the_session", Value::Bool(changed)),
+                (
+                    "league_in_the_log",
+                    Value::Str(self.session.league().unwrap_or("none").to_string()),
+                ),
+                (
+                    "league_source",
+                    Value::Str(format!("{:?}", self.session.league_source())),
+                ),
+                ("league_in_use", Value::Str(self.settings.league.clone())),
+            ],
+        );
+
+        if !changed {
             return;
         }
 
@@ -391,6 +424,17 @@ where
             self.tray.as_ref().map(|t| t.actions()).unwrap_or_default();
 
         for event in std::mem::take(&mut self.pending) {
+            self.log.debug(
+                "the panel asked for something",
+                &[
+                    ("event", Value::Str(format!("{event:?}"))),
+                    (
+                        "enabled_filters",
+                        Value::Int(self.model.filters().enabled_count() as i64),
+                    ),
+                ],
+            );
+
             match event {
                 UiEvent::OpenInBrowser => asked.push(TrayAction::OpenInBrowser),
                 UiEvent::Research => asked.push(TrayAction::Research),
@@ -1005,6 +1049,7 @@ where
             data,
             game,
             options,
+            log,
             ..
         } = self;
 
@@ -1014,8 +1059,20 @@ where
         let stage = price_check_loop::prepare(
             model,
             cursor,
-            || copier.copy(),
-            |text| price_check(text, tables, options).map_err(|e| render(&e)),
+            || {
+                let copied = copier.copy();
+
+                log_clipboard(log, &copied);
+
+                copied
+            },
+            |text| {
+                let parsed = price_check(text, tables, options).map_err(|e| render(&e));
+
+                log_parsed(log, &parsed);
+
+                parsed
+            },
         );
 
         let price_check_loop::Stage::Ready(checked) = stage else {
@@ -1045,6 +1102,8 @@ where
                 ("flag_rows", Value::Int(view.flags.len() as i64)),
             ],
         );
+
+        self.log_filter_rows();
 
         self.awaiting_search = Some(checked);
     }
@@ -1076,7 +1135,6 @@ where
         self.after_search();
 
         self.log_estimate();
-        self.log_filter_rows();
 
         self.record_priced(total);
 
@@ -1146,20 +1204,38 @@ where
                 "a filter row on the panel",
                 &[
                     ("label", Value::Str(row.label.clone())),
+                    ("key", Value::Str(format!("{:?}", row.key))),
                     ("enabled", Value::Bool(row.enabled)),
                     ("min", Value::Str(describe(row.min))),
                     ("max", Value::Str(describe(row.max))),
                     ("roll", Value::Str(describe(row.roll))),
                     (
                         "bounds",
-                        Value::Str(row.bounds.map_or_else(
-                            || "none".to_string(),
-                            |(low, high)| format!("{low} to {high}"),
-                        )),
+                        Value::Str(crate::util::log_fields::span(row.bounds)),
                     ),
+                    ("tier", Value::Str(crate::util::log_fields::count(row.tier))),
                 ],
             );
         }
+
+        self.log.debug(
+            "the flag rows on the panel",
+            &[
+                (
+                    "on",
+                    Value::Str(
+                        view.flags
+                            .iter()
+                            .filter(|row| row.enabled)
+                            .map(|row| format!("{}={}", row.label, row.value))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                ),
+                ("rows", Value::Int(view.flags.len() as i64)),
+                ("name_mode", Value::Str(format!("{:?}", view.name.mode))),
+            ],
+        );
     }
 
     fn log_estimate(&self) {
@@ -1343,7 +1419,16 @@ where
             .health
             .check(PANEL_WINDOW_TITLE, &self.settings.window_title)
         else {
-            self.log.debug("could not measure the panel window", &[]);
+            self.log.debug(
+                "the panel window could not be measured, so its placement is unchecked",
+                &[
+                    ("panel_title", Value::Str(PANEL_WINDOW_TITLE.to_string())),
+                    (
+                        "game_title",
+                        Value::Str(self.settings.window_title.clone()),
+                    ),
+                ],
+            );
 
             return;
         };
@@ -1360,7 +1445,7 @@ where
 
         match health.advice {
             None => self.log.info("the panel is where it should be", &fields),
-            Some(why) => self.log.error(why, &fields),
+            Some(why) => self.log.warn(why, &fields),
         }
     }
 
@@ -1475,6 +1560,43 @@ fn opened_widgets<R: RememberedSettings>(
     widgets
 }
 
+fn watch_for_a_stall(log_level: &str) -> Arc<AtomicU64> {
+    let ticked_at = Arc::new(AtomicU64::new(crate::util::elapsed::millis() as u64));
+    let watched = Arc::clone(&ticked_at);
+    let log = Logger::new(log_level, "poe-wayfinder-frames");
+
+    std::thread::spawn(move || {
+        let mut watch = FrameWatch::default();
+
+        while Arc::strong_count(&watched) > 1 {
+            std::thread::sleep(STALL_LOOK_EVERY);
+
+            let now = crate::util::elapsed::millis() as u64;
+
+            match watch.look(now, watched.load(Ordering::Relaxed)) {
+                Some(Verdict::Stalled { silent_ms }) => log.warn(
+                    "the frame loop has stopped ticking, so the hotkey answers nothing until \
+                     it comes back",
+                    &[
+                        ("silent_ms", Value::Int(silent_ms as i64)),
+                        crate::util::elapsed::field(),
+                    ],
+                ),
+                Some(Verdict::Ticking { silent_ms }) => log.info(
+                    "the frame loop is ticking again and the hotkey is being read",
+                    &[
+                        ("silent_ms", Value::Int(silent_ms as i64)),
+                        crate::util::elapsed::field(),
+                    ],
+                ),
+                None => {}
+            }
+        }
+    });
+
+    ticked_at
+}
+
 fn start_registration(hotkey: &Hotkey, log: &Logger) -> Option<HotkeyDriver> {
     match HotkeyDriver::start(hotkey) {
         Ok(hotkeys) => {
@@ -1488,7 +1610,7 @@ fn start_registration(hotkey: &Hotkey, log: &Logger) -> Option<HotkeyDriver> {
         Err(err) => {
             log.warn(
                 "could not register the price check hotkey. The keyboard hook still watches it.",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(render(&err)))],
             );
 
             None
@@ -1519,7 +1641,7 @@ fn start_hook(hotkeys: &[Hotkey], log: &Logger) -> Option<HookDriver> {
             log.warn(
                 "the keyboard hook did not install. The hotkey still works if Windows \
                  delivers the registration.",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(render(&err)))],
             );
 
             None
@@ -1542,7 +1664,7 @@ fn start_tray(
         Err(err) => {
             log.warn(
                 "no tray icon. The overlay still works, but nothing will show it is running.",
-                &[("error", Value::Str(err.to_string()))],
+                &[("error", Value::Str(render(&err)))],
             );
 
             None
@@ -1585,9 +1707,80 @@ fn open_in_browser(url: &str) {
 }
 
 fn describe(value: Option<f64>) -> String {
-    match value {
-        Some(value) if value.is_finite() => format!("{value}"),
-        Some(value) => format!("NOT FINITE: {value}"),
-        None => "unset".to_string(),
+    crate::util::log_fields::number(value)
+}
+
+fn log_clipboard(log: &Logger, copied: &Result<String, String>) {
+    match copied {
+        Ok(text) => log.debug(
+            "the clipboard the item was read from",
+            &[
+                ("chars", Value::Int(text.len() as i64)),
+                ("lines", Value::Int(text.lines().count() as i64)),
+                (
+                    "first_line",
+                    Value::Str(crate::util::log_fields::first_line(text)),
+                ),
+            ],
+        ),
+        Err(message) => log.debug(
+            "nothing could be copied, so there is no item to price",
+            &[("error", Value::Str(message.clone()))],
+        ),
     }
+}
+
+fn log_parsed(log: &Logger, parsed: &Result<PriceCheck, String>) {
+    use crate::util::log_fields::{count, text};
+
+    let Ok(checked) = parsed else {
+        return;
+    };
+
+    log.debug(
+        "what the parser made of the item",
+        &[
+            ("name", Value::Str(checked.item.info.name.clone())),
+            (
+                "base",
+                Value::Str(checked.item.info.reference_name.clone()),
+            ),
+            ("rarity", Value::Str(format!("{:?}", checked.item.rarity))),
+            (
+                "category",
+                Value::Str(format!("{:?}", checked.item.category)),
+            ),
+            ("item_level", Value::Str(count(checked.item.item_level))),
+            (
+                "quality",
+                Value::Int(i64::from(checked.item.quality.unwrap_or(0))),
+            ),
+            ("corrupted", Value::Bool(checked.item.is_corrupted)),
+            ("unidentified", Value::Bool(checked.item.is_unidentified)),
+            (
+                "modifiers",
+                Value::Int(checked.item.modifiers.len() as i64),
+            ),
+            (
+                "unknown_modifiers",
+                Value::Int(checked.item.unknown_modifiers.len() as i64),
+            ),
+            (
+                "data_trade_tag",
+                Value::Str(text(&checked.item.info.trade_tag)),
+            ),
+            (
+                "routed_to",
+                Value::Str(format!("{:?}", checked.endpoint)),
+            ),
+            (
+                "stat_filters",
+                Value::Int(checked.stat_filter_count() as i64),
+            ),
+            (
+                "searchable",
+                Value::Bool(checked.constrains_something()),
+            ),
+        ],
+    );
 }
