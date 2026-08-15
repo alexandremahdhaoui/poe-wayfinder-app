@@ -6,12 +6,14 @@ pub const REPEAT_EVERY: Millis = 15_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Stalled { silent_ms: Millis },
-    Ticking { silent_ms: Millis },
+    Ticking,
+    Recovered { stalled_for_ms: Millis },
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FrameWatch {
     told_at: Option<Millis>,
+    stalled_since: Option<Millis>,
 }
 
 impl FrameWatch {
@@ -19,8 +21,18 @@ impl FrameWatch {
         let silent_ms = now.saturating_sub(last_tick);
 
         if silent_ms < STALL_AFTER {
-            return self.told_at.take().map(|_| Verdict::Ticking { silent_ms });
+            self.told_at = None;
+
+            let Some(since) = self.stalled_since.take() else {
+                return Some(Verdict::Ticking);
+            };
+
+            return Some(Verdict::Recovered {
+                stalled_for_ms: last_tick.saturating_sub(since),
+            });
         }
+
+        self.stalled_since.get_or_insert(last_tick);
 
         let due = match self.told_at {
             None => true,
@@ -42,10 +54,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_loop_that_ticked_just_now_says_nothing_at_all() {
+    fn a_loop_that_ticked_just_now_is_ticking_and_has_no_stall_to_report() {
         let mut watch = FrameWatch::default();
 
-        assert_eq!(watch.look(1_000, 900), None);
+        assert_eq!(watch.look(1_000, 900), Some(Verdict::Ticking));
     }
 
     #[test]
@@ -76,16 +88,57 @@ mod tests {
     }
 
     #[test]
-    fn a_loop_that_comes_back_is_reported_once_so_the_stall_has_an_end() {
+    fn a_recovery_reports_how_long_the_hotkey_was_dead_rather_than_the_current_gap() {
         let mut watch = FrameWatch::default();
 
         watch.look(STALL_AFTER, 0);
 
         assert_eq!(
             watch.look(STALL_AFTER + 100, STALL_AFTER + 50),
-            Some(Verdict::Ticking { silent_ms: 50 })
+            Some(Verdict::Recovered {
+                stalled_for_ms: STALL_AFTER + 50
+            })
         );
-        assert_eq!(watch.look(STALL_AFTER + 200, STALL_AFTER + 150), None);
+    }
+
+    #[test]
+    fn a_recovery_is_reported_once_so_the_stall_has_exactly_one_end() {
+        let mut watch = FrameWatch::default();
+
+        watch.look(STALL_AFTER, 0);
+        watch.look(STALL_AFTER + 100, STALL_AFTER + 50);
+
+        assert_eq!(
+            watch.look(STALL_AFTER + 200, STALL_AFTER + 150),
+            Some(Verdict::Ticking)
+        );
+    }
+
+    #[test]
+    fn a_second_stall_reports_its_own_length_rather_than_counting_from_the_first_one() {
+        let mut watch = FrameWatch::default();
+
+        assert_eq!(
+            watch.look(3_000, 0),
+            Some(Verdict::Stalled { silent_ms: 3_000 })
+        );
+        assert_eq!(
+            watch.look(3_100, 3_050),
+            Some(Verdict::Recovered {
+                stalled_for_ms: 3_050
+            })
+        );
+        assert_eq!(watch.look(3_200, 3_150), Some(Verdict::Ticking));
+        assert_eq!(
+            watch.look(7_000, 3_150),
+            Some(Verdict::Stalled { silent_ms: 3_850 })
+        );
+        assert_eq!(
+            watch.look(7_100, 7_050),
+            Some(Verdict::Recovered {
+                stalled_for_ms: 3_900
+            })
+        );
     }
 
     #[test]
@@ -93,7 +146,7 @@ mod tests {
         let mut watch = FrameWatch::default();
 
         for now in [100, 200, 300, 400] {
-            assert_eq!(watch.look(now, now), None);
+            assert_eq!(watch.look(now, now), Some(Verdict::Ticking));
         }
     }
 
@@ -101,6 +154,6 @@ mod tests {
     fn a_tick_stamped_after_the_clock_read_is_treated_as_alive_rather_than_panicking() {
         let mut watch = FrameWatch::default();
 
-        assert_eq!(watch.look(100, 500), None);
+        assert_eq!(watch.look(100, 500), Some(Verdict::Ticking));
     }
 }

@@ -29,6 +29,7 @@ use crate::driver::overlay_ui_driver::{
 };
 use crate::driver::tray_driver::{accepts_hotkey, TrayAction, TrayIcon, TrayState};
 use crate::logging::{Logger, Value};
+use crate::types::overlay::WindowRect;
 use crate::types::Hotkey;
 use crate::util::error_chain::render;
 use poe_wayfinder_core::controller::hotkey_match::Binding;
@@ -274,8 +275,10 @@ where
             window
         });
 
+        let game_foreground = found.map(|window| window.is_foreground);
+
         self.refresh_tray(found.is_some());
-        self.report_window_change(found.is_some(), found);
+        self.report_window_change(found.map(|window| window.rect));
 
         let mut frame = self.model.frame_scaled(found, self.window.scale());
 
@@ -289,7 +292,7 @@ where
 
         self.focus_locked_panel(ctx, &frame);
 
-        self.report_panel_change(&frame, found);
+        self.report_panel_change(&frame, game_foreground);
         self.apply_placement(ctx, &frame);
 
         self.pending.extend(paint(ctx, &self.model));
@@ -399,7 +402,7 @@ where
 
         self.settings.league = league.to_string();
         self.tray_state.league = Some(league.to_string());
-        self.remembered.remember_league(league);
+        self.remembered.remember_league(self.game, league);
         self.prices.set_league(league);
     }
 
@@ -1160,13 +1163,19 @@ where
     }
 
     fn log_request(&self, checked: &PriceCheck) {
-        use poe_wayfinder_core::controller::bulk;
+        use poe_wayfinder_core::controller::bulk::{self, Endpoint};
 
-        let have = checked
-            .trade_tag
-            .as_ref()
-            .map(|tag| bulk::currencies_to_price_in(self.game, tag))
-            .unwrap_or_default();
+        let priced_in = match (checked.endpoint, &checked.trade_tag) {
+            (Endpoint::Exchange, Some(tag)) => {
+                let have = bulk::currencies_to_price_in(self.game, tag);
+
+                match have.is_empty() {
+                    true => "anything the seller offers".to_string(),
+                    false => have.join(","),
+                }
+            }
+            _ => "not an exchange, no have list is sent".to_string(),
+        };
 
         self.log.debug(
             "the request being sent",
@@ -1176,13 +1185,7 @@ where
                     "trade_tag",
                     Value::Str(checked.trade_tag.clone().unwrap_or_else(|| "none".into())),
                 ),
-                (
-                    "priced_in",
-                    Value::Str(match have.is_empty() {
-                        true => "anything the seller offers".to_string(),
-                        false => have.join(","),
-                    }),
-                ),
+                ("priced_in", Value::Str(priced_in)),
                 (
                     "stat_filters",
                     Value::Int(checked.stat_filter_count() as i64),
@@ -1313,6 +1316,8 @@ where
         self.tray_state.stat_count = self.data.get(found).stat_count();
         self.last_search = None;
 
+        self.follow_league(found);
+
         self.model.fail(&format!(
             "Now watching {}. Press the hotkey over an item.",
             self.settings.window_title
@@ -1328,6 +1333,43 @@ where
                     Value::Str(self.settings.window_title.clone()),
                 ),
                 ("stats", Value::Int(self.tray_state.stat_count as i64)),
+                ("league", Value::Str(self.settings.league.clone())),
+            ],
+        );
+    }
+
+    fn follow_league(&mut self, game: GameVersion) {
+        let Some(league) = self.remembered.last_league(game) else {
+            self.log.warn(
+                "the game changed and this build has never learned a league for the new game, \
+                 so the search keeps the one it had. Restart to read the trade site's league \
+                 list for it.",
+                &[
+                    ("game", Value::Str(game.as_str().to_string())),
+                    ("league_in_use", Value::Str(self.settings.league.clone())),
+                ],
+            );
+
+            return;
+        };
+
+        if league == self.settings.league {
+            return;
+        }
+
+        let was = std::mem::replace(&mut self.settings.league, league.clone());
+
+        self.tray_state.league = Some(league.clone());
+        self.prices.set_league(&league);
+        self.widgets.note_log(&format!("league is now {league}"));
+
+        self.log.info(
+            "the league followed the game",
+            &[
+                ("game", Value::Str(game.as_str().to_string())),
+                ("was", Value::Str(was)),
+                ("now", Value::Str(league)),
+                ("source", Value::Str("remembered for this game".to_string())),
             ],
         );
     }
@@ -1341,11 +1383,9 @@ where
         }
     }
 
-    fn report_window_change(
-        &mut self,
-        visible: bool,
-        found: Option<crate::adapter::game_window_adapter::GameWindow>,
-    ) {
+    fn report_window_change(&mut self, found: Option<WindowRect>) {
+        let visible = found.is_some();
+
         if visible == self.window_was_found {
             return;
         }
@@ -1353,11 +1393,11 @@ where
         self.window_was_found = visible;
 
         match found {
-            Some(game) => self.log.info(
+            Some(rect) => self.log.info(
                 "the game window appeared",
                 &[
-                    ("width", Value::Int(i64::from(game.rect.width))),
-                    ("height", Value::Int(i64::from(game.rect.height))),
+                    ("width", Value::Int(i64::from(rect.width))),
+                    ("height", Value::Int(i64::from(rect.height))),
                 ],
             ),
             None => self.log.warn(
@@ -1370,11 +1410,7 @@ where
         }
     }
 
-    fn report_panel_change(
-        &mut self,
-        frame: &Frame,
-        found: Option<crate::adapter::game_window_adapter::GameWindow>,
-    ) {
+    fn report_panel_change(&mut self, frame: &Frame, game_foreground: Option<bool>) {
         let showing = should_paint(frame);
 
         if showing == self.was_showing {
@@ -1393,9 +1429,9 @@ where
                 ("state", Value::Str(format!("{:?}", frame.state))),
                 (
                     "game_foreground",
-                    Value::Bool(found.is_some_and(|w| w.is_foreground)),
+                    Value::Bool(game_foreground.unwrap_or(false)),
                 ),
-                ("game_found", Value::Bool(found.is_some())),
+                ("game_found", Value::Bool(game_foreground.is_some())),
                 ("takes_input", Value::Bool(frame.takes_input)),
                 (
                     "rect",
@@ -1576,14 +1612,14 @@ fn watch_for_a_stall(log_level: &str) -> Arc<AtomicU64> {
                         crate::util::elapsed::field(),
                     ],
                 ),
-                Some(Verdict::Ticking { silent_ms }) => log.info(
+                Some(Verdict::Recovered { stalled_for_ms }) => log.info(
                     "the frame loop is ticking again and the hotkey is being read",
                     &[
-                        ("silent_ms", Value::Int(silent_ms as i64)),
+                        ("stalled_for_ms", Value::Int(stalled_for_ms as i64)),
                         crate::util::elapsed::field(),
                     ],
                 ),
-                None => {}
+                Some(Verdict::Ticking) | None => {}
             }
         }
     });

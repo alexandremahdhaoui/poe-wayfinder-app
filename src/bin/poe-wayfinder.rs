@@ -169,7 +169,7 @@ fn run_overlay(
 
     refresh.start(refresh.due_now(), &log);
 
-    let logs = wiring::build_logs(&client_log, wiring::league_is_unknown(config_dir));
+    let logs = wiring::build_logs(&client_log, wiring::league_is_unknown(config_dir, game));
     let remembered = wiring::build_settings(config_dir);
     let stats = data.get(game).stat_count();
 

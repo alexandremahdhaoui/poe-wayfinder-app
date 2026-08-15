@@ -94,7 +94,12 @@ if grep -q 'MissingRequired\|loading config' "$log"; then
 fi
 
 # Both games' tables must be in memory, or a switch has nothing to switch to.
-loaded=$(grep -c '"msg":"loaded the game data"' "$log")
+#
+# `${loaded:-0}`, because grep -c prints nothing when the file is missing and an
+# empty operand aborts the comparison with "integer expected" and code 2, which
+# reads as false and deletes the assertion.
+loaded=$(grep -c '"msg":"loaded the game data"' "$log" 2>/dev/null)
+loaded=${loaded:-0}
 
 if [ "$loaded" -ne 2 ]; then
     echo "FAIL: $loaded game tables loaded. Both are needed to follow a switch."
@@ -206,8 +211,10 @@ else
 fi
 
 # One press, one check, across a switch as well.
-presses=$(grep -c '"msg":"price check hotkey pressed"' "$log")
-checks=$(grep -c '"msg":"price check finished"' "$log")
+presses=$(grep -c '"msg":"price check hotkey pressed"' "$log" 2>/dev/null)
+checks=$(grep -c '"msg":"price check finished"' "$log" 2>/dev/null)
+presses=${presses:-0}
+checks=${checks:-0}
 
 if [ "$checks" -gt "$presses" ]; then
     echo "FAIL: $presses presses produced $checks checks. Each extra one costs a request against the rate limit."

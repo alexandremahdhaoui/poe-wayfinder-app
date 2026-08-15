@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use poe_wayfinder_core::types::{GamePair, GameVersion};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -23,6 +24,56 @@ pub enum StoreError {
     Encode(#[source] serde_json::Error),
 }
 
+pub const LEAGUE_NAME_LIMIT: usize = 40;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LastLeague {
+    Shared(String),
+    PerGame(GamePair<String>),
+}
+
+impl Default for LastLeague {
+    fn default() -> Self {
+        LastLeague::Shared(String::new())
+    }
+}
+
+impl LastLeague {
+    pub fn get(&self, game: GameVersion) -> &str {
+        match self {
+            LastLeague::Shared(shared) => shared,
+            LastLeague::PerGame(pair) => pair.get(game),
+        }
+    }
+
+    pub fn set(&mut self, game: GameVersion, league: &str) {
+        let mut pair = match self {
+            LastLeague::Shared(shared) => GamePair::new(shared.clone(), shared.clone()),
+            LastLeague::PerGame(pair) => pair.clone(),
+        };
+
+        *pair.get_mut(game) = league.to_string();
+
+        *self = LastLeague::PerGame(pair);
+    }
+
+    fn dropping_absurd_names(self) -> Self {
+        let sane = |name: &str| match name.len() > LEAGUE_NAME_LIMIT {
+            true => String::new(),
+            false => name.to_string(),
+        };
+
+        match self {
+            LastLeague::Shared(shared) => LastLeague::Shared(sane(&shared)),
+            LastLeague::PerGame(pair) => LastLeague::PerGame(GamePair::new(
+                sane(pair.get(GameVersion::Poe1)),
+                sane(pair.get(GameVersion::Poe2)),
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -30,7 +81,7 @@ pub struct Settings {
     pub panel_offset_y: f32,
     pub panel_width: f32,
     pub panel_height: f32,
-    pub last_league: String,
+    pub last_league: LastLeague,
     pub include_offline: bool,
     pub roll_tolerance: f64,
     pub filter_item_level: bool,
@@ -45,7 +96,7 @@ impl Default for Settings {
             panel_offset_y: 16.0,
             panel_width: 400.0,
             panel_height: 600.0,
-            last_league: String::new(),
+            last_league: LastLeague::default(),
             include_offline: false,
             roll_tolerance: 0.1,
             filter_item_level: false,
@@ -63,9 +114,7 @@ impl Settings {
         self.panel_offset_y = self.panel_offset_y.clamp(-4000.0, 4000.0);
         self.roll_tolerance = self.roll_tolerance.clamp(0.0, 1.0);
 
-        if self.last_league.len() > 40 {
-            self.last_league = String::new();
-        }
+        self.last_league = self.last_league.dropping_absurd_names();
 
         self
     }
@@ -202,7 +251,7 @@ mod tests {
 
         let settings = Settings {
             panel_offset_x: 100.0,
-            last_league: "Standard".into(),
+            last_league: LastLeague::Shared("Standard".into()),
             include_offline: true,
             ..Settings::default()
         };
@@ -231,7 +280,8 @@ mod tests {
 
         let got = store.load();
 
-        assert_eq!(got.last_league, "Hardcore");
+        assert_eq!(got.last_league.get(GameVersion::Poe1), "Hardcore");
+        assert_eq!(got.last_league.get(GameVersion::Poe2), "Hardcore");
         assert_eq!(got.panel_width, Settings::default().panel_width);
     }
 
@@ -284,12 +334,27 @@ mod tests {
     #[test]
     fn an_absurd_league_name_is_dropped() {
         let got = Settings {
-            last_league: "x".repeat(100),
+            last_league: LastLeague::Shared("x".repeat(100)),
             ..Settings::default()
         }
         .sanitised();
 
-        assert!(got.last_league.is_empty());
+        assert!(got.last_league.get(GameVersion::Poe1).is_empty());
+
+        let per_game = Settings {
+            last_league: LastLeague::PerGame(GamePair::new(
+                "x".repeat(100),
+                "Rise of the Abyssal".to_string(),
+            )),
+            ..Settings::default()
+        }
+        .sanitised();
+
+        assert!(per_game.last_league.get(GameVersion::Poe1).is_empty());
+        assert_eq!(
+            per_game.last_league.get(GameVersion::Poe2),
+            "Rise of the Abyssal"
+        );
     }
 
     #[test]
@@ -324,12 +389,12 @@ mod tests {
         store.save(&Settings::default()).unwrap();
         store
             .save(&Settings {
-                last_league: "Hardcore".into(),
+                last_league: LastLeague::Shared("Hardcore".into()),
                 ..Settings::default()
             })
             .unwrap();
 
-        assert_eq!(store.load().last_league, "Hardcore");
+        assert_eq!(store.load().last_league.get(GameVersion::Poe1), "Hardcore");
     }
 
     #[test]
@@ -349,6 +414,59 @@ mod tests {
         let err = store.save(&Settings::default()).unwrap_err();
 
         assert!(err.to_string().contains("/proc/definitely"));
+    }
+
+    #[test]
+    fn a_settings_file_written_by_the_old_build_still_loads_its_single_league() {
+        let got: Settings =
+            serde_json::from_str(r#"{"last_league":"Rise of the Abyssal"}"#).unwrap();
+
+        assert_eq!(
+            got.last_league,
+            LastLeague::Shared("Rise of the Abyssal".into())
+        );
+    }
+
+    #[test]
+    fn a_league_remembered_for_one_game_is_not_read_back_for_the_other() {
+        let mut league = LastLeague::default();
+
+        league.set(GameVersion::Poe1, "Mercenaries");
+        league.set(GameVersion::Poe2, "Rise of the Abyssal");
+
+        assert_eq!(league.get(GameVersion::Poe1), "Mercenaries");
+        assert_eq!(league.get(GameVersion::Poe2), "Rise of the Abyssal");
+    }
+
+    #[test]
+    fn upgrading_a_single_league_keeps_it_for_the_game_that_was_not_named() {
+        let mut league = LastLeague::Shared("Standard".into());
+
+        league.set(GameVersion::Poe2, "Rise of the Abyssal");
+
+        assert_eq!(league.get(GameVersion::Poe1), "Standard");
+        assert_eq!(league.get(GameVersion::Poe2), "Rise of the Abyssal");
+    }
+
+    #[test]
+    fn a_per_game_league_survives_a_round_trip_through_the_file() {
+        let store = ConfigStore::new(&tempdir("per-game"));
+
+        let mut settings = Settings::default();
+        settings.last_league.set(GameVersion::Poe1, "Mercenaries");
+        settings
+            .last_league
+            .set(GameVersion::Poe2, "Rise of the Abyssal");
+
+        store.save(&settings).unwrap();
+
+        let got = store.load();
+
+        assert_eq!(got.last_league.get(GameVersion::Poe1), "Mercenaries");
+        assert_eq!(
+            got.last_league.get(GameVersion::Poe2),
+            "Rise of the Abyssal"
+        );
     }
 
     #[test]

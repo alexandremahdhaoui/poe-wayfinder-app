@@ -393,20 +393,43 @@ fn layer_imports(source: &Source) -> Vec<Violation> {
         .text
         .lines()
         .enumerate()
-        .filter(|(_, line)| line.trim_start().starts_with("use "))
         .flat_map(|(n, line)| {
-            let own = own.clone();
+            let code = without_string_literals(line);
 
             forbidden
                 .iter()
-                .filter(move |(prefix, _)| line.contains(*prefix) && !line.contains(&own))
-                .map(move |(_, why)| Violation {
+                .filter(|(prefix, _)| code.contains(*prefix) && !code.contains(&own))
+                .map(|(_, why)| Violation {
                     rule: "layers only depend downward",
                     path: source.relative.clone(),
                     detail: format!("line {}: {why}: {}", n + 1, line.trim()),
                 })
+                .collect::<Vec<_>>()
         })
         .collect()
+}
+
+fn without_string_literals(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut inside = false;
+    let mut escaped = false;
+
+    for c in line.chars() {
+        if escaped {
+            escaped = false;
+
+            continue;
+        }
+
+        match c {
+            '\\' if inside => escaped = true,
+            '"' => inside = !inside,
+            _ if !inside => out.push(c),
+            _ => {}
+        }
+    }
+
+    out
 }
 
 fn hand_written_fakes(source: &Source) -> Vec<Violation> {
@@ -648,6 +671,27 @@ mod tests {
         ));
 
         assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn a_driver_naming_an_adapter_by_full_path_outside_a_use_line_is_still_a_violation() {
+        let got = layer_imports(&source(
+            "src/driver/thing_driver.rs",
+            "fn look(found: Option<crate::adapter::game_window_adapter::GameWindow>) {}\n",
+        ));
+
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].rule, "layers only depend downward");
+    }
+
+    #[test]
+    fn a_driver_naming_an_adapter_error_type_in_a_match_arm_is_still_a_violation() {
+        let got = layer_imports(&source(
+            "src/driver/thing_driver.rs",
+            "            Err(crate::adapter::clipboard_adapter::ClipboardError::Empty) => None,\n",
+        ));
+
+        assert_eq!(got.len(), 1, "{got:?}");
     }
 
     #[test]

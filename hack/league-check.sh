@@ -19,17 +19,32 @@
 #   - the league it searches is the one the trade site named
 #   - naming a league still pins it, and costs no request
 #
-# Two things stop it rotting when the league changes:
+# It never names a league, so it does not rot when the league changes.
 #
-#   1. It never names a league. It fetches the list and picks from it with the
-#      same rule as `core::controller::league_list::current`: the first league
-#      that is not permanent, not hardcore and not private, falling back to the
-#      first of any kind. Taking the first `"id"` in the JSON instead agrees
-#      with the app only for as long as GGG keeps listing the temporary league
-#      first, and disagrees loudly the day they do not.
+# IT ALSO NEVER TALKS TO GGG ITSELF. It used to `curl` the league endpoint in
+# parallel with the app's own fetch of the same endpoint, which is a second
+# unthrottled request to GGG on every run, outside `http_adapter.rs` and outside
+# the rate limiter. The rate limiter is not optional and GGG bans for
+# violations, so a harness that doubles the request count of the thing it is
+# measuring is not worth any assertion it buys.
 #
-#   2. It reads the endpoint out of the app's own log line rather than
-#      hardcoding one. If the app ever asks a different URL, this follows.
+# What replaces it is the app's own `read the league list` line, which already
+# reports the league the list resolved to, and the `source` field on
+# `searching this league`, which says where the league came from: trade api,
+# configured, last run or fallback. Together those pin down every failure the
+# curl was there to catch:
+#
+#   - a fetch that failed reads as source "fallback" or "last run"
+#   - a fetch that succeeded and was then ignored shows the two lines disagree
+#   - the Standard default shows as Standard with a source that is not the
+#     trade api
+#
+# WHAT IS GIVEN UP: the league list itself is no longer read from an
+# independent source, so this can no longer prove the app picked the RIGHT
+# entry out of GGG's list, only that it used the entry it read. The shape of
+# the answer is still checked below, because a "current" league that is
+# Standard, hardcore or private means `league_list::current` picked wrong.
+# `poe-wayfinder-core` unit tests own the rest of that rule.
 #
 # It also runs against its OWN config directory. `resolve_league` falls back to
 # a remembered league from a previous session, so against the real config
@@ -85,32 +100,27 @@ sleep 2
 
 fail=0
 
-# The app's own rule for which league is current, in shell. Keep this in step
-# with core::controller::league_list::current. A private league carries its code
-# in brackets; a hardcore one is prefixed rather than flagged.
-current_league() {
-    local ids="$1" id
+# Does this name look like a league somebody is actually playing in?
+#
+# Not a reimplementation of `league_list::current` any more, because there is no
+# independent list to run it over. It only judges the ANSWER the app reported.
+# `current` coming back as Standard, as a hardcore league or as a private one
+# means the selection rule picked wrong, and that is visible without asking GGG
+# anything. A private league carries its code in brackets; a hardcore one is
+# prefixed rather than flagged.
+looks_temporary() {
+    case "$1" in
+        ""|Standard|Hardcore|"SSF Standard"|"SSF Hardcore") return 1 ;;
+        "HC "*|"Hardcore "*|"SSF "*) return 1 ;;
+        *Ruthless*) return 1 ;;
+        *"("*")"*) return 1 ;;
+    esac
 
-    while read -r id; do
-        [ -n "$id" ] || continue
-
-        case "$id" in
-            Standard|Hardcore|"SSF Standard"|"SSF Hardcore") continue ;;
-            "HC "*|"Hardcore "*) continue ;;
-            *"("*")"*) continue ;;
-        esac
-
-        echo "$id"
-
-        return 0
-    done <<<"$ids"
-
-    echo "$ids" | head -1
+    return 0
 }
 
-# The first launch is what tells us which URL the app itself uses for the
-# league list, so the expected answer below is fetched from the same place
-# rather than from a URL written here.
+# One launch, one league list request, and that request is the app's own,
+# through http_adapter.rs and through the rate limiter.
 (timeout 90 "$exe" --config-dir "$cfg" --game poe2 --log-level debug >"$log" 2>&1 &)
 
 if ! wait_for 60 "$log" '"msg":"searching this league"'; then
@@ -129,53 +139,82 @@ else
     fail=1
 fi
 
+# A fetch that the trade site refused, or that never got out, leaves the app
+# guessing. It says so on its own, and a run that ignores those lines reads a
+# guess as an answer.
+#
+# Written out one grep per message rather than looped over a list, because
+# harness-lint.sh scans this file for `"msg":"..."` literals and checks the Rust
+# still logs each one. A message built up in a shell variable is invisible to
+# that scan, so it would rot the moment somebody reworded the Rust.
+check_absent() {
+    if grep -q "$1" "$log"; then
+        echo "FAIL: the app could not get a league and said so."
+        grep "$1" "$log" | tail -1
+        echo "      Whatever it searched after that is a guess, and the guess is"
+        echo "      Standard, where junk sits unsold at absurd prices."
+        fail=1
+    fi
+}
+
+check_absent '"msg":"could not read the league list, so the league falls back"'
+check_absent '"msg":"the trade api refused the league list, so the league falls back"'
+check_absent '"msg":"nothing named a league, so the search falls back to Standard"'
+
+# What the list resolved to, reported by the app rather than fetched a second
+# time. "none" is the app saying the list held nothing it could use.
+listed=$(field "$log" "read the league list" current)
 url=$(field "$log" "read the league list" url)
 
-if [ -z "$url" ]; then
-    url="https://www.pathofexile.com/api/trade2/data/leagues"
+echo "note: the app read the league list from ${url:-nowhere it logged} and picked ${listed:-nothing}"
 
-    echo "note: the app logged no league list url, falling back to $url"
+if [ -z "$listed" ] || [ "$listed" = "none" ]; then
+    echo "FAIL: the league list gave the app nothing to use."
+    echo "      It then searches whatever is left, which is Standard."
+    fail=1
+elif looks_temporary "$listed"; then
+    echo "PASS: the list resolved to $listed, which is shaped like a league being played."
+else
+    echo "FAIL: the list resolved to $listed, which is permanent, hardcore or private."
+    echo "      core::controller::league_list::current picked the wrong entry, so"
+    echo "      every price comes from a market almost nobody is trading in."
+    fail=1
 fi
-
-leagues=$(curl -s --max-time 20 -H "accept: application/json" "$url")
-ids=$(echo "$leagues" | grep -oE '"id":"[^"]+"' | cut -d'"' -f4)
-
-if [ -z "$ids" ]; then
-    echo "SKIP: the trade site did not answer with a league list, so nothing here"
-    echo "      can be told apart from a network problem."
-    exit 0
-fi
-
-expected=$(current_league "$ids")
-
-echo "note: the trade site lists $(echo "$ids" | wc -l) leagues, current is $expected"
 
 searching=$(field "$log" "searching this league" league)
+source_of=$(field "$log" "searching this league" source)
 
-if [ "$searching" = "$expected" ]; then
-    echo "PASS: it is searching $searching."
+# THE self consistency assertion. The app read a league and then has to search
+# that one. A fetch that succeeds and is then thrown away for a remembered or
+# default value is exactly the shipped bug, and it is visible without asking
+# GGG a second time.
+if [ -n "$listed" ] && [ "$listed" != "none" ] && [ "$searching" = "$listed" ]; then
+    echo "PASS: it is searching $searching, the league its own list lookup returned."
 else
-    echo "FAIL: it reports ${searching:-no league at all} while the current league is $expected."
-    echo "      Every price will come from a market the item is not in."
+    echo "FAIL: it read $listed from the league list and searches ${searching:-no league at all}."
+    echo "      Reading the right answer and then not using it prices every item"
+    echo "      against a market it is not in."
+    fail=1
+fi
+
+# Where the league came from, from the app's own field. "trade api" is the only
+# correct answer with no --league: "last run" means a remembered value masked
+# the fetch, "fallback" is the Standard default, and "configured" with an empty
+# --league would mean the empty string won.
+if [ "$source_of" = "trade api" ]; then
+    echo "PASS: the league came from the trade site rather than from a default."
+else
+    echo "FAIL: with no --league the league came from \"${source_of:-nothing logged}\"."
+    echo "      Only \"trade api\" means it was asked for. The config directory is"
+    echo "      fresh, so there is nothing legitimate to remember."
     fail=1
 fi
 
 # Standard is a real answer when the trade site gives it, and a wrong one when
 # it is a leftover default. The two are told apart by whether it was asked for.
-if [ "$searching" = "Standard" ] && [ "$expected" != "Standard" ]; then
+if [ "$searching" = "Standard" ] && [ "$listed" != "Standard" ]; then
     echo "FAIL: it fell back to Standard, which is the bug this check exists for."
     echo "      Standard listings never expire, so a levelling item prices at divines."
-    fail=1
-fi
-
-# Whatever it settled on has to be a league that exists. A league the trade site
-# has never heard of returns an empty search rather than an error, so it reads
-# as "nothing is listed" rather than as a broken league.
-if echo "$ids" | grep -qxF "${searching:-}"; then
-    echo "PASS: $searching is a league the trade site actually lists."
-else
-    echo "FAIL: it is searching ${searching:-nothing}, which is not in the league list."
-    echo "      That search comes back empty and reads as an item nobody is selling."
     fail=1
 fi
 
@@ -197,6 +236,19 @@ if ! wait_for 50 "$pinned_log" '"msg":"searching this league"'; then
 fi
 
 pinned=$(field "$pinned_log" "searching this league" league)
+pinned_source=$(field "$pinned_log" "searching this league" source)
+
+# The right name reached by the wrong route is still a bug. "Standard" is also
+# what the fallback produces, so without the source field a completely broken
+# pin passes this by accident.
+if [ "$pinned_source" = "configured" ]; then
+    echo "PASS: the pinned league came from the flag rather than from a fallback."
+else
+    echo "FAIL: --league Standard was honoured by name but the source is"
+    echo "      \"${pinned_source:-nothing logged}\". Standard is also what the"
+    echo "      fallback produces, so this run proves nothing about pinning."
+    fail=1
+fi
 
 if [ "$pinned" = "Standard" ]; then
     echo "PASS: --league still pins the league."

@@ -87,6 +87,20 @@ test:
       command: cargo
       args: ["test", "-p", "poe-wayfinder-app"]
 
+  # The only end to end harness gate that is safe to automate. It is hermetic:
+  # no Windows host, no network, about a second. It checks every log message a
+  # harness greps for still exists in the Rust, so a renamed line fails here
+  # rather than silently turning every assertion built on it into a grep for a
+  # string that can never appear.
+  #
+  # No other harness belongs in forge. They need a Windows desktop and six of
+  # them hit GGG, and the rate limiter is not optional.
+  - name: harness-lint
+    runner: go://generic-test-runner
+    spec:
+      command: bash
+      args: ["hack/harness-lint.sh"]
+
   # How much of the reference is ported, as a number rather than an opinion.
   #
   # The floor only ever goes up. Raising it is how a port stops being a claim

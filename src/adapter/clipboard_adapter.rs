@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+#[cfg(windows)]
+use poe_wayfinder_core::controller::overlay::copy_key_sequence;
 use poe_wayfinder_core::controller::overlay::{clipboard_kind, ClipboardKind};
 
 use thiserror::Error;
@@ -17,6 +19,9 @@ pub enum ClipboardError {
 
     #[error("the clipboard did not change within {waited:?}")]
     NoChange { waited: Duration },
+
+    #[error("asking the game to copy: {sent} of {asked} key events reached it")]
+    Trigger { sent: usize, asked: usize },
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -119,6 +124,78 @@ impl Clipboard for SystemClipboard {
         self.inner
             .set_text(text.to_string())
             .map_err(|e| ClipboardError::Write(Box::new(e)))
+    }
+}
+
+#[cfg(windows)]
+pub struct KeyboardCopyTrigger;
+
+#[cfg(windows)]
+impl KeyboardCopyTrigger {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl Default for KeyboardCopyTrigger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(windows)]
+impl CopyTrigger for KeyboardCopyTrigger {
+    fn trigger_copy(&self) -> Result<(), ClipboardError> {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, VK_C, VK_CONTROL};
+
+        let events: Vec<INPUT> = copy_key_sequence()
+            .iter()
+            .filter_map(|stroke| {
+                let key = match stroke.key.as_str() {
+                    "Ctrl" => VK_CONTROL,
+                    "C" => VK_C,
+                    _ => return None,
+                };
+
+                Some(win::key_event(key, !stroke.down))
+            })
+            .collect();
+
+        let sent = unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) } as usize;
+
+        if sent != events.len() {
+            return Err(ClipboardError::Trigger {
+                sent,
+                asked: events.len(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+mod win {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+
+    pub fn key_event(key: VIRTUAL_KEY, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: key,
+                    dwFlags: if up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        }
     }
 }
 

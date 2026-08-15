@@ -7,12 +7,6 @@ pub use search::{urlencode, SearchOutcome};
 
 #[derive(Debug, Error)]
 pub enum OverlayLoopError {
-    #[error("opening the clipboard")]
-    Clipboard {
-        #[source]
-        source: crate::adapter::clipboard_adapter::ClipboardError,
-    },
-
     #[error("starting the search runtime")]
     Runtime {
         #[source]

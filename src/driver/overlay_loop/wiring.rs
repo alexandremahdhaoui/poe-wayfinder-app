@@ -106,12 +106,16 @@ pub fn panel_hold() -> bool {
     std::env::args().any(|a| a == "--panel-hold")
 }
 
-pub fn remembered_league(config_dir: &std::path::Path) -> Option<String> {
-    build_settings(config_dir).last_league()
+pub fn remembered_league(config_dir: &std::path::Path, game: GameVersion) -> Option<String> {
+    build_settings(config_dir).last_league(game)
 }
 
-pub fn league_is_unknown(config_dir: &std::path::Path) -> bool {
-    remembered_league(config_dir).is_none()
+pub fn remember_league(config_dir: &std::path::Path, game: GameVersion, league: &str) {
+    build_settings(config_dir).remember_league(game, league);
+}
+
+pub fn league_is_unknown(config_dir: &std::path::Path, game: GameVersion) -> bool {
+    remembered_league(config_dir, game).is_none()
 }
 
 pub const FALLBACK_LEAGUE: &str = "Standard";
@@ -182,7 +186,7 @@ pub fn league_for(
 
     let league = resolve_league(
         &cfg.league,
-        remembered_league(config_dir),
+        remembered_league(config_dir, game),
         match asked {
             true => fetch_current_league(http, &cfg.trade_base_url, game, log),
             false => None,
@@ -206,12 +210,17 @@ pub fn league_for(
             ("league", Value::Str(league.name.clone())),
             ("source", Value::Str(league.from.as_str().to_string())),
             ("configured", Value::Str(cfg.league.clone())),
+            ("game", Value::Str(game.as_str().to_string())),
             (
                 "remembered",
-                Value::Str(remembered_league(config_dir).unwrap_or_else(|| "none".to_string())),
+                Value::Str(
+                    remembered_league(config_dir, game).unwrap_or_else(|| "none".to_string()),
+                ),
             ),
         ],
     );
+
+    remember_league(config_dir, game, &league.name);
 
     league.name
 }
@@ -517,11 +526,10 @@ pub fn build_copier(
 ) -> Option<
     crate::controller::copy_controller::CopyController<
         crate::adapter::clipboard_adapter::SystemClipboard,
-        crate::adapter::game_window_adapter::KeyboardCopyTrigger,
+        crate::adapter::clipboard_adapter::KeyboardCopyTrigger,
     >,
 > {
-    use crate::adapter::clipboard_adapter::{CopyTiming, SystemClipboard};
-    use crate::adapter::game_window_adapter::KeyboardCopyTrigger;
+    use crate::adapter::clipboard_adapter::{CopyTiming, KeyboardCopyTrigger, SystemClipboard};
     use crate::controller::copy_controller::CopyController;
 
     let clipboard = match SystemClipboard::new() {
@@ -1054,7 +1062,7 @@ mod tests {
 
         let settings = build_settings(std::path::Path::new("/nowhere/at/all"));
 
-        assert_eq!(settings.last_league(), None);
+        assert_eq!(settings.last_league(GameVersion::Poe2), None);
     }
     #[test]
     fn a_diagnostic_flag_never_reaches_the_config_parser() {

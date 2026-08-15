@@ -3,3 +3,5 @@
 target/
 /data-poe1/
 /data-poe2/
+__pycache__/
+*.pyc

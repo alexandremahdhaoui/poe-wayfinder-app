@@ -1,8 +1,10 @@
+use poe_wayfinder_core::types::GameVersion;
+
 use crate::adapter::config_store_adapter::{Settings, SettingsStore};
 
 #[cfg_attr(test, mockall::automock)]
 pub trait RememberedSettings {
-    fn last_league(&self) -> Option<String>;
+    fn last_league(&self, game: GameVersion) -> Option<String>;
 
     fn notes(&self) -> String {
         String::new()
@@ -16,7 +18,7 @@ pub trait RememberedSettings {
 
     fn remember_verdict(&mut self, _matcher: &str, _decisions: &str) {}
 
-    fn remember_league(&mut self, league: &str);
+    fn remember_league(&mut self, game: GameVersion, league: &str);
 }
 
 pub struct SettingsController<S: SettingsStore> {
@@ -72,19 +74,21 @@ impl<S: SettingsStore> RememberedSettings for SettingsController<S> {
         let _ = self.store.save(&self.settings);
     }
 
-    fn last_league(&self) -> Option<String> {
-        match self.settings.last_league.is_empty() {
+    fn last_league(&self, game: GameVersion) -> Option<String> {
+        let known = self.settings.last_league.get(game);
+
+        match known.is_empty() {
             true => None,
-            false => Some(self.settings.last_league.clone()),
+            false => Some(known.to_string()),
         }
     }
 
-    fn remember_league(&mut self, league: &str) {
-        if league.is_empty() || self.settings.last_league == league {
+    fn remember_league(&mut self, game: GameVersion, league: &str) {
+        if league.is_empty() || self.settings.last_league.get(game) == league {
             return;
         }
 
-        self.settings.last_league = league.to_string();
+        self.settings.last_league.set(game, league);
 
         let _ = self.store.save(&self.settings);
     }
@@ -101,7 +105,7 @@ mod tests {
         let mut store = MockSettingsStore::new();
 
         store.expect_load().returning(move || Settings {
-            last_league: league.clone(),
+            last_league: crate::adapter::config_store_adapter::LastLeague::Shared(league.clone()),
             ..Settings::default()
         });
 
@@ -172,14 +176,17 @@ mod tests {
     fn a_league_from_a_previous_run_is_offered() {
         let controller = SettingsController::new(store_holding("Standard"));
 
-        assert_eq!(controller.last_league(), Some("Standard".to_string()));
+        assert_eq!(
+            controller.last_league(GameVersion::Poe2),
+            Some("Standard".to_string())
+        );
     }
 
     #[test]
     fn a_first_run_offers_nothing_rather_than_an_empty_name() {
         let controller = SettingsController::new(store_holding(""));
 
-        assert_eq!(controller.last_league(), None);
+        assert_eq!(controller.last_league(GameVersion::Poe2), None);
     }
 
     #[test]
@@ -189,10 +196,33 @@ mod tests {
 
         let mut controller = SettingsController::new(store);
 
-        controller.remember_league("Rise of the Abyssal");
+        controller.remember_league(GameVersion::Poe2, "Rise of the Abyssal");
 
         assert_eq!(
-            controller.last_league(),
+            controller.last_league(GameVersion::Poe2),
+            Some("Rise of the Abyssal".to_string())
+        );
+    }
+
+    #[test]
+    fn a_league_learned_for_one_game_never_becomes_the_other_game_s_league() {
+        let mut store = store_holding("");
+        store.expect_save().returning(|_| Ok(()));
+
+        let mut controller = SettingsController::new(store);
+
+        controller.remember_league(GameVersion::Poe2, "Rise of the Abyssal");
+
+        assert_eq!(controller.last_league(GameVersion::Poe1), None);
+
+        controller.remember_league(GameVersion::Poe1, "Mercenaries");
+
+        assert_eq!(
+            controller.last_league(GameVersion::Poe1),
+            Some("Mercenaries".to_string())
+        );
+        assert_eq!(
+            controller.last_league(GameVersion::Poe2),
             Some("Rise of the Abyssal".to_string())
         );
     }
@@ -202,7 +232,7 @@ mod tests {
         let mut store = store_holding("Standard");
         store.expect_save().never();
 
-        SettingsController::new(store).remember_league("Standard");
+        SettingsController::new(store).remember_league(GameVersion::Poe2, "Standard");
     }
 
     #[test]
@@ -210,7 +240,7 @@ mod tests {
         let mut store = store_holding("Standard");
         store.expect_save().never();
 
-        SettingsController::new(store).remember_league("");
+        SettingsController::new(store).remember_league(GameVersion::Poe2, "");
     }
 
     #[test]
@@ -225,10 +255,10 @@ mod tests {
 
         let mut controller = SettingsController::new(store);
 
-        controller.remember_league("Rise of the Abyssal");
+        controller.remember_league(GameVersion::Poe2, "Rise of the Abyssal");
 
         assert_eq!(
-            controller.last_league(),
+            controller.last_league(GameVersion::Poe2),
             Some("Rise of the Abyssal".to_string())
         );
     }

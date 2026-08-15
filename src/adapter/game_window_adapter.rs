@@ -9,9 +9,6 @@ pub enum WindowError {
 
     #[error("reading the window rectangle for {title:?}")]
     Rect { title: String },
-
-    #[error("sending input to the game window")]
-    SendInput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,15 +47,13 @@ pub fn foreground_is_ours(foreground_pid: u32, our_pid: u32) -> bool {
 mod win {
     use super::{GameWindow, GameWindowSource, WindowError};
     use crate::types::overlay::WindowRect;
-    use poe_wayfinder_core::controller::overlay::copy_key_sequence;
 
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{HWND, POINT, RECT};
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C,
-        VK_CONTROL,
+        SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         FindWindowW, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
@@ -174,47 +169,6 @@ mod win {
             }
 
             dpi as f32 / 96.0
-        }
-    }
-
-    pub struct KeyboardCopyTrigger;
-
-    impl KeyboardCopyTrigger {
-        pub fn new() -> Self {
-            Self
-        }
-    }
-
-    impl Default for KeyboardCopyTrigger {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl crate::adapter::clipboard_adapter::CopyTrigger for KeyboardCopyTrigger {
-        fn trigger_copy(&self) -> Result<(), crate::adapter::clipboard_adapter::ClipboardError> {
-            let events: Vec<INPUT> = copy_key_sequence()
-                .iter()
-                .filter_map(|stroke| {
-                    let key = match stroke.key.as_str() {
-                        "Ctrl" => VK_CONTROL,
-                        "C" => VK_C,
-                        _ => return None,
-                    };
-
-                    Some(key_event(key, !stroke.down))
-                })
-                .collect();
-
-            let sent = unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) };
-
-            if sent as usize != events.len() {
-                return Err(crate::adapter::clipboard_adapter::ClipboardError::Open(
-                    Box::new(WindowError::SendInput),
-                ));
-            }
-
-            Ok(())
         }
     }
 
@@ -338,7 +292,7 @@ mod win {
 #[cfg(windows)]
 pub use win::{
     foreground_title, press_combination, self_test_send_input, visible_window_titles,
-    GameWindowAdapter, KeyboardCopyTrigger,
+    GameWindowAdapter,
 };
 
 #[cfg(test)]
@@ -402,7 +356,6 @@ mod tests {
         let messages: Vec<String> = [
             WindowError::NotFound { title: "a".into() },
             WindowError::Rect { title: "a".into() },
-            WindowError::SendInput,
         ]
         .iter()
         .map(std::string::ToString::to_string)

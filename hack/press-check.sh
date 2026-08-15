@@ -184,7 +184,12 @@ fi
 
 # One press, one check. Both watchers see the same press and they land a frame
 # apart, so this is the only thing that catches a broken guard.
-presses=$(grep -c '"msg":"price check hotkey pressed"' "$log")
+#
+# `${presses:-0}` because grep -c prints nothing at all when the file is
+# missing, and an empty operand aborts the comparison with "integer expected"
+# and return code 2, which reads as false. The whole assertion then disappears.
+presses=$(grep -c '"msg":"price check hotkey pressed"' "$log" 2>/dev/null)
+presses=${presses:-0}
 
 if [ "$presses" -ne 1 ]; then
     echo "FAIL: one press produced $presses price checks. Each one is a request against the rate limit."

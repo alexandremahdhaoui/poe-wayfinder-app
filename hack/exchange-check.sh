@@ -20,9 +20,28 @@
 # went out. press-check.sh runs item-currency.txt but skips the filter row
 # assertion for it and never looks at the request. So this exists.
 #
-# The expected `have` list is derived here the same way the Rust derives it,
-# from the trade tag the run itself logged. Hardcoding "exalted" would pass for
-# a Divine Orb and lie about every other currency.
+# WHAT THIS ASSERTS ON, AND WHY IT CHANGED.
+#
+# The first version of this script read `priced_in` off the request log line and
+# compared it against a shell reimplementation of the same rule. That proved
+# nothing. The driver PRODUCES `priced_in` by calling
+# `bulk::currencies_to_price_in`, which is the same function the request builder
+# calls separately. Delete the `have` argument from `to_exchange_json` entirely
+# and every one of those assertions still passes, because both sides of the
+# comparison come from the same source. It was testing that a function equals
+# itself.
+#
+# The assertion that cannot be faked is the ANSWER. If the request really
+# carried `have`, the trade site can only answer in a currency that was asked
+# for. If `have` was dropped on the way to the wire, the exchange answers in
+# whatever the seller had, which is how an Orb of Augmentation came back as
+# "~99 waystone-3". So the currency on the estimate is the primary assertion
+# here, and no estimate is a FAIL rather than a note, because a run that formed
+# no estimate measured nothing about the wire at all.
+#
+# The derived `have` list below is kept, but it is secondary and it is honest
+# about what it covers: it catches the RULE being wrong, never the request
+# dropping the list.
 #
 # Needs a Windows host and the network. Run it from WSL after hack/deploy.sh.
 
@@ -84,9 +103,11 @@ fi
 
 wait_for_check_to_settle 60 "$log"
 
-# The request line is debug and carries the whole outgoing shape. Without it
-# there is no way to tell a correct exchange from a wrong one after the fact,
-# which is exactly why this bug lived in a released build.
+# The request line is debug and carries a SUMMARY of the outgoing request that
+# the driver re-derives for the log: the endpoint, the trade tag, the currencies
+# the rule says to ask for, the filter count and the item. It is not the request
+# body and it is not read off the socket. It is enough to tell which endpoint an
+# item went to and which rule fired, and that is all it is used for below.
 if ! grep -q '"msg":"the request being sent"' "$log"; then
     echo "FAIL: nothing logged what was actually sent to the trade site."
     echo "      A wrong price can then only be diagnosed by reproducing it live."
@@ -133,9 +154,15 @@ else
     echo "PASS: the exchange asked to be paid in $priced_in."
 fi
 
-# Derived rather than hardcoded, the same way currencies_to_price_in derives it:
-# the game's standard currencies, minus the one being priced. A hardcoded
-# "exalted" passes for a Divine Orb and says nothing about an Exalted Orb.
+# SECONDARY, and weaker than it looks. Both sides of this comparison come from
+# the same rule: the log field is produced by calling currencies_to_price_in and
+# the expected value below reimplements currencies_to_price_in in shell. So this
+# catches the RULE changing to something wrong. It cannot catch the list being
+# dropped between the rule and the socket, because the log field would still be
+# right. The answer assertion further down is the one that catches that.
+#
+# Derived rather than hardcoded even so: a hardcoded "exalted" passes for a
+# Divine Orb and says nothing about an Exalted Orb.
 case "$game" in
     poe1) standard="chaos divine" ;;
     *)    standard="exalted divine" ;;
@@ -160,7 +187,7 @@ fi
 
 # Nothing is ever priced in itself. That request comes back empty every time and
 # the user sees no price at all.
-if echo ",$priced_in," | grep -q ",$tag,"; then
+if echo ",$priced_in," | grep -qF ",$tag,"; then
     echo "FAIL: it asked to be paid in $tag for $tag. That exchange has no offers."
     fail=1
 fi
@@ -169,15 +196,44 @@ fi
 # name, never a raw trade id with a tier number stuck on it.
 assert_currency_is_named "$log" || fail=1
 
+# A refused query still reaches "price check finished", so without this a run
+# where the trade api threw the search out looks like a quiet run with no
+# offers. press-check.sh already treats this line as a failure. It is checked
+# here BEFORE the estimate, because a refused search is the most likely reason
+# no estimate formed and saying so is more useful than "no estimate".
+if grep -q '"msg":"searching the trade site"' "$log"; then
+    echo "FAIL: the trade api refused the exchange search:"
+    grep '"msg":"searching the trade site"' "$log" | tail -1
+    echo "      Nothing below this line measured what was on the wire."
+    fail=1
+fi
+
+# THE assertion this script exists for.
+#
+# Everything above reads fields the driver derived from the same function the
+# request builder calls, so all of it still passes if the have list never
+# reaches the wire. This does not. The trade site can only answer in a currency
+# it was offered, so a price denominated in one of them is proof the list
+# travelled. A price in anything else is the waystone bug, live.
 currency=$(field "$log" "the estimate behind the headline" currency)
 
 if [ -z "$currency" ]; then
-    echo "note: no estimate formed this run, so only the outgoing request was proved."
-elif echo ",$priced_in," | grep -q ",$currency,"; then
+    echo "FAIL: no estimate formed, so nothing proved the have list reached the wire."
+    echo "      Every assertion above reads a field the driver re-derives with the"
+    echo "      same function the request builder calls. Only the currency the"
+    echo "      exchange answered in is evidence the list was actually sent."
+    echo "      Re-run it. A currency with no offers at all in this league is the"
+    echo "      only innocent explanation and it is not one this can assume."
+    grep '"msg":"no estimate was formed"' "$log" | tail -1
+    fail=1
+elif echo ",$priced_in," | grep -qF ",$currency,"; then
     echo "PASS: the price came back in $currency, which is one of the currencies asked for."
+    echo "      The exchange can only answer in a currency it was offered, so the"
+    echo "      have list reached the trade site rather than only the log."
 else
     echo "FAIL: it asked to be paid in $priced_in and was answered in $currency."
-    echo "      A price in a currency nobody asked for is the waystone bug again."
+    echo "      A price in a currency nobody asked for is the waystone bug again:"
+    echo "      the have list is missing from the request that went out."
     fail=1
 fi
 
