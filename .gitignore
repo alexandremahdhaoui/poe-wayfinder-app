@@ -5,3 +5,4 @@ target/
 /data-poe2/
 __pycache__/
 *.pyc
+hack/*.py
