@@ -1,5 +1,7 @@
 use std::time::{Duration, SystemTime};
 
+use poe_wayfinder_core::controller::league_list::LeagueFrom;
+use poe_wayfinder_core::controller::switching::{GameOption, LeagueMenu};
 use poe_wayfinder_core::types::GameVersion;
 
 use crate::adapter::rate_limit_adapter::LimiterLine;
@@ -31,7 +33,9 @@ pub struct Status {
     pub window_title: String,
     pub hotkey: String,
     pub league: String,
-    pub league_source: LeagueSource,
+    pub league_source: LeagueFrom,
+    pub league_menu: LeagueMenu,
+    pub game_menu: Vec<GameOption>,
     pub origin: String,
     pub stats: usize,
     pub items: usize,
@@ -41,24 +45,6 @@ pub struct Status {
     pub network: bool,
     pub limits: Vec<LimiterLine>,
     pub note: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum LeagueSource {
-    #[default]
-    Configured,
-    Remembered,
-    GameLog,
-}
-
-impl LeagueSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LeagueSource::Configured => "as configured",
-            LeagueSource::Remembered => "from the last run",
-            LeagueSource::GameLog => "read from the game",
-        }
-    }
 }
 
 pub fn health(status: &Status) -> Health {
@@ -126,7 +112,18 @@ pub fn league_caption(status: &Status) -> String {
         false => status.league.as_str(),
     };
 
-    format!("{league}, {}", status.league_source.as_str())
+    format!("{league}, {}", source_caption(status.league_source))
+}
+
+fn source_caption(from: LeagueFrom) -> &'static str {
+    match from {
+        LeagueFrom::Configured => "as configured",
+        LeagueFrom::Chosen => "chosen by hand",
+        LeagueFrom::TradeApi => "the trade site's current league",
+        LeagueFrom::LastRun => "from the last run",
+        LeagueFrom::GameLog => "read from the game",
+        LeagueFrom::Fallback => "a fallback, nothing named one",
+    }
 }
 
 pub fn refresh_caption(last: Option<SystemTime>, now: SystemTime) -> String {
@@ -306,17 +303,35 @@ mod tests {
     #[test]
     fn the_league_caption_says_where_the_league_came_from() {
         for source in [
-            LeagueSource::Configured,
-            LeagueSource::Remembered,
-            LeagueSource::GameLog,
+            LeagueFrom::Configured,
+            LeagueFrom::Chosen,
+            LeagueFrom::TradeApi,
+            LeagueFrom::LastRun,
+            LeagueFrom::GameLog,
+            LeagueFrom::Fallback,
         ] {
             let status = Status {
                 league_source: source,
                 ..ready()
             };
 
-            assert!(league_caption(&status).contains(source.as_str()));
+            assert!(league_caption(&status).contains(source_caption(source)));
         }
+    }
+
+    #[test]
+    fn a_league_the_user_chose_by_hand_does_not_read_as_one_the_app_worked_out() {
+        let chosen = Status {
+            league_source: LeagueFrom::Chosen,
+            ..ready()
+        };
+
+        let automatic = Status {
+            league_source: LeagueFrom::TradeApi,
+            ..ready()
+        };
+
+        assert_ne!(league_caption(&chosen), league_caption(&automatic));
     }
 
     #[test]

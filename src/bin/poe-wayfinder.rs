@@ -148,7 +148,7 @@ fn run_overlay(
         return ExitCode::FAILURE;
     };
 
-    settings.league = wiring::league_for(cfg, config_dir, &http, game, &log);
+    wiring::choose_league_at_start(&mut settings, cfg, config_dir, &http, game, &log);
 
     let prices = PriceCheckController::new(
         http,

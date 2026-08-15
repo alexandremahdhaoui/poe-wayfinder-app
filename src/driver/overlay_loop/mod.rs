@@ -23,6 +23,11 @@ pub struct OverlaySettings {
     pub pinned_title: bool,
     pub pinned_game: Option<poe_wayfinder_core::types::GameVersion>,
     pub league: String,
+    pub league_from: poe_wayfinder_core::controller::league_list::LeagueFrom,
+    pub known_leagues: poe_wayfinder_core::types::GamePair<Vec<String>>,
+    pub league_choice: poe_wayfinder_core::types::GamePair<
+        poe_wayfinder_core::controller::switching::LeagueChoice,
+    >,
     pub session: String,
     pub site_url: String,
     pub data_dir: String,

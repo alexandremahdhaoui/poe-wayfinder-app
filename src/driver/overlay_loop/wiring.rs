@@ -9,7 +9,8 @@ use crate::controller::settings_controller::{RememberedSettings, SettingsControl
 use crate::logging::{Logger, Value};
 
 use poe_wayfinder_core::controller::game_detect;
-use poe_wayfinder_core::controller::league_list;
+use poe_wayfinder_core::controller::league_list::{self, LeagueFrom};
+use poe_wayfinder_core::controller::switching::LeagueChoice;
 use poe_wayfinder_core::controller::trade_api::TradeUrls;
 use poe_wayfinder_core::types::{GamePair, GameVersion};
 
@@ -118,81 +119,54 @@ pub fn league_is_unknown(config_dir: &std::path::Path, game: GameVersion) -> boo
     remembered_league(config_dir, game).is_none()
 }
 
-pub const FALLBACK_LEAGUE: &str = "Standard";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeagueFrom {
-    Configured,
-    TradeApi,
-    LastRun,
-    Fallback,
+pub fn league_pinned(config_dir: &std::path::Path, game: GameVersion) -> bool {
+    build_settings(config_dir).league_is_pinned(game)
 }
 
-impl LeagueFrom {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LeagueFrom::Configured => "configured",
-            LeagueFrom::TradeApi => "trade api",
-            LeagueFrom::LastRun => "last run",
-            LeagueFrom::Fallback => "fallback",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct League {
-    pub name: String,
-    pub from: LeagueFrom,
-}
-
-pub fn resolve_league(
-    configured: &str,
-    remembered: Option<String>,
-    fetched: Option<String>,
-) -> League {
-    let ordered = [
-        (LeagueFrom::Configured, Some(configured.to_string())),
-        (LeagueFrom::TradeApi, fetched),
-        (LeagueFrom::LastRun, remembered),
-    ];
-
-    for (from, candidate) in ordered {
-        let Some(name) = candidate else {
-            continue;
-        };
-
-        if !name.trim().is_empty() {
-            return League {
-                name: name.trim().to_string(),
-                from,
-            };
-        }
-    }
-
-    League {
-        name: FALLBACK_LEAGUE.to_string(),
-        from: LeagueFrom::Fallback,
-    }
-}
-
-pub fn league_for(
+pub fn choose_league_at_start(
+    settings: &mut super::OverlaySettings,
     cfg: &PoeWayfinderConfig,
     config_dir: &std::path::Path,
     http: &HttpAdapter,
     game: GameVersion,
     log: &Logger,
-) -> String {
+) {
     let asked = cfg.league.trim().is_empty();
+    let remembered = remembered_league(config_dir, game);
+    let pinned = league_pinned(config_dir, game);
 
-    let league = resolve_league(
-        &cfg.league,
-        remembered_league(config_dir, game),
-        match asked {
-            true => fetch_current_league(http, &cfg.trade_base_url, game, log),
+    let fetched = match asked {
+        true => fetch_league_list(http, &cfg.trade_base_url, game, log),
+        false => Vec::new(),
+    };
+
+    let league = league_list::resolve(league_list::Sources {
+        configured: &cfg.league,
+        chosen: match pinned {
+            true => remembered.clone(),
             false => None,
         },
-    );
+        fetched: league_list::current(&fetched),
+        remembered: remembered.clone(),
+    });
 
+    *settings.known_leagues.get_mut(game) = fetched;
+    *settings.league_choice.get_mut(game) = match pinned {
+        true => LeagueChoice::Named(league.name.clone()),
+        false => LeagueChoice::Automatic,
+    };
+
+    settings.league_from = league.from;
+    settings.league = league_named(cfg, config_dir, game, &league, log);
+}
+
+fn league_named(
+    cfg: &PoeWayfinderConfig,
+    config_dir: &std::path::Path,
+    game: GameVersion,
+    league: &league_list::League,
+    log: &Logger,
+) -> String {
     if league.from == LeagueFrom::Fallback {
         log.warn(
             "nothing named a league, so the search falls back to Standard",
@@ -222,31 +196,37 @@ pub fn league_for(
 
     remember_league(config_dir, game, &league.name);
 
-    league.name
+    league.name.clone()
 }
 
-pub fn fetch_current_league(
+pub fn fetch_league_list(
     http: &HttpAdapter,
     base_url: &str,
     game: GameVersion,
     log: &Logger,
-) -> Option<String> {
+) -> Vec<String> {
     let url = TradeUrls::new(base_url, game).data("leagues");
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .ok()?;
+    else {
+        return Vec::new();
+    };
 
-    let response = runtime
-        .block_on(http.get(&url, &[("accept", "application/json")]))
-        .map_err(|err| {
+    let response = runtime.block_on(http.get(&url, &[("accept", "application/json")]));
+
+    let response = match response {
+        Ok(response) => response,
+        Err(err) => {
             log.warn(
                 "could not read the league list, so the league falls back",
                 &[("error", Value::Str(crate::util::error_chain::render(&err)))],
             );
-        })
-        .ok()?;
+
+            return Vec::new();
+        }
+    };
 
     if response.status != 200 {
         log.warn(
@@ -254,10 +234,10 @@ pub fn fetch_current_league(
             &[("status", Value::Int(i64::from(response.status)))],
         );
 
-        return None;
+        return Vec::new();
     }
 
-    let found = league_list::current(&league_list::parse(&response.body));
+    let listed = league_list::parse(&response.body);
 
     log.info(
         "read the league list",
@@ -265,12 +245,14 @@ pub fn fetch_current_league(
             ("url", Value::Str(url)),
             (
                 "current",
-                Value::Str(found.clone().unwrap_or_else(|| "none".to_string())),
+                Value::Str(league_list::current(&listed).unwrap_or_else(|| "none".to_string())),
             ),
+            ("leagues", Value::Int(listed.len() as i64)),
+            ("every", Value::Str(listed.join(","))),
         ],
     );
 
-    found
+    listed
 }
 
 pub fn window_title(configured: &str, game: GameVersion) -> String {
@@ -342,6 +324,9 @@ pub fn build_settings_for(
         pinned_title: !cfg.window_title.trim().is_empty(),
         pinned_game: pinned,
         league: cfg.league.clone(),
+        league_from: LeagueFrom::default(),
+        known_leagues: GamePair::default(),
+        league_choice: GamePair::default(),
         session: cfg.poesessid.clone(),
         site_url: cfg.trade_base_url.clone(),
         data_dir: cfg.data_dir.clone(),
@@ -834,52 +819,6 @@ fn write_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_named_league_wins_over_anything_detected() {
-        let got = resolve_league("Standard", Some("Runes of Aldur".into()), Some("HC".into()));
-
-        assert_eq!(got.name, "Standard");
-        assert_eq!(got.from, LeagueFrom::Configured);
-    }
-
-    #[test]
-    fn an_unset_league_takes_the_one_the_trade_site_reports() {
-        let got = resolve_league("", Some("Old League".into()), Some("Runes of Aldur".into()));
-
-        assert_eq!(got.name, "Runes of Aldur");
-        assert_eq!(got.from, LeagueFrom::TradeApi);
-    }
-
-    #[test]
-    fn a_league_lookup_that_failed_falls_back_to_the_last_run() {
-        let got = resolve_league("", Some("Runes of Aldur".into()), None);
-
-        assert_eq!(got.name, "Runes of Aldur");
-        assert_eq!(got.from, LeagueFrom::LastRun);
-    }
-
-    #[test]
-    fn knowing_nothing_at_all_searches_standard_rather_than_no_league() {
-        for spelling in ["", "   "] {
-            let got = resolve_league(spelling, None, None);
-
-            assert_eq!(got.name, FALLBACK_LEAGUE);
-            assert_eq!(got.from, LeagueFrom::Fallback);
-        }
-    }
-
-    #[test]
-    fn every_source_a_league_can_come_from_has_a_name_a_log_reader_can_read() {
-        for from in [
-            LeagueFrom::Configured,
-            LeagueFrom::TradeApi,
-            LeagueFrom::LastRun,
-            LeagueFrom::Fallback,
-        ] {
-            assert!(!from.as_str().is_empty(), "{from:?}");
-        }
-    }
 
     #[test]
     fn an_unset_window_title_is_derived_from_the_game() {

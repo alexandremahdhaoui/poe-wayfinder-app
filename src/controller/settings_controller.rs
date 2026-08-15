@@ -19,6 +19,12 @@ pub trait RememberedSettings {
     fn remember_verdict(&mut self, _matcher: &str, _decisions: &str) {}
 
     fn remember_league(&mut self, game: GameVersion, league: &str);
+
+    fn league_is_pinned(&self, _game: GameVersion) -> bool {
+        false
+    }
+
+    fn pin_league(&mut self, _game: GameVersion, _pinned: bool) {}
 }
 
 pub struct SettingsController<S: SettingsStore> {
@@ -89,6 +95,20 @@ impl<S: SettingsStore> RememberedSettings for SettingsController<S> {
         }
 
         self.settings.last_league.set(game, league);
+
+        let _ = self.store.save(&self.settings);
+    }
+
+    fn league_is_pinned(&self, game: GameVersion) -> bool {
+        *self.settings.pinned_leagues.get(game)
+    }
+
+    fn pin_league(&mut self, game: GameVersion, pinned: bool) {
+        if *self.settings.pinned_leagues.get(game) == pinned {
+            return;
+        }
+
+        *self.settings.pinned_leagues.get_mut(game) = pinned;
 
         let _ = self.store.save(&self.settings);
     }
@@ -241,6 +261,42 @@ mod tests {
         store.expect_save().never();
 
         SettingsController::new(store).remember_league(GameVersion::Poe2, "");
+    }
+
+    #[test]
+    fn a_league_pinned_for_one_game_leaves_the_other_game_following_the_trade_site() {
+        let mut store = store_holding("Standard");
+        store.expect_save().returning(|_| Ok(()));
+
+        let mut controller = SettingsController::new(store);
+
+        assert!(!controller.league_is_pinned(GameVersion::Poe2));
+
+        controller.pin_league(GameVersion::Poe2, true);
+
+        assert!(controller.league_is_pinned(GameVersion::Poe2));
+        assert!(!controller.league_is_pinned(GameVersion::Poe1));
+    }
+
+    #[test]
+    fn pinning_what_is_already_pinned_is_not_written_again() {
+        let mut store = store_holding("Standard");
+        store.expect_save().never();
+
+        SettingsController::new(store).pin_league(GameVersion::Poe2, false);
+    }
+
+    #[test]
+    fn handing_a_league_back_to_automatic_is_written_so_the_restart_re_resolves_it() {
+        let mut store = store_holding("Standard");
+        store.expect_save().times(2).returning(|_| Ok(()));
+
+        let mut controller = SettingsController::new(store);
+
+        controller.pin_league(GameVersion::Poe1, true);
+        controller.pin_league(GameVersion::Poe1, false);
+
+        assert!(!controller.league_is_pinned(GameVersion::Poe1));
     }
 
     #[test]

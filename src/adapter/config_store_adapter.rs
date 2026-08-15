@@ -82,6 +82,7 @@ pub struct Settings {
     pub panel_width: f32,
     pub panel_height: f32,
     pub last_league: LastLeague,
+    pub pinned_leagues: GamePair<bool>,
     pub include_offline: bool,
     pub roll_tolerance: f64,
     pub filter_item_level: bool,
@@ -97,6 +98,7 @@ impl Default for Settings {
             panel_width: 400.0,
             panel_height: 600.0,
             last_league: LastLeague::default(),
+            pinned_leagues: GamePair::default(),
             include_offline: false,
             roll_tolerance: 0.1,
             filter_item_level: false,
@@ -467,6 +469,30 @@ mod tests {
             got.last_league.get(GameVersion::Poe2),
             "Rise of the Abyssal"
         );
+    }
+
+    #[test]
+    fn a_league_pinned_by_hand_survives_a_round_trip_through_the_file() {
+        let store = ConfigStore::new(&tempdir("pinned"));
+
+        let mut settings = Settings::default();
+        *settings.pinned_leagues.get_mut(GameVersion::Poe2) = true;
+
+        store.save(&settings).unwrap();
+
+        let got = store.load();
+
+        assert!(*got.pinned_leagues.get(GameVersion::Poe2));
+        assert!(!*got.pinned_leagues.get(GameVersion::Poe1));
+    }
+
+    #[test]
+    fn a_file_written_before_pinning_existed_reads_as_nothing_pinned() {
+        let got: Settings =
+            serde_json::from_str(r#"{"last_league":"Rise of the Abyssal"}"#).unwrap();
+
+        assert!(!*got.pinned_leagues.get(GameVersion::Poe1));
+        assert!(!*got.pinned_leagues.get(GameVersion::Poe2));
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::controller::price_check_loop;
 use crate::controller::session_controller::Session;
 use crate::controller::settings_controller::RememberedSettings;
 use crate::controller::startup_controller::Press;
-use crate::controller::status_controller::{LeagueSource, Status};
+use crate::controller::status_controller::Status;
 use crate::driver::hook_driver::HookDriver;
 use crate::driver::hotkey_driver::HotkeyDriver;
 use crate::driver::overlay_placement;
@@ -36,11 +36,13 @@ use poe_wayfinder_core::controller::hotkey_match::Binding;
 
 use poe_wayfinder_core::adapter::data_adapter::GameData;
 use poe_wayfinder_core::controller::game_detect;
+use poe_wayfinder_core::controller::league_list::LeagueFrom;
 use poe_wayfinder_core::controller::overlay_lifecycle::{
     Input, Lifecycle, Point, Rect as LifeRect,
 };
 use poe_wayfinder_core::controller::press_coalesce;
 use poe_wayfinder_core::controller::price_check::{price_check, PriceCheck, PriceCheckOptions};
+use poe_wayfinder_core::controller::switching::{self, Chosen, GameChoice, LeagueChoice};
 use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
@@ -382,7 +384,7 @@ where
             return;
         }
 
-        let Some(league) = self.session.league() else {
+        let Some(league) = self.session.league().map(str::to_string) else {
             return;
         };
 
@@ -390,20 +392,125 @@ where
             return;
         }
 
+        if *self.settings.league_choice.get(self.game) != LeagueChoice::Automatic {
+            self.log.info(
+                "the game log named a league but this game's league was chosen by hand, so \
+                 the search keeps the chosen one",
+                &[
+                    ("in_the_log", Value::Str(league)),
+                    ("league_in_use", Value::Str(self.settings.league.clone())),
+                    ("game", Value::Str(self.game.as_str().to_string())),
+                ],
+            );
+
+            return;
+        }
+
         self.log.info(
             "the game log says the league changed",
             &[
                 ("was", Value::Str(self.settings.league.clone())),
-                ("now", Value::Str(league.to_string())),
+                ("now", Value::Str(league.clone())),
             ],
         );
 
-        self.widgets.note_log(&format!("league is now {league}"));
+        self.set_league(Chosen {
+            name: league,
+            from: LeagueFrom::GameLog,
+        });
+    }
 
-        self.settings.league = league.to_string();
-        self.tray_state.league = Some(league.to_string());
-        self.remembered.remember_league(self.game, league);
-        self.prices.set_league(league);
+    fn set_league(&mut self, chosen: Chosen) {
+        if chosen.name.trim().is_empty() {
+            return;
+        }
+
+        let was = std::mem::replace(&mut self.settings.league, chosen.name.clone());
+
+        self.settings.league_from = chosen.from;
+        self.tray_state.league = Some(chosen.name.clone());
+
+        self.prices.set_league(&chosen.name);
+        self.remembered.remember_league(self.game, &chosen.name);
+
+        if was == chosen.name {
+            return;
+        }
+
+        self.widgets
+            .note_log(&format!("league is now {}", chosen.name));
+
+        self.log.info(
+            "the league changed",
+            &[
+                ("was", Value::Str(was)),
+                ("now", Value::Str(chosen.name)),
+                ("source", Value::Str(chosen.from.as_str().to_string())),
+                ("game", Value::Str(self.game.as_str().to_string())),
+                ("endpoint", Value::Str(self.prices.search_endpoint())),
+            ],
+        );
+    }
+
+    fn choose_league(&mut self, chosen: LeagueChoice) {
+        let game = self.game;
+        let known = self.settings.known_leagues.get(game).clone();
+
+        let keep = self
+            .remembered
+            .last_league(game)
+            .unwrap_or_else(|| self.settings.league.clone());
+
+        let now = switching::league_now(&chosen, &known, &keep);
+        let pinned = matches!(chosen, LeagueChoice::Named(_));
+
+        *self.settings.league_choice.get_mut(game) = chosen;
+
+        self.remembered.pin_league(game, pinned);
+
+        self.log.info(
+            "a league was chosen in the panel",
+            &[
+                ("league", Value::Str(now.name.clone())),
+                ("source", Value::Str(now.from.as_str().to_string())),
+                ("pinned", Value::Bool(pinned)),
+                ("game", Value::Str(game.as_str().to_string())),
+                ("known_leagues", Value::Int(known.len() as i64)),
+            ],
+        );
+
+        self.set_league(now);
+    }
+
+    fn choose_game(&mut self, chosen: GameChoice) {
+        let detected = self.window.detect_game();
+        let wanted = switching::game_now(chosen, detected, self.game);
+
+        self.settings.pinned_game = match chosen {
+            GameChoice::Pinned(game) => Some(game),
+            GameChoice::Automatic => None,
+        };
+
+        self.log.info(
+            "a game was chosen in the panel",
+            &[
+                ("pinned", Value::Bool(self.settings.pinned_game.is_some())),
+                ("watching", Value::Str(wanted.as_str().to_string())),
+                (
+                    "detected",
+                    Value::Str(
+                        detected
+                            .map(|game| game.as_str())
+                            .unwrap_or("none")
+                            .to_string(),
+                    ),
+                ),
+            ],
+        );
+
+        if wanted != self.game {
+            self.switch_game(wanted);
+        }
     }
 
     fn heartbeat(&mut self) {
@@ -622,6 +729,19 @@ where
     }
 
     fn status(&mut self) -> Status {
+        let known = self.settings.known_leagues.get(self.game).clone();
+        let chosen = self.settings.league_choice.get(self.game).clone();
+        let remembered = self.remembered.last_league(self.game);
+
+        let league_menu = switching::league_menu(switching::Known {
+            fetched: &known,
+            remembered: remembered.as_deref(),
+            in_use: &self.settings.league,
+            chosen: &chosen,
+        });
+
+        let game_menu = switching::game_menu(self.settings.pinned_game);
+
         Status {
             game: match self.window.window().is_some() {
                 true => Some(self.game),
@@ -631,10 +751,9 @@ where
             window_title: self.settings.window_title.clone(),
             hotkey: self.hotkey_text.clone(),
             league: self.settings.league.clone(),
-            league_source: match self.session.league_source() {
-                Some(_) => LeagueSource::GameLog,
-                None => LeagueSource::Configured,
-            },
+            league_source: self.settings.league_from,
+            league_menu,
+            game_menu,
             origin: self.settings.data_origin.clone(),
             stats: self.data.get(self.game).stat_count(),
             items: self.data.get(self.game).item_name_count(),
@@ -680,6 +799,8 @@ where
                 StatusEvent::TogglePaused => {
                     self.tray_state.paused = !self.tray_state.paused;
                 }
+                StatusEvent::ChooseLeague(chosen) => self.choose_league(chosen),
+                StatusEvent::ChooseGame(chosen) => self.choose_game(chosen),
             }
         }
     }
@@ -1300,13 +1421,21 @@ where
             return;
         };
 
+        self.switch_game(found);
+    }
+
+    fn switch_game(&mut self, found: GameVersion) {
         let was = self.game;
 
         self.game = found;
         self.options = PriceCheckOptions::new(found);
-        self.settings.window_title = game_detect::title_for(found).to_string();
 
-        self.window.retarget(found);
+        if !self.settings.pinned_title {
+            self.settings.window_title = game_detect::title_for(found).to_string();
+
+            self.window.retarget(found);
+        }
+
         self.prices.set_game(found);
 
         if let Some(path) = super::wiring::default_client_log(found) {
@@ -1334,12 +1463,17 @@ where
                 ),
                 ("stats", Value::Int(self.tray_state.stat_count as i64)),
                 ("league", Value::Str(self.settings.league.clone())),
+                ("endpoint", Value::Str(self.prices.search_endpoint())),
             ],
         );
     }
 
     fn follow_league(&mut self, game: GameVersion) {
-        let Some(league) = self.remembered.last_league(game) else {
+        let known = self.settings.known_leagues.get(game).clone();
+        let chosen = self.settings.league_choice.get(game).clone();
+        let remembered = self.remembered.last_league(game);
+
+        if remembered.is_none() && known.is_empty() && chosen == LeagueChoice::Automatic {
             self.log.warn(
                 "the game changed and this build has never learned a league for the new game, \
                  so the search keeps the one it had. Restart to read the trade site's league \
@@ -1351,27 +1485,11 @@ where
             );
 
             return;
-        };
-
-        if league == self.settings.league {
-            return;
         }
 
-        let was = std::mem::replace(&mut self.settings.league, league.clone());
+        let keep = remembered.unwrap_or_else(|| self.settings.league.clone());
 
-        self.tray_state.league = Some(league.clone());
-        self.prices.set_league(&league);
-        self.widgets.note_log(&format!("league is now {league}"));
-
-        self.log.info(
-            "the league followed the game",
-            &[
-                ("game", Value::Str(game.as_str().to_string())),
-                ("was", Value::Str(was)),
-                ("now", Value::Str(league)),
-                ("source", Value::Str("remembered for this game".to_string())),
-            ],
-        );
+        self.set_league(switching::league_now(&chosen, &known, &keep));
     }
 
     fn refresh_tray(&mut self, found: bool) {

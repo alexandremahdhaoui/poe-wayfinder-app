@@ -439,6 +439,24 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["league"],
     },
     Capability {
+        component: "BackgroundInfo.vue",
+        name: "the league in use says where it came from",
+        domain: &["fn league_caption"],
+        ui: &["league_source"],
+    },
+    Capability {
+        component: "settings/SettingsWindow.vue",
+        name: "the league to search is chosen from the trade site's own list",
+        domain: &["fn league_menu"],
+        ui: &["StatusEvent::ChooseLeague"],
+    },
+    Capability {
+        component: "main/src/windows/game.ts",
+        name: "the game is pinned by hand or left to follow the foreground window",
+        domain: &["fn game_menu"],
+        ui: &["StatusEvent::ChooseGame"],
+    },
+    Capability {
         component: "CheckPositionCircle.vue",
         name: "the panel opens where the check was made",
         domain: &["anchor_cursor"],

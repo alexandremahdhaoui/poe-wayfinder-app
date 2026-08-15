@@ -1,4 +1,5 @@
 use poe_wayfinder_core::controller::filter_view::{modifier_text, FlagKey, Row, RowKey};
+use poe_wayfinder_core::controller::switching::{GameChoice, LeagueChoice};
 use poe_wayfinder_core::types::item::ItemRarity;
 
 use crate::controller::overlay_controller::{Frame, PanelSource};
@@ -11,6 +12,8 @@ pub enum StatusEvent {
     Quit,
     RefreshNow,
     TogglePaused,
+    ChooseLeague(LeagueChoice),
+    ChooseGame(GameChoice),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1194,11 +1197,7 @@ mod win {
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .show(ui, |ui| match widgets.tab {
-                                Tab::Status => {
-                                    status_body(ui, status, now);
-
-                                    Vec::new()
-                                }
+                                Tab::Status => status_body(ui, status, now),
                                 _ => widget_body(ui, widgets, names, bindings, now_ms),
                             })
                             .inner
@@ -1492,7 +1491,7 @@ mod win {
         events
     }
 
-    fn status_body(ui: &mut egui::Ui, status: &Status, now: SystemTime) {
+    fn status_body(ui: &mut egui::Ui, status: &Status, now: SystemTime) -> Vec<StatusEvent> {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("PoE Wayfinder")
@@ -1520,6 +1519,8 @@ mod win {
                 }
             });
 
+        let events = switchers(ui, status);
+
         if let Some(note) = &status.note {
             ui.add_space(8.0);
             ui.label(egui::RichText::new(note).small().color(WARNING));
@@ -1527,6 +1528,76 @@ mod win {
 
         ui.add_space(8.0);
         rate_limit_line(ui, &status.limits);
+
+        events
+    }
+
+    fn switchers(ui: &mut egui::Ui, status: &Status) -> Vec<StatusEvent> {
+        let mut events = Vec::new();
+
+        ui.add_space(10.0);
+
+        ui.horizontal_wrapped(|ui| {
+            switcher_label(ui, "Watch");
+
+            for option in &status.game_menu {
+                if ui
+                    .selectable_label(option.selected, option.label)
+                    .on_hover_text("pin a game, or let the window in front decide")
+                    .clicked()
+                    && !option.selected
+                {
+                    events.push(StatusEvent::ChooseGame(option.choice));
+                }
+            }
+        });
+
+        ui.horizontal(|ui| {
+            switcher_label(ui, "Search");
+
+            egui::ComboBox::from_id_salt("league-picker")
+                .selected_text(chosen_league(status))
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    for option in &status.league_menu.options {
+                        if ui
+                            .selectable_label(option.selected, &option.label)
+                            .clicked()
+                            && !option.selected
+                        {
+                            events.push(StatusEvent::ChooseLeague(option.choice.clone()));
+                        }
+                    }
+                });
+        });
+
+        ui.label(
+            egui::RichText::new(status.league_menu.caption)
+                .small()
+                .color(match status.league_menu.list_was_read {
+                    true => MUTED,
+                    false => WARNING,
+                }),
+        );
+
+        events
+    }
+
+    fn switcher_label(ui: &mut egui::Ui, text: &str) {
+        ui.add_sized(
+            [82.0, 18.0],
+            egui::Label::new(egui::RichText::new(text).small().color(MUTED)),
+        );
+    }
+
+    fn chosen_league(status: &Status) -> String {
+        status
+            .league_menu
+            .options
+            .iter()
+            .find(|option| option.selected)
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| status.league.clone())
     }
 
     fn status_actions(ui: &mut egui::Ui, status: &Status) -> Vec<StatusEvent> {
