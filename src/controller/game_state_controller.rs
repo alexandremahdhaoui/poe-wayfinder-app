@@ -15,6 +15,8 @@ pub trait GameState {
     fn game_changed_from(&self, current: GameVersion) -> Option<GameVersion>;
 
     fn retarget(&self, game: GameVersion);
+
+    fn hand_back_the_foreground(&self) -> bool;
 }
 
 pub struct GameStateController<S: GameWindowSource> {
@@ -57,6 +59,10 @@ impl<S: GameWindowSource> GameState for GameStateController<S> {
 
     fn retarget(&self, game: GameVersion) {
         self.source.retarget(game_detect::title_for(game));
+    }
+
+    fn hand_back_the_foreground(&self) -> bool {
+        self.source.raise()
     }
 }
 
@@ -221,5 +227,15 @@ mod tests {
 
         assert_eq!(controller.cursor(), (10, 20));
         assert!((controller.scale() - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn handing_the_foreground_back_reports_whether_windows_allowed_it() {
+        let controller = GameStateController::new(FixedSource { found: true });
+
+        assert!(
+            !controller.hand_back_the_foreground(),
+            "a source that cannot raise a window says so rather than claiming it did"
+        );
     }
 }

@@ -199,6 +199,7 @@ mod win {
         gauge_edit, influence_labels, tier_label, FilterView, FlagRow, Row,
     };
     use poe_wayfinder_core::controller::item_editor::AugmentOption;
+    use poe_wayfinder_core::controller::pad_focus;
     use poe_wayfinder_core::controller::price_summary::{
         online_count, price_headline, price_spread, stack_value, Estimate, Quote,
     };
@@ -253,7 +254,51 @@ mod win {
         builder.with_mouse_passthrough(!frame.takes_input)
     }
 
-    pub fn paint(ctx: &egui::Context, model: &dyn PanelSource) -> Vec<UiEvent> {
+    #[derive(Debug, Clone, Copy)]
+    pub struct PadView {
+        pub focus: pad_focus::Focus,
+        pub connected: bool,
+    }
+
+    fn mark_for(pad: Option<&PadView>, index: usize) -> Option<PadView> {
+        let pad = pad?;
+
+        match pad.focus.row == index {
+            true => Some(*pad),
+            false => None,
+        }
+    }
+
+    fn focus_frame(marked: Option<PadView>) -> egui::Frame {
+        match marked {
+            Some(_) => egui::Frame::new()
+                .stroke(egui::Stroke::new(1.0, ACCENT))
+                .corner_radius(4.0)
+                .inner_margin(2.0),
+            None => egui::Frame::new().inner_margin(2.0),
+        }
+    }
+
+    fn box_stroke(marked: Option<PadView>, column: pad_focus::Column) -> egui::Stroke {
+        let Some(pad) = marked else {
+            return egui::Stroke::NONE;
+        };
+
+        if pad.focus.column != column {
+            return egui::Stroke::NONE;
+        }
+
+        match pad.focus.editing {
+            true => egui::Stroke::new(2.0, GAUGE_FILL),
+            false => egui::Stroke::new(1.0, ACCENT),
+        }
+    }
+
+    pub fn paint(
+        ctx: &egui::Context,
+        model: &dyn PanelSource,
+        pad: Option<&PadView>,
+    ) -> Vec<UiEvent> {
         let text = panel_text(model);
         let mut events = Vec::new();
 
@@ -279,11 +324,11 @@ mod win {
                     .show(ui, |ui| {
                         price_banner(ui, model);
                         augment_picker(ui, model, &mut events);
-                        filters(ui, model.filters(), &mut events);
+                        filters(ui, model.filters(), &mut events, pad);
                         listing_rows(ui, model);
                     });
 
-                footer(ui, model, &mut events);
+                footer(ui, model, &mut events, pad);
             });
 
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -334,7 +379,11 @@ mod win {
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("✕").on_hover_text("close").clicked() {
+                if ui
+                    .button("Close")
+                    .on_hover_text("Circle on a pad, or Escape")
+                    .clicked()
+                {
                     events.push(UiEvent::Dismiss);
                 }
             });
@@ -518,7 +567,12 @@ mod win {
         }
     }
 
-    fn filters(ui: &mut egui::Ui, view: &FilterView, events: &mut Vec<UiEvent>) {
+    fn filters(
+        ui: &mut egui::Ui,
+        view: &FilterView,
+        events: &mut Vec<UiEvent>,
+        pad: Option<&PadView>,
+    ) {
         if view.is_empty() {
             ui.label(
                 egui::RichText::new("Nothing to filter on.")
@@ -539,8 +593,8 @@ mod win {
 
         if !view.numerics.is_empty() {
             section(ui, |ui| {
-                for row in &view.numerics {
-                    numeric_row(ui, row, events);
+                for (index, row) in view.numerics.iter().enumerate() {
+                    numeric_row(ui, row, events, mark_for(pad, index));
                 }
             });
         }
@@ -571,8 +625,8 @@ mod win {
                 });
             });
 
-            for row in &view.stats {
-                stat_row(ui, row, events);
+            for (index, row) in view.stats.iter().enumerate() {
+                stat_row(ui, row, events, mark_for(pad, view.numerics.len() + index));
             }
         });
     }
@@ -609,25 +663,32 @@ mod win {
         }
     }
 
-    fn numeric_row(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
-        ui.horizontal(|ui| {
-            mod_line(ui, row, &row.label.clone(), events);
+    fn numeric_row(
+        ui: &mut egui::Ui,
+        row: &Row,
+        events: &mut Vec<UiEvent>,
+        marked: Option<PadView>,
+    ) {
+        focus_frame(marked).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                mod_line(ui, row, &row.label.clone(), events);
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                bounds_inputs(ui, row, events);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    bounds_inputs(ui, row, events, marked);
+                });
             });
         });
     }
 
-    fn stat_row(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
-        ui.vertical(|ui| {
+    fn stat_row(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>, marked: Option<PadView>) {
+        focus_frame(marked).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let label = modifier_line(&row.label, row.roll, row.decimals);
 
                 mod_line(ui, row, &label, events);
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    bounds_inputs(ui, row, events);
+                    bounds_inputs(ui, row, events, marked);
 
                     if let Some(tier) = tier_label(row.tier) {
                         ui.label(
@@ -709,7 +770,12 @@ mod win {
         );
     }
 
-    fn bounds_inputs(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
+    fn bounds_inputs(
+        ui: &mut egui::Ui,
+        row: &Row,
+        events: &mut Vec<UiEvent>,
+        marked: Option<PadView>,
+    ) {
         let step = drag_speed(row);
 
         let max_unset = row.max.is_none();
@@ -727,8 +793,11 @@ mod win {
                     false => format_value(value, decimals),
                 });
 
-        if ui
-            .add_sized([56.0, 18.0], max_widget)
+        let max_frame = egui::Frame::new().stroke(box_stroke(marked, pad_focus::Column::Max));
+
+        if max_frame
+            .show(ui, |ui| ui.add_sized([56.0, 18.0], max_widget))
+            .inner
             .on_hover_text("highest value to match. Drag it, or click the bar below.")
             .changed()
             && finite(max) != row.max
@@ -750,8 +819,11 @@ mod win {
                     false => format_value(value, decimals),
                 });
 
-        if ui
-            .add_sized([56.0, 18.0], min_widget)
+        let min_frame = egui::Frame::new().stroke(box_stroke(marked, pad_focus::Column::Min));
+
+        if min_frame
+            .show(ui, |ui| ui.add_sized([56.0, 18.0], min_widget))
+            .inner
             .on_hover_text("lowest value to match. Drag it, or click the bar below.")
             .changed()
             && finite(min) != row.min
@@ -934,8 +1006,21 @@ mod win {
         });
     }
 
-    fn footer(ui: &mut egui::Ui, model: &dyn PanelSource, events: &mut Vec<UiEvent>) {
+    fn footer(
+        ui: &mut egui::Ui,
+        model: &dyn PanelSource,
+        events: &mut Vec<UiEvent>,
+        pad: Option<&PadView>,
+    ) {
         ui.separator();
+
+        if let Some(pad) = pad.filter(|pad| pad.connected) {
+            ui.label(
+                egui::RichText::new(pad_focus::hints(pad.focus.editing))
+                    .small()
+                    .color(MUTED),
+            );
+        }
 
         ui.horizontal(|ui| {
             let label = search_button_label(model.edited());
@@ -1668,7 +1753,7 @@ mod win {
 #[cfg(windows)]
 pub use win::{
     drop_splash_background, overlay_viewport, paint, splash_window, status_viewport, status_window,
-    widget_body, widget_tabs, SPLASH_VIEWPORT, SPLASH_WINDOW_TITLE, STATUS_VIEWPORT,
+    widget_body, widget_tabs, PadView, SPLASH_VIEWPORT, SPLASH_WINDOW_TITLE, STATUS_VIEWPORT,
 };
 
 #[cfg(test)]

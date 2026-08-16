@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use poe_wayfinder_core::controller::gamepad_match::PadFamily;
+use poe_wayfinder_core::controller::gamepad_nav;
 use poe_wayfinder_core::controller::sony_pad;
 
 const SLOTS: u32 = 4;
@@ -10,13 +11,23 @@ const RESCAN: Duration = Duration::from_secs(5);
 pub trait Gamepad {
     fn buttons(&mut self) -> Option<u16>;
 
+    fn direction(&self) -> u16;
+
     fn family(&self) -> PadFamily;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reading {
+    pub buttons: u16,
+    pub x: f32,
+    pub y: f32,
 }
 
 #[derive(Debug)]
 struct Slots {
     connected: [bool; SLOTS as usize],
     next_scan: Option<Instant>,
+    direction: u16,
 }
 
 impl Slots {
@@ -24,10 +35,11 @@ impl Slots {
         Self {
             connected: [false; SLOTS as usize],
             next_scan: None,
+            direction: 0,
         }
     }
 
-    fn poll(&mut self, now: Instant, mut read: impl FnMut(u32) -> Option<u16>) -> Option<u16> {
+    fn poll(&mut self, now: Instant, mut read: impl FnMut(u32) -> Option<Reading>) -> Option<u16> {
         let scanning = match self.next_scan {
             Some(at) => now >= at,
             None => true,
@@ -39,15 +51,18 @@ impl Slots {
 
         let mut held: Option<u16> = None;
 
+        self.direction = 0;
+
         for slot in 0..SLOTS {
             if !self.connected[slot as usize] && !scanning {
                 continue;
             }
 
             match read(slot) {
-                Some(buttons) => {
+                Some(reading) => {
                     self.connected[slot as usize] = true;
-                    held = Some(held.unwrap_or(0) | buttons);
+                    held = Some(held.unwrap_or(0) | reading.buttons);
+                    self.direction |= gamepad_nav::stick_direction(reading.x, reading.y);
                 }
                 None => self.connected[slot as usize] = false,
             }
@@ -80,25 +95,34 @@ impl Gamepad for XInputPads {
         self.slots.poll(Instant::now(), read_slot)
     }
 
+    fn direction(&self) -> u16 {
+        self.slots.direction
+    }
+
     fn family(&self) -> PadFamily {
         PadFamily::Xbox
     }
 }
 
 #[cfg(windows)]
-fn read_slot(slot: u32) -> Option<u16> {
+fn read_slot(slot: u32) -> Option<Reading> {
     use windows::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_STATE};
 
     let mut state = XINPUT_STATE::default();
 
-    match unsafe { XInputGetState(slot, &mut state) } {
-        0 => Some(state.Gamepad.wButtons.0),
-        _ => None,
+    if unsafe { XInputGetState(slot, &mut state) } != 0 {
+        return None;
     }
+
+    Some(Reading {
+        buttons: state.Gamepad.wButtons.0,
+        x: f32::from(state.Gamepad.sThumbLX) / 32767.0,
+        y: -f32::from(state.Gamepad.sThumbLY) / 32767.0,
+    })
 }
 
 #[cfg(not(windows))]
-fn read_slot(_slot: u32) -> Option<u16> {
+fn read_slot(_slot: u32) -> Option<Reading> {
     None
 }
 
@@ -514,11 +538,13 @@ struct Pad {
     product: u16,
     reader: hid::HidReader,
     held: u16,
+    pushed: u16,
 }
 
 pub struct SonyPads {
     pads: Vec<Pad>,
     next_scan: Option<std::time::Instant>,
+    direction: u16,
 }
 
 impl SonyPads {
@@ -526,6 +552,7 @@ impl SonyPads {
         Self {
             pads: Vec::new(),
             next_scan: None,
+            direction: 0,
         }
     }
 
@@ -560,6 +587,7 @@ impl SonyPads {
                 product: device.product,
                 reader,
                 held: 0,
+                pushed: 0,
             });
         }
     }
@@ -581,17 +609,30 @@ impl Gamepad for SonyPads {
 
         let mut held = 0u16;
 
+        let mut direction = 0;
+
         for pad in &mut self.pads {
             if let Some(report) = pad.reader.newest() {
                 if let Some(mask) = sony_pad::parse_report(pad.product, &report) {
                     pad.held = mask;
                 }
+
+                if let Some((x, y)) = sony_pad::parse_left_stick(pad.product, &report) {
+                    pad.pushed = gamepad_nav::stick_direction(x, y);
+                }
             }
 
             held |= pad.held;
+            direction |= pad.pushed;
         }
 
+        self.direction = direction;
+
         Some(held)
+    }
+
+    fn direction(&self) -> u16 {
+        self.direction
     }
 
     fn family(&self) -> PadFamily {
@@ -623,6 +664,14 @@ mod tests {
             accepted.contains(&hid::INPUT_BUFFERS),
             "windows refuses fewer than two and a deep buffer hands us old reports"
         );
+    }
+
+    fn reading(buttons: u16) -> Reading {
+        Reading {
+            buttons,
+            x: 0.0,
+            y: 0.0,
+        }
     }
 
     fn at(seconds: u64) -> Instant {
@@ -672,7 +721,7 @@ mod tests {
         let mut slots = Slots::new();
 
         let held = slots.poll(at(0), |slot| match slot {
-            1 => Some(0x1000),
+            1 => Some(reading(0x1000)),
             _ => None,
         });
 
@@ -684,8 +733,8 @@ mod tests {
         let mut slots = Slots::new();
 
         let held = slots.poll(at(0), |slot| match slot {
-            0 => Some(0x0100),
-            2 => Some(0x8000),
+            0 => Some(reading(0x0100)),
+            2 => Some(reading(0x8000)),
             _ => None,
         });
 
@@ -696,9 +745,9 @@ mod tests {
     fn a_connected_pad_at_rest_is_still_connected_rather_than_gone() {
         let mut slots = Slots::new();
 
-        slots.poll(at(0), |_| Some(0x1000));
+        slots.poll(at(0), |_| Some(reading(0x1000)));
 
-        assert_eq!(slots.poll(at(1), |_| Some(0)), Some(0));
+        assert_eq!(slots.poll(at(1), |_| Some(reading(0))), Some(0));
     }
 
     #[test]
@@ -737,14 +786,14 @@ mod tests {
         let mut reads = 0;
 
         slots.poll(at(0), |slot| match slot {
-            3 => Some(0),
+            3 => Some(reading(0)),
             _ => None,
         });
 
         slots.poll(at(1), |_| {
             reads += 1;
 
-            Some(0)
+            Some(reading(0))
         });
 
         assert_eq!(reads, 1);
@@ -754,9 +803,9 @@ mod tests {
     fn a_pad_unplugged_mid_session_drops_back_to_nothing_connected() {
         let mut slots = Slots::new();
 
-        slots.poll(at(0), |_| Some(0x1000));
+        slots.poll(at(0), |_| Some(reading(0x1000)));
 
         assert_eq!(slots.poll(at(1), |_| None), None);
-        assert_eq!(slots.poll(at(2), |_| Some(0x1000)), None);
+        assert_eq!(slots.poll(at(2), |_| Some(reading(0x1000))), None);
     }
 }

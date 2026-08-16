@@ -33,6 +33,10 @@ pub trait GameWindowSource: Send + Sync {
     fn foreground(&self) -> Option<String> {
         None
     }
+
+    fn raise(&self) -> bool {
+        false
+    }
 }
 
 pub fn should_draw(window: &GameWindow) -> bool {
@@ -106,6 +110,44 @@ mod win {
         }
     }
 
+    pub fn raise_to_front(handle: HWND) -> bool {
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, GetWindowThreadProcessId, SetForegroundWindow,
+        };
+
+        if unsafe { SetForegroundWindow(handle) }.as_bool() {
+            return true;
+        }
+
+        let front = unsafe { GetForegroundWindow() };
+        let owner = unsafe { GetWindowThreadProcessId(front, None) };
+        let ours = unsafe { GetCurrentThreadId() };
+
+        if owner == 0 || owner == ours {
+            return false;
+        }
+
+        let attached = unsafe { AttachThreadInput(ours, owner, true) }.as_bool();
+
+        let raised = unsafe {
+            let _ = BringWindowToTop(handle);
+            let _ = SetActiveWindow(handle);
+            let _ = SetFocus(Some(handle));
+
+            SetForegroundWindow(handle).as_bool()
+        };
+
+        if attached {
+            unsafe {
+                let _ = AttachThreadInput(ours, owner, false);
+            }
+        }
+
+        raised
+    }
+
     impl GameWindowSource for GameWindowAdapter {
         fn find(&self) -> Result<GameWindow, WindowError> {
             let handle = self.handle()?;
@@ -155,6 +197,14 @@ mod win {
 
         fn foreground(&self) -> Option<String> {
             foreground_title()
+        }
+
+        fn raise(&self) -> bool {
+            let Ok(handle) = self.handle() else {
+                return false;
+            };
+
+            raise_to_front(handle)
         }
 
         fn scale(&self) -> f32 {

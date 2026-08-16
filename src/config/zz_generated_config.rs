@@ -174,7 +174,7 @@ pub struct PoeWayfinderConfig {
     pub overlay_hotkey: String,
     /// A second binding for the locked check, easier to reach one handed. Empty turns it off.
     pub price_check_locked_alt_hotkey: String,
-    /// Controller buttons that fire the locked price check, joined by plus, for example "LB+RB+Y" or "L1+R1+Triangle". Write it in whichever names are printed on your pad. Xbox names are LB, RB, LT, RT, L3, R3, BACK, START, UP, DOWN, LEFT, RIGHT, A, B, X and Y. PlayStation names are L1, R1, L2, R2, L3, R3, CREATE, SHARE, OPTIONS, UP, DOWN, LEFT, RIGHT, CROSS, CIRCLE, SQUARE and TRIANGLE. The two sets name the same buttons, so LB and L1 are one chord. Empty turns it off, which is the default. Windows offers no way to hide a pad button from the game, so the game acts on every button in the chord as well. Pick buttons the game does nothing with. Xbox pads are read through XInput and a DualSense or a DualShock 4 is read as a plain HID gamepad, so neither needs extra software. Steam Input takes a pad for itself, so a pad it has claimed is read through the virtual Xbox pad it publishes rather than directly.
+    /// Controller buttons that fire the locked price check, joined by plus, for example "LB+RB+Y" or "L1+R1+Triangle". Write it in whichever names are printed on your pad. Xbox names are LB, RB, LT, RT, L3, R3, BACK, START, UP, DOWN, LEFT, RIGHT, A, B, X and Y. PlayStation names are L1, R1, L2, R2, L3, R3, CREATE, SHARE, OPTIONS, UP, DOWN, LEFT, RIGHT, CROSS, CIRCLE, SQUARE and TRIANGLE. The two sets name the same buttons, so LB and L1 are one chord. Holding it again closes the panel and hands the game back the foreground, so a pad alone is enough. Empty turns it off. Windows offers no way to hide a pad button from the game, so the game acts on every button in the chord as well. Pick buttons the game does nothing with. Xbox pads are read through XInput and a DualSense or a DualShock 4 is read as a plain HID gamepad, so neither needs extra software. Steam Input takes a pad for itself, so a pad it has claimed is read through the virtual Xbox pad it publishes rather than directly.
     pub gamepad_chord: String,
     /// Put the old clipboard back after reading the item. The app must copy to read the item, which destroys whatever the user had.
     pub restore_clipboard: bool,
@@ -357,7 +357,7 @@ impl PoeWayfinderConfig {
             .or_else(|| env::var("POE_GAMEPAD_CHORD").ok());
         let raw_gamepad_chord = match raw_gamepad_chord {
             Some(v) => v,
-            None => "".to_string(),
+            None => "L1+R1+Triangle".to_string(),
         };
         let raw_restore_clipboard: Option<String> = None
             .or_else(|| flags.get("restore-clipboard").cloned())

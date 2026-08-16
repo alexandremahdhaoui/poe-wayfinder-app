@@ -38,10 +38,12 @@ use poe_wayfinder_core::controller::hotkey_match::Binding;
 use poe_wayfinder_core::adapter::data_adapter::GameData;
 use poe_wayfinder_core::controller::game_detect;
 use poe_wayfinder_core::controller::gamepad_match::{self, ControllerStatus};
+use poe_wayfinder_core::controller::gamepad_nav;
 use poe_wayfinder_core::controller::league_list::LeagueFrom;
 use poe_wayfinder_core::controller::overlay_lifecycle::{
     Input, Lifecycle, Point, Rect as LifeRect,
 };
+use poe_wayfinder_core::controller::pad_focus::{self, AutoRepeat, Focus, PadEdit};
 use poe_wayfinder_core::controller::press_coalesce;
 use poe_wayfinder_core::controller::price_check::{price_check, PriceCheck, PriceCheckOptions};
 use poe_wayfinder_core::controller::switching::{self, Chosen, GameChoice, LeagueChoice};
@@ -74,6 +76,9 @@ where
     logs: L,
     remembered: R,
     gamepad: G,
+    pad_held: u16,
+    pad_focus: Focus,
+    pad_repeat: AutoRepeat,
     session: Session,
     life: Lifecycle,
     last_tick: Instant,
@@ -189,6 +194,9 @@ where
             logs,
             remembered,
             gamepad,
+            pad_held: 0,
+            pad_focus: Focus::default(),
+            pad_repeat: AutoRepeat::default(),
             session: Session::from_config(&settings.league),
             life: Lifecycle::new(hold),
             last_tick: Instant::now(),
@@ -274,8 +282,13 @@ where
         }
 
         if self.read_gamepad() {
-            self.run_price_check(true);
+            match self.life.is_drawn() {
+                true => self.close_from_pad(),
+                false => self.run_price_check(true),
+            }
         }
+
+        self.navigate_from_pad(FRAME_INTERVAL);
 
         self.follow_game();
         self.watch_logs();
@@ -308,7 +321,13 @@ where
         self.report_panel_change(&frame, game_foreground);
         self.apply_placement(ctx, &frame);
 
-        self.pending.extend(paint(ctx, &self.model));
+        let pad_view = crate::driver::overlay_ui_driver::PadView {
+            focus: self.pad_focus,
+            connected: self.gamepad.connected(),
+        };
+
+        self.pending
+            .extend(paint(ctx, &self.model, Some(&pad_view)));
 
         ctx.request_repaint_after(FRAME_INTERVAL);
     }
@@ -1022,6 +1041,118 @@ where
         );
 
         true
+    }
+
+    fn navigate_from_pad(&mut self, since_last: Duration) {
+        let now = self.gamepad.held();
+        let repeated = self.pad_repeat.tick(now, since_last);
+        let pressed = gamepad_nav::newly_pressed(self.pad_held, now) | repeated;
+
+        self.pad_held = now;
+
+        if pressed == 0 || !self.life.is_drawn() {
+            return;
+        }
+
+        let rows = self.pad_rows();
+
+        for edit in pad_focus::react(&mut self.pad_focus, pressed, rows) {
+            self.apply_pad_edit(edit);
+        }
+
+        self.log.debug(
+            "the pad moved in the panel",
+            &[
+                ("row", Value::Int(self.pad_focus.row as i64)),
+                ("column", Value::Str(format!("{:?}", self.pad_focus.column))),
+                ("editing", Value::Bool(self.pad_focus.editing)),
+            ],
+        );
+    }
+
+    fn pad_rows(&self) -> usize {
+        let filters = self.model.filters();
+
+        filters.numerics.len() + filters.stats.len()
+    }
+
+    fn pad_row_key(&self) -> Option<poe_wayfinder_core::controller::filter_view::RowKey> {
+        let filters = self.model.filters();
+
+        filters
+            .numerics
+            .iter()
+            .chain(filters.stats.iter())
+            .nth(self.pad_focus.row)
+            .map(|row| row.key)
+    }
+
+    fn pad_row_value(&self, column: pad_focus::Column) -> f64 {
+        let filters = self.model.filters();
+
+        let Some(row) = filters
+            .numerics
+            .iter()
+            .chain(filters.stats.iter())
+            .nth(self.pad_focus.row)
+        else {
+            return 0.0;
+        };
+
+        let held = match column {
+            pad_focus::Column::Max => row.max.or(row.bounds.map(|(_, high)| high)),
+            _ => row.min.or(row.bounds.map(|(low, _)| low)),
+        };
+
+        held.filter(|value| value.is_finite())
+            .or(row.roll)
+            .unwrap_or(0.0)
+    }
+
+    fn apply_pad_edit(&mut self, edit: PadEdit) {
+        let Some(key) = self.pad_row_key() else {
+            return;
+        };
+
+        let event = match edit {
+            PadEdit::Close => {
+                self.close_from_pad();
+
+                return;
+            }
+            PadEdit::Search => UiEvent::Research,
+            PadEdit::Toggle => UiEvent::ToggleRow(key),
+            PadEdit::AdjustMin(step) => {
+                let value = self.pad_row_value(pad_focus::Column::Min) + step;
+
+                UiEvent::SetMin(key, Some(value))
+            }
+            PadEdit::AdjustMax(step) => {
+                let value = self.pad_row_value(pad_focus::Column::Max) + step;
+
+                UiEvent::SetMax(key, Some(value))
+            }
+        };
+
+        self.log.info(
+            "the pad changed the search",
+            &[("edit", Value::Str(format!("{edit:?}")))],
+        );
+
+        self.pending.push(event);
+    }
+
+    fn close_from_pad(&mut self) {
+        self.model.hide();
+        self.life.dismiss();
+        self.locked_focused = false;
+
+        let handed_back = self.window.hand_back_the_foreground();
+
+        self.log.info(
+            "the panel was closed from the pad",
+            &[("game_has_the_foreground", Value::Bool(handed_back))],
+        );
     }
 
     fn send_command(&mut self, index: usize) {

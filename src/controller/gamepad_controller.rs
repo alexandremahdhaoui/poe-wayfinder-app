@@ -11,6 +11,8 @@ pub trait PadInput {
     fn chord(&self) -> Option<Chord>;
 
     fn family(&self) -> PadFamily;
+
+    fn held(&self) -> u16;
 }
 
 pub struct GamepadController {
@@ -19,6 +21,7 @@ pub struct GamepadController {
     chord: Option<Chord>,
     connected: bool,
     family: PadFamily,
+    held: u16,
 }
 
 impl GamepadController {
@@ -29,11 +32,13 @@ impl GamepadController {
             chord,
             connected: false,
             family: PadFamily::default(),
+            held: 0,
         }
     }
 
     fn read(&mut self) -> Option<u16> {
         let mut held: Option<u16> = None;
+        let mut pushed = 0u16;
         let mut first_connected = None;
         let mut pressing = None;
 
@@ -43,6 +48,7 @@ impl GamepadController {
             };
 
             held = Some(held.unwrap_or(0) | buttons);
+            pushed |= source.direction();
             first_connected = first_connected.or_else(|| Some(source.family()));
 
             if buttons != 0 && pressing.is_none() {
@@ -53,6 +59,8 @@ impl GamepadController {
         if let Some(family) = pressing.or(first_connected) {
             self.family = family;
         }
+
+        self.held = held.unwrap_or(0) | pushed;
 
         held
     }
@@ -82,6 +90,10 @@ impl PadInput for GamepadController {
     fn family(&self) -> PadFamily {
         self.family
     }
+
+    fn held(&self) -> u16 {
+        self.held
+    }
 }
 
 #[cfg(test)]
@@ -99,6 +111,7 @@ mod tests {
         pads.expect_buttons()
             .returning(move || next.next().unwrap_or(None));
         pads.expect_family().return_const(family);
+        pads.expect_direction().return_const(0u16);
 
         Box::new(pads)
     }
@@ -117,6 +130,7 @@ mod tests {
 
         pads.expect_buttons().never();
         pads.expect_family().return_const(PadFamily::Xbox);
+        pads.expect_direction().return_const(0u16);
 
         let mut controller = GamepadController::new(vec![Box::new(pads)], None);
 
@@ -220,6 +234,42 @@ mod tests {
 
         assert!(!controller.fired());
         assert!(!controller.connected());
+    }
+
+    #[test]
+    fn the_buttons_held_right_now_are_reported_so_the_panel_can_be_navigated() {
+        let sources = vec![source(PadFamily::PlayStation, vec![Some(held())])];
+        let mut controller = GamepadController::new(sources, chord());
+
+        controller.fired();
+
+        assert_eq!(controller.held(), held());
+    }
+
+    #[test]
+    fn a_stick_pushed_reads_as_held_so_the_panel_can_be_navigated_with_it() {
+        let mut pads = MockGamepad::new();
+
+        pads.expect_buttons().returning(|| Some(0));
+        pads.expect_family().return_const(PadFamily::PlayStation);
+        pads.expect_direction()
+            .return_const(poe_wayfinder_core::controller::gamepad_match::DPAD_DOWN);
+
+        let mut controller = GamepadController::new(vec![Box::new(pads)], chord());
+
+        controller.fired();
+
+        assert_eq!(
+            controller.held(),
+            poe_wayfinder_core::controller::gamepad_match::DPAD_DOWN
+        );
+    }
+
+    #[test]
+    fn nothing_is_held_before_a_pad_has_been_read() {
+        let controller = GamepadController::new(Vec::new(), chord());
+
+        assert_eq!(controller.held(), 0);
     }
 
     #[test]

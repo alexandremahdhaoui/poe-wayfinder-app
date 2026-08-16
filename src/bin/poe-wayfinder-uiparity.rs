@@ -517,6 +517,24 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["self.gamepad.family()"],
     },
     Capability {
+        component: "OverlayWindow.vue",
+        name: "the panel is navigated line by line with the pad, with no cursor",
+        domain: &["fn react"],
+        ui: &["pad_focus::react("],
+    },
+    Capability {
+        component: "FilterBtnNumeric.vue",
+        name: "a min or max is edited with the pad in steps of 1, 10 and 100",
+        domain: &["fn hints"],
+        ui: &["PadEdit::AdjustMin"],
+    },
+    Capability {
+        component: "OverlayWindow.vue",
+        name: "closing from the pad hands the game back the foreground",
+        domain: &["fn hand_back_the_foreground"],
+        ui: &["self.window.hand_back_the_foreground()"],
+    },
+    Capability {
         component: "main/src/host-files/GameConfig.ts",
         name: "the diagnostics list every pad found and decode each button as it is pressed",
         domain: &["fn expected_bit"],

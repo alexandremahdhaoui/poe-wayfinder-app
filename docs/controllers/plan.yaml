@@ -25,18 +25,20 @@ tasks:
 
   - id: T5
     title: HID enumeration over setupapi and hid.dll
-    status: IMPLEMENTED
-    notes: "compiles for windows. Nothing has enumerated a real device yet."
+    status: VERIFIED
+    notes: >-
+      a real DualSense enumerated first time on 2026-08-17 as 054c:0ce6, 64
+      byte report, out of the four interfaces it exposes.
 
   - id: T6
     title: non blocking overlapped reads
-    status: IMPLEMENTED
-    notes: "never waits. Two input buffers so a press is not read stale."
+    status: VERIFIED
+    notes: "read a real pad at rest and under every button, never stalled a frame."
 
   - id: T7
     title: SonyPads implements the existing Gamepad trait
-    status: IMPLEMENTED
-    notes: "rescans every five seconds, same cadence as XInput."
+    status: VERIFIED
+    notes: "a real pad fires the chord and drives the panel."
 
   - id: T8
     title: one controller over both sources
@@ -52,18 +54,19 @@ tasks:
 
   - id: T10
     title: the three diagnostics
-    status: IMPLEMENTED
+    status: VERIFIED
     notes: >-
-      --list-gamepads, --watch-pad, --pad-walkthrough. All three run and
-      report honestly with no pad attached. None has seen a real one.
+      all three ran against a real DualSense. The walkthrough captured every
+      one of sixteen buttons and disagreed with the pad's own report
+      descriptor zero times.
 
   - id: T11
     title: captured hardware replays as a permanent test
-    status: IMPLEMENTED
+    status: VERIFIED
     notes: >-
-      pad_capture_replay.rs reads every .hex under core/tests/fixtures and
-      replays it through the parser. It passes with none today, which is the
-      one thing to remember: it proves nothing until a capture lands there.
+      dualsense-usb.hex holds sixteen real presses and replays green on linux
+      and on the windows target. Proven by flipping one byte and watching it
+      fail with "Square decoded as CROSS".
 
   - id: T12
     title: documentation and state
@@ -108,5 +111,19 @@ tasks:
 
   - id: T13
     title: the hardware session
-    status: PLANNED
-    notes: "2026-08-17. See hardware-session.md. Nothing here is proven until it runs."
+    status: VERIFIED
+    notes: >-
+      run on 2026-08-17 with a DualSense. Enumeration, decoding, the capture
+      and the chord all confirmed. The DualShock 4 path is still unverified
+      and nobody here has one.
+
+  - id: T18
+    title: the panel is driven by the pad rather than only opened by it
+    status: IMPLEMENTED
+    notes: >-
+      pad_focus holds a line and column focus with an edit mode, and an auto
+      repeat for a held direction. Up and down walk lines only, right and left
+      reach the min and max boxes, cross toggles or edits, the triggers step
+      by a hundred, R1 searches and circle closes. A hint bar names the
+      buttons whenever a pad is connected. The user asked for every one of
+      these after using the first version.
