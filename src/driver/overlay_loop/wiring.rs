@@ -539,6 +539,10 @@ pub fn build_gamepad(
 
     let chord = read_chord(&cfg.gamepad_chord, log);
 
+    if let Some(scripted) = read_pad_script(&cfg.gamepad_script, log) {
+        return GamepadController::new(vec![Box::new(scripted)], chord);
+    }
+
     if chord.is_some() {
         for device in known_devices() {
             log.info(
@@ -556,6 +560,58 @@ pub fn build_gamepad(
         vec![Box::new(XInputPads::new()), Box::new(SonyPads::new())],
         chord,
     )
+}
+
+fn read_pad_script(
+    path: &str,
+    log: &Logger,
+) -> Option<crate::adapter::gamepad_adapter::ScriptedPad> {
+    use crate::adapter::gamepad_adapter::ScriptedPad;
+    use poe_wayfinder_core::controller::pad_script;
+
+    if path.trim().is_empty() {
+        return None;
+    }
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            log.error(
+                "reading the pad script, so no pad is read at all",
+                &[
+                    ("path", Value::Str(path.to_string())),
+                    ("error", Value::Str(err.to_string())),
+                ],
+            );
+
+            return None;
+        }
+    };
+
+    let script = match pad_script::parse(&text) {
+        Ok(script) => script,
+        Err(message) => {
+            log.error(
+                "the pad script does not parse, so no pad is read at all",
+                &[
+                    ("path", Value::Str(path.to_string())),
+                    ("error", Value::Str(message)),
+                ],
+            );
+
+            return None;
+        }
+    };
+
+    log.warn(
+        "a scripted pad is standing in for a real one, which is a test harness and never a player",
+        &[
+            ("path", Value::Str(path.to_string())),
+            ("polls", Value::Int(script.polls() as i64)),
+        ],
+    );
+
+    Some(ScriptedPad::new(script))
 }
 
 fn read_chord(

@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use poe_wayfinder_core::controller::gamepad_match::PadFamily;
 use poe_wayfinder_core::controller::gamepad_nav;
+use poe_wayfinder_core::controller::pad_script::Script;
 use poe_wayfinder_core::controller::sony_pad;
 
 const SLOTS: u32 = 4;
@@ -523,6 +524,41 @@ pub mod hid {
         pub fn decode_by_descriptor(&self, _report: &[u8]) -> Option<u16> {
             None
         }
+    }
+}
+
+pub struct ScriptedPad {
+    script: Script,
+    poll: usize,
+    held: u16,
+}
+
+impl ScriptedPad {
+    pub fn new(script: Script) -> Self {
+        Self {
+            script,
+            poll: 0,
+            held: 0,
+        }
+    }
+}
+
+impl Gamepad for ScriptedPad {
+    fn buttons(&mut self) -> Option<u16> {
+        let held = self.script.at(self.poll).unwrap_or(0);
+
+        self.poll += 1;
+        self.held = held;
+
+        Some(held)
+    }
+
+    fn direction(&self) -> u16 {
+        0
+    }
+
+    fn family(&self) -> PadFamily {
+        PadFamily::PlayStation
     }
 }
 

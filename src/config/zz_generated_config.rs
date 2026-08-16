@@ -176,6 +176,8 @@ pub struct PoeWayfinderConfig {
     pub price_check_locked_alt_hotkey: String,
     /// Controller buttons that fire the locked price check, joined by plus, for example "LB+RB+Y" or "L1+R1+Triangle". Write it in whichever names are printed on your pad. Xbox names are LB, RB, LT, RT, L3, R3, BACK, START, UP, DOWN, LEFT, RIGHT, A, B, X and Y. PlayStation names are L1, R1, L2, R2, L3, R3, CREATE, SHARE, OPTIONS, UP, DOWN, LEFT, RIGHT, CROSS, CIRCLE, SQUARE and TRIANGLE. The two sets name the same buttons, so LB and L1 are one chord. Holding it again closes the panel and hands the game back the foreground, so a pad alone is enough. Empty turns it off. Windows offers no way to hide a pad button from the game, so the game acts on every button in the chord as well. Pick buttons the game does nothing with. Xbox pads are read through XInput and a DualSense or a DualShock 4 is read as a plain HID gamepad, so neither needs extra software. Steam Input takes a pad for itself, so a pad it has claimed is read through the virtual Xbox pad it publishes rather than directly.
     pub gamepad_chord: String,
+    /// A file of pad presses to play instead of reading a real controller. Windows offers no way to synthesise a gamepad press, so this is the only way a harness can drive the pad path. Each line is "wait N", "press BUTTONS" or "hold BUTTONS N", counted in polls of the frame loop rather than in seconds, so a run is the same on a fast machine and a slow one. Empty means read the real pads, which is what a player wants.
+    pub gamepad_script: String,
     /// Put the old clipboard back after reading the item. The app must copy to read the item, which destroys whatever the user had.
     pub restore_clipboard: bool,
     /// One of debug, info, warn, error.
@@ -207,6 +209,7 @@ impl PoeWayfinderConfig {
         known.insert("overlay-hotkey", false);
         known.insert("price-check-locked-alt-hotkey", false);
         known.insert("gamepad-chord", false);
+        known.insert("gamepad-script", false);
         known.insert("restore-clipboard", true);
         known.insert("log-level", false);
 
@@ -359,6 +362,13 @@ impl PoeWayfinderConfig {
             Some(v) => v,
             None => "L1+R1+Triangle".to_string(),
         };
+        let raw_gamepad_script: Option<String> = None
+            .or_else(|| flags.get("gamepad-script").cloned())
+            .or_else(|| env::var("POE_GAMEPAD_SCRIPT").ok());
+        let raw_gamepad_script = match raw_gamepad_script {
+            Some(v) => v,
+            None => "".to_string(),
+        };
         let raw_restore_clipboard: Option<String> = None
             .or_else(|| flags.get("restore-clipboard").cloned())
             .or_else(|| env::var("POE_RESTORE_CLIPBOARD").ok());
@@ -401,6 +411,7 @@ impl PoeWayfinderConfig {
             overlay_hotkey: raw_overlay_hotkey,
             price_check_locked_alt_hotkey: raw_price_check_locked_alt_hotkey,
             gamepad_chord: raw_gamepad_chord,
+            gamepad_script: raw_gamepad_script,
             restore_clipboard: parse_bool(&raw_restore_clipboard)?,
             log_level: raw_log_level,
         })
@@ -506,6 +517,11 @@ impl PoeWayfinderConfig {
             "{}:\"{}\"",
             "\"gamepad_chord\"",
             json_escape(&self.gamepad_chord)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"gamepad_script\"",
+            json_escape(&self.gamepad_script)
         ));
         pairs.push(format!(
             "{}:{}",

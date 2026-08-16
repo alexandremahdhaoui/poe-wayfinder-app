@@ -171,6 +171,7 @@ add exchange       "exchange-check, priced in"
 add focus          "focus-check, focused panel"
 add league         "league-check, current league"
 add both-games     "both-games-check, follow"
+add pad            "pad-check, a pad alone"
 add refresh        "refresh-check, weekly data"
 
 # A case rather than a table of command strings. A string would need `eval` to
@@ -188,6 +189,7 @@ run_harness() {
         league)         bash "$here/league-check.sh"     "$exe" ;;
         both-games)     bash "$here/both-games-check.sh" "$exe" ;;
         refresh)        bash "$here/refresh-check.sh"    "$exe" ;;
+        pad)            bash "$here/pad-check.sh"        "$exe" ;;
         *)              echo "check-all: no harness named $1"; return 2 ;;
     esac
 }

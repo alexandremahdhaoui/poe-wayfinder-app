@@ -106,7 +106,7 @@ echo "checking every harness kills leftovers on entry and on exit"
 armed=0
 
 for name in press-check both-games-check refresh-check focus-check \
-            league-check exchange-check; do
+            league-check exchange-check pad-check; do
     script="$here/$name.sh"
 
     [ -f "$script" ] || { say_fail "$name.sh is missing."; continue; }
@@ -135,7 +135,7 @@ for name in press-check both-games-check refresh-check focus-check \
     echo "      and answers the next harness's press, which reads as a pass."
 done
 
-[ "$armed" -eq 6 ] && echo "  all 6 harnesses arm the kill"
+[ "$armed" -eq 7 ] && echo "  all 7 harnesses arm the kill"
 
 echo
 

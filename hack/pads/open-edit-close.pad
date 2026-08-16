@@ -1,0 +1,25 @@
+# One price check, driven by nothing but a pad.
+#
+# Counted in polls of the frame loop, not seconds, so a slow machine runs the
+# same script as a fast one. The frame loop polls every 100ms.
+
+wait 40
+
+press L1+R1+Triangle
+
+wait 80
+
+press DOWN
+press DOWN
+
+press RIGHT
+press CROSS
+
+press UP
+press RIGHT
+
+press CROSS
+
+wait 10
+
+press CIRCLE

@@ -54,6 +54,23 @@ arm_harness() {
     sleep 2
 }
 
+# require_killable_name <exe>
+#
+# stop_overlays kills `poe-wayfinder*` and nothing else, so an exe deployed
+# under any other name survives every trap in this directory. One named
+# poe-pad-e2e.exe once outlived its harness, held the file open and failed the
+# next build with `Permission denied`, which reads as a broken build rather
+# than as a stray process.
+require_killable_name() {
+    case "$(basename "$1")" in
+        poe-wayfinder*) return 0 ;;
+    esac
+
+    echo "FAIL: $(basename "$1") is not named poe-wayfinder*, so stop_overlays"
+    echo "      cannot kill it and this run would leave an orphan behind."
+    exit 2
+}
+
 # wait_for <seconds> <file> <pattern...>
 #
 # Polls once a second until any pattern appears, then returns 0. Returns 1 when

@@ -272,7 +272,7 @@ mod win {
     fn focus_frame(marked: Option<PadView>) -> egui::Frame {
         match marked {
             Some(_) => egui::Frame::new()
-                .stroke(egui::Stroke::new(1.0, ACCENT))
+                .stroke(egui::Stroke::new(1.0_f32, ACCENT))
                 .corner_radius(4.0)
                 .inner_margin(2.0),
             None => egui::Frame::new().inner_margin(2.0),
@@ -289,8 +289,8 @@ mod win {
         }
 
         match pad.focus.editing {
-            true => egui::Stroke::new(2.0, GAUGE_FILL),
-            false => egui::Stroke::new(1.0, ACCENT),
+            true => egui::Stroke::new(2.0_f32, GAUGE_FILL),
+            false => egui::Stroke::new(1.0_f32, ACCENT),
         }
     }
 
