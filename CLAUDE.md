@@ -126,3 +126,90 @@ from the log alone?**
 
 There is **no `trace` level**. `Level::parse` maps anything unknown to info and
 says nothing, so `--log-level trace` silently produces an info log.
+
+## The target is Windows, so the tests run on Windows
+
+`forge test-all` has a `unit` stage and a `unit-windows` stage. The second runs
+`cargo test --target x86_64-pc-windows-gnu`, and WSL interop executes the
+Windows test binary from this shell. Both crates have it.
+
+Without it, every `cfg(windows)` adapter is compiled by the cross build and
+then never run, while the Linux stage happily tests the `cfg(not(windows))`
+stub beside it and reports green. That is two suites agreeing about code
+neither of them executed.
+
+It found a real one immediately. `SonyPads::buttons()` was asserted to return
+`None`, which is true on Linux where the stub returns nothing, true on this
+Windows machine today, and **false tomorrow the moment a DualSense is plugged
+in**. A test that passes because the hardware is absent fails the day the
+hardware arrives. It now asserts the relationship instead: a pad reads as
+connected exactly when one is plugged in.
+
+**A test that touches real hardware must hold both with the device and
+without.** Assert the relationship, never the absence.
+
+## Run it the way a person runs it, or the output goes nowhere
+
+`hack/windows-smoke.sh`, the `windows-smoke` stage, copies the exe to a real
+directory on C: and runs it through cmd and through PowerShell.
+
+It exists because `windows_subsystem = "windows"` means the process starts with
+no standard output at all. `attach_console` called `AttachConsole` and stopped
+there, so `GetStdHandle` still returned nothing and every `println!` went
+nowhere. **Every diagnostic printed nothing when launched from a Windows
+shell**, and printed perfectly from WSL, which is the only place anyone had ever
+run it. `--list-gamepads`, `--watch-pad` and `--pad-walkthrough` were all
+invisible to the one person who was going to use them.
+
+The fix is two more steps after attaching: open `CONOUT$` and `SetStdHandle`.
+And skip attaching entirely when a handle is already set, because
+`AttachConsole` otherwise overwrites a `> file` redirect with the console and
+the file stays empty.
+
+**A gate is only proven by watching it fail.** The old `attach_console` was put
+back, rebuilt and run: three FAILs. Then the fix, rebuilt: green. A Windows
+side check that has only ever been run against working code is a check nobody
+has tested.
+
+## Reading a pad without a crate
+
+`gamepad_adapter` holds two sources. XInput reads Xbox pads. `hid` reads a
+DualSense or a DualShock 4 straight from `hid.dll` and `setupapi.dll`, which is
+all `hidapi` does on Windows. No crate, four feature strings on `windows`.
+
+**The parse belongs in core, not in the adapter.** The `architecture` stage
+refuses one adapter that imports another, and splitting HID transport from Sony
+decoding into two adapter files broke that rule seven times over. The decoding
+is pure, so it went to `core::controller::sony_pad`, where a captured report
+replays through it on Linux with no pad. The stage was right and the code is
+better for it.
+
+**A `HANDLE` is neither `Send` nor `Sync`.** `Gamepad` demanded both and the
+Linux build never noticed, because the HID code is `cfg(windows)`. Only the
+cross build caught it. Nothing needed those bounds, so they went.
+
+**A capture must hold the report from while the button was down.** The first
+`--pad-walkthrough` returned the report from the moment of *release*, which
+decodes to zero. Every captured line would have been labelled with a button and
+held the bytes for nothing at all, and the replay test would have failed against
+a capture that took an hour with real hardware to make. Found by reading, not by
+a test, because no test can see it without a pad.
+
+**An oracle has assumptions too.** The descriptor path assumes Sony's button
+numbering, which is as unverified as the offsets it checks. The button a human
+pressed is the ground truth. `hardware-session.md` carries the table that says
+which of the two to believe when they disagree.
+
+**The pad is its own oracle.** `HidReader::decode_by_descriptor` decodes a
+report through the HID report descriptor the device publishes, using Windows'
+own parser, with no offsets from us. `--pad-walkthrough` prints both and
+compares. That is how a hardcoded offset table gets checked against reality
+without trusting the person who wrote it, and it is how a DualShock 4 owner can
+verify offsets nobody here can test.
+
+**A capture is the test.** `--pad-walkthrough` names each button, waits for one
+press, and writes the raw reports. The file goes in
+`poe-wayfinder-core/tests/fixtures/` and `pad_capture_replay.rs` replays it
+forever after. It passes with no fixtures, which is the same trap the empty gem
+table was: green while measuring nothing. Until a `.hex` file lands there, the
+parser has only ever been tested against reports this repo made up.

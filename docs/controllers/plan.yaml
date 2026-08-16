@@ -1,0 +1,112 @@
+feature: controller support
+tasks:
+  - id: T1
+    title: uiparity capabilities added first, watched go red at 75 of 78
+    status: VERIFIED
+    notes: "green again at 78 of 78 once the driver really called the new code"
+
+  - id: T2
+    title: transcribe the DualShock 4 offsets from SDL rather than from memory
+    status: VERIFIED
+    notes: >-
+      SDL_hidapi_ps4.c puts the packet at data[1] over USB and data[3] over
+      bluetooth, buttons at packet offset 4. So byte 5 and byte 7. The
+      remembered numbers were right and are now sourced.
+
+  - id: T3
+    title: gamepad_match learns the playstation button names and the pad family
+    status: VERIFIED
+    notes: "L1 and LB are one bit. describe_for prints the names on the pad in hand."
+
+  - id: T4
+    title: the pure report parser, core::controller::sony_pad
+    status: VERIFIED
+    notes: "19 tests. Both families, three transports, every hat position."
+
+  - id: T5
+    title: HID enumeration over setupapi and hid.dll
+    status: IMPLEMENTED
+    notes: "compiles for windows. Nothing has enumerated a real device yet."
+
+  - id: T6
+    title: non blocking overlapped reads
+    status: IMPLEMENTED
+    notes: "never waits. Two input buffers so a press is not read stale."
+
+  - id: T7
+    title: SonyPads implements the existing Gamepad trait
+    status: IMPLEMENTED
+    notes: "rescans every five seconds, same cadence as XInput."
+
+  - id: T8
+    title: one controller over both sources
+    status: VERIFIED
+    notes: >-
+      13 tests. Two pads at once is not a conflict, and half a chord on each
+      pad does not fire it.
+
+  - id: T9
+    title: wiring and the config key text
+    status: VERIFIED
+    notes: "both name sets documented in the spec. Config regenerated."
+
+  - id: T10
+    title: the three diagnostics
+    status: IMPLEMENTED
+    notes: >-
+      --list-gamepads, --watch-pad, --pad-walkthrough. All three run and
+      report honestly with no pad attached. None has seen a real one.
+
+  - id: T11
+    title: captured hardware replays as a permanent test
+    status: IMPLEMENTED
+    notes: >-
+      pad_capture_replay.rs reads every .hex under core/tests/fixtures and
+      replays it through the parser. It passes with none today, which is the
+      one thing to remember: it proves nothing until a capture lands there.
+
+  - id: T12
+    title: documentation and state
+    status: VERIFIED
+
+  - id: T14
+    title: the parser is checked against the pad's own report descriptor
+    status: IMPLEMENTED
+    notes: >-
+      HidP_GetUsages decodes the same report from what the device publishes
+      about itself. --pad-walkthrough prints both and fails on a disagreement.
+      An independent oracle for the one thing unit tests cannot check.
+
+  - id: T15
+    title: exhaustive round trip and a brute force sweep
+    status: VERIFIED
+    notes: >-
+      every one of 65536 masks renders and parses back, across five products
+      and three transports. Every report id crossed with every length up to 80
+      is fed to the parser to prove it never panics. Self consistency only,
+      which is why T14 and the capture exist.
+
+  - id: T16
+    title: the gate runs the tests on the arch this ships to
+    status: VERIFIED
+    notes: >-
+      a unit-windows forge stage in both crates runs
+      cargo test --target x86_64-pc-windows-gnu, executed by WSL interop.
+      Before it, every cfg(windows) adapter was compiled and never run while
+      the linux stage tested the stub beside it. It caught a test that passed
+      only because no pad was plugged in.
+
+  - id: T17
+    title: the exe answers when run the way a person runs it
+    status: VERIFIED
+    notes: >-
+      hack/windows-smoke.sh copies the exe to C: and runs it through cmd and
+      PowerShell. It found that a windows subsystem exe printed nothing from a
+      Windows shell, so every pad diagnostic was invisible to the person who
+      would use it tomorrow. attach_console now opens CONOUT$ and calls
+      SetStdHandle. Proven by putting the bug back and watching the stage fail.
+
+  - id: T13
+    title: the hardware session
+    status: PLANNED
+    notes: "2026-08-17. See hardware-session.md. Nothing here is proven until it runs."

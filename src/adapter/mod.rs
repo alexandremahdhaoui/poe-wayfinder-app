@@ -6,6 +6,7 @@ pub mod game_config_adapter;
 pub mod game_data_adapter;
 pub mod game_log_adapter;
 pub mod game_window_adapter;
+pub mod gamepad_adapter;
 pub mod http_adapter;
 pub mod input_state_adapter;
 pub mod query_json_adapter;

@@ -486,6 +486,42 @@ const CAPABILITIES: &[Capability] = &[
         domain: &["fn modifier_text"],
         ui: &["modifier_text"],
     },
+    Capability {
+        component: "main/src/shortcuts/Shortcuts.ts",
+        name: "a controller chord fires the price check with no keyboard touched",
+        domain: &["fn best_match"],
+        ui: &["self.read_gamepad()"],
+    },
+    Capability {
+        component: "settings/SettingsWindow.vue",
+        name: "the status window says whether a pad is connected and which chord fires it",
+        domain: &["fn controller_caption"],
+        ui: &["ControllerStatus {"],
+    },
+    Capability {
+        component: "settings/SettingsWindow.vue",
+        name: "the log says the game sees the button too and that Steam Input takes the pad",
+        domain: &["fn parse_chord"],
+        ui: &["Steam Input"],
+    },
+    Capability {
+        component: "main/src/shortcuts/Shortcuts.ts",
+        name: "a playstation pad fires the price check with no extra software",
+        domain: &["fn parse_report"],
+        ui: &["SonyPads::new()"],
+    },
+    Capability {
+        component: "settings/SettingsWindow.vue",
+        name: "a chord is written in the button names printed on the pad in hand",
+        domain: &["fn describe_for"],
+        ui: &["self.gamepad.family()"],
+    },
+    Capability {
+        component: "main/src/host-files/GameConfig.ts",
+        name: "the diagnostics list every pad found and decode each button as it is pressed",
+        domain: &["fn expected_bit"],
+        ui: &["--pad-walkthrough"],
+    },
 ];
 
 const FLOOR: f64 = 0.0;

@@ -333,6 +333,7 @@ pub fn build_settings_for(
         log_level: cfg.log_level.clone(),
         latency: cfg.api_latency_seconds.max(0) as u32,
         restore_clipboard: cfg.restore_clipboard,
+        gamepad_chord: cfg.gamepad_chord.clone(),
         data_origin: origin.get(game).as_str().to_string(),
         network: cfg.network_enabled,
     }
@@ -502,6 +503,102 @@ pub fn build_logs(client_log_path: &str, read_history: bool) -> Box<dyn LogSourc
     };
 
     Box::new(LogWatchController::new(watcher))
+}
+
+pub fn build_prices(
+    cfg: &PoeWayfinderConfig,
+    settings: &super::OverlaySettings,
+    game: GameVersion,
+    http: HttpAdapter,
+) -> crate::controller::price_check_controller::PriceCheckController<
+    HttpAdapter,
+    crate::adapter::clock_adapter::SystemClock,
+> {
+    use crate::adapter::clock_adapter::SystemClock;
+    use crate::controller::price_check_controller::PriceCheckController;
+
+    PriceCheckController::new(
+        http,
+        SystemClock::new(),
+        &cfg.trade_base_url,
+        game,
+        &settings.league,
+    )
+    .with_session(&cfg.poesessid)
+    .with_latency(settings.latency)
+}
+
+pub fn build_gamepad(
+    cfg: &PoeWayfinderConfig,
+    log: &Logger,
+) -> crate::controller::gamepad_controller::GamepadController {
+    use crate::adapter::gamepad_adapter::XInputPads;
+    use crate::adapter::gamepad_adapter::{known_devices, SonyPads};
+    use crate::controller::gamepad_controller::GamepadController;
+    use poe_wayfinder_core::controller::sony_pad::product_name;
+
+    let chord = read_chord(&cfg.gamepad_chord, log);
+
+    if chord.is_some() {
+        for device in known_devices() {
+            log.info(
+                "a playstation pad is plugged in and readable",
+                &[
+                    ("pad", Value::Str(product_name(device.product).to_string())),
+                    ("product", Value::Str(format!("{:#06x}", device.product))),
+                    ("report_len", Value::Int(device.report_len as i64)),
+                ],
+            );
+        }
+    }
+
+    GamepadController::new(
+        vec![Box::new(XInputPads::new()), Box::new(SonyPads::new())],
+        chord,
+    )
+}
+
+fn read_chord(
+    text: &str,
+    log: &Logger,
+) -> Option<poe_wayfinder_core::controller::gamepad_match::Chord> {
+    use poe_wayfinder_core::controller::gamepad_match;
+
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let Some(chord) = gamepad_match::parse_chord(text) else {
+        log.warn(
+            "the controller chord names a button this build does not know, so no pad fires the check",
+            &[("chord", Value::Str(text.to_string()))],
+        );
+
+        return None;
+    };
+
+    log.info(
+        "a controller chord fires the locked price check. The game acts on those buttons too, and Steam Input reads the pad instead of us while it is on.",
+        &[
+            ("chord", Value::Str(text.trim().to_string())),
+            (
+                "xbox_names",
+                Value::Str(gamepad_match::describe_for(
+                    gamepad_match::PadFamily::Xbox,
+                    chord.mask,
+                )),
+            ),
+            (
+                "playstation_names",
+                Value::Str(gamepad_match::describe_for(
+                    gamepad_match::PadFamily::PlayStation,
+                    chord.mask,
+                )),
+            ),
+        ],
+    );
+
+    Some(chord)
 }
 
 #[cfg(windows)]

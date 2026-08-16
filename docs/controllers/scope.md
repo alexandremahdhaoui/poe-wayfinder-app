@@ -1,6 +1,10 @@
 # scope: controller support
 
-Research only. No code was written. No dependency was added.
+Research first. The user read it on 2026-08-15 and chose to build the XInput
+adapter anyway, knowing the game always sees the button and that Steam Input
+takes the pad. What shipped is at the end, under "What was built".
+
+No dependency was added.
 
 ## The headline
 
@@ -380,3 +384,79 @@ the player enables Steam Input?
 - https://steamcommunity.com/sharedfiles/filedetails/?id=3462829061
 - https://gamerant.com/path-of-exile-2-use-in-game-price-checker-poe2/
 - https://pathofexile2.wiki.fextralife.com/Controls
+
+## What was built
+
+Built on 2026-08-16. Off by default. `--gamepad-chord "LB+RB+Y"` or
+`POE_GAMEPAD_CHORD` turns it on. Empty is off.
+
+| Piece | Layer | Where |
+|---|---|---|
+| `XInputGetState`, slot bookkeeping, the 5 second rescan | adapter | `poe-wayfinder-app/src/adapter/gamepad_adapter.rs` |
+| chord parsing, the button table, edge detection | controller, pure | `poe-wayfinder-core/src/controller/gamepad_match.rs` |
+| the adapter behind a trait the driver can hold | controller | `poe-wayfinder-app/src/controller/gamepad_controller.rs` |
+| `read_gamepad` each frame, the status row | driver | `overlay_loop/win.rs` |
+| parsing the config chord and the warning log | wiring | `overlay_loop/wiring.rs` |
+
+Decisions the code makes, each from a question above:
+
+- The chord fires the **locked** check, so the panel opens focused with no
+  pointer. Item 4.
+- `Reaction::Swallow` does not exist. Nothing can be swallowed. Item 7.
+- Only slots known to hold a pad are read each frame. Every slot is read again
+  every 5 seconds. Item 8.
+- The startup log names the chord, says the game acts on those buttons too, and
+  says Steam Input reads the pad instead of us while it is on. Item 9.
+- The status window carries a Controller row: the chord and whether a pad is
+  connected.
+
+Still unverified, because it needs a pad and a running game:
+
+- whether a controller player can hold a chord PoE2 does nothing with
+- whether the game consumes the chord before the overlay sees it
+- item 3, whether nudging the mouse costs a player their controller bindings
+
+## PlayStation pads, built 2026-08-16
+
+The user asked for DualSense support and ruled out unvetted crates. Both were
+answered by writing it ourselves.
+
+**No crate was added.** What `hidapi` does on Windows is call `hid.dll` and
+`setupapi.dll`. `gamepad_adapter::hid` calls them directly. Four more feature
+strings on the `windows` crate, which was already built. Nothing else.
+
+**No driver is needed.** ViGEmBus, HidHide and the GameInput redistributable
+all require an install on the player machine. GameInput ships as
+`GameInputRedist.msi` and a title is expected to install it. That breaks the
+rule that the exe runs with nothing beside it.
+
+**Two processes may read one pad.** Each open HID handle gets its own ring
+buffer in the Windows HID class driver, so the overlay reads the pad while the
+game reads it too. Same bargain XInput already made.
+
+| Piece | Where |
+|---|---|
+| report parsing, product ids, button table | `core::controller::sony_pad`, pure |
+| enumeration and overlapped reads | `gamepad_adapter::hid`, windows only |
+| `SonyPads`, the second `Gamepad` source | `gamepad_adapter` |
+| both sources under one chord | `gamepad_controller` |
+| diagnostics | `cli_driver` |
+
+Decisions:
+
+- **One chord, two name sets.** `L1+R1+Triangle` and `LB+RB+Y` are the same
+  bits. The status row prints the names on the pad in hand. Xbox X sits where
+  PlayStation Square sits, which is the one confusing pair and has its own
+  test.
+- **The parser lives in core.** It is pure, so a captured report replays
+  through it on Linux with no pad. The `architecture` stage forced this by
+  refusing one adapter that reached another, and it was right.
+- **An unknown report id is refused, never guessed.** A wrong offset then
+  reads as nothing rather than as the wrong button.
+- **DualShock 4 is included and unverified.** The offsets come from SDL, which
+  is zlib licensed and safe to port from. Nobody here has a DS4.
+
+Sources read: `nondebug/dualsense` for the DualSense reports,
+`SDL_hidapi_ps4.c` and `SDL_hidapi_ps5.c` for the offsets and the bluetooth
+report ids. The Linux `hid-playstation.c` is GPL-2.0 and was read for facts
+only, with nothing copied.

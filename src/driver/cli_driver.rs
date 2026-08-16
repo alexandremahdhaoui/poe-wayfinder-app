@@ -683,7 +683,404 @@ pub fn report_startup(
     );
 }
 
+pub fn list_gamepads() -> ExitCode {
+    use poe_wayfinder_core::controller::sony_pad::{
+        is_known, product_name, GAMEPAD_USAGE, GAMEPAD_USAGE_PAGE,
+    };
+
+    let devices = crate::adapter::gamepad_adapter::hid::list(GAMEPAD_USAGE_PAGE, GAMEPAD_USAGE);
+
+    println!("HID gamepads this build can see.");
+    println!("An Xbox pad is read through XInput and does not appear here.\n");
+
+    for device in &devices {
+        let known = match is_known(device.vendor, device.product) {
+            true => product_name(device.product),
+            false => "not a pad this build reads",
+        };
+
+        println!(
+            "  {:#06x}:{:#06x}  {} bytes  {known}",
+            device.vendor, device.product, device.report_len
+        );
+        println!("    {}", device.path);
+    }
+
+    if devices.is_empty() {
+        println!("  (none. Plug a DualSense in, or the pad is claimed by other software.)");
+    }
+
+    ExitCode::SUCCESS
+}
+
+pub fn watch_pad(seconds: u64) -> ExitCode {
+    use crate::adapter::gamepad_adapter::known_devices;
+    use poe_wayfinder_core::controller::gamepad_match::{describe_for, PadFamily};
+    use poe_wayfinder_core::controller::sony_pad::{parse_report, product_name};
+
+    let Some(device) = known_devices().into_iter().next() else {
+        eprintln!("poe-wayfinder: no playstation pad found. Try --list-gamepads.");
+
+        return ExitCode::FAILURE;
+    };
+
+    let Some(mut reader) = crate::adapter::gamepad_adapter::hid::HidReader::open(&device) else {
+        eprintln!("poe-wayfinder: the pad was found but could not be opened.");
+
+        return ExitCode::FAILURE;
+    };
+
+    println!(
+        "Watching a {} for {seconds} seconds. Press buttons.",
+        product_name(device.product)
+    );
+    println!("Each line is the raw report, then what this build decodes.\n");
+
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut last = None;
+
+    while std::time::Instant::now() < until {
+        if let Some(report) = reader.newest() {
+            let mask = parse_report(device.product, &report);
+
+            if mask != last {
+                last = mask;
+
+                println!(
+                    "  {}  mask {:#06x}  {}",
+                    hex_line(&report[..report.len().min(12)]),
+                    mask.unwrap_or(0),
+                    match mask {
+                        Some(mask) => describe_for(PadFamily::PlayStation, mask),
+                        None => "unreadable report".to_string(),
+                    }
+                );
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+
+    ExitCode::SUCCESS
+}
+
+pub fn hex_line(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+pub fn pad_walkthrough(path: &str) -> ExitCode {
+    use crate::adapter::gamepad_adapter::known_devices;
+    use poe_wayfinder_core::controller::sony_pad::{product_name, WALKTHROUGH};
+
+    let Some(device) = known_devices().into_iter().next() else {
+        eprintln!("poe-wayfinder: no playstation pad found. Try --list-gamepads.");
+
+        return ExitCode::FAILURE;
+    };
+
+    let Some(mut reader) = crate::adapter::gamepad_adapter::hid::HidReader::open(&device) else {
+        eprintln!("poe-wayfinder: the pad was found but could not be opened.");
+
+        return ExitCode::FAILURE;
+    };
+
+    println!(
+        "Walkthrough for a {}. Press each button once, alone.",
+        product_name(device.product)
+    );
+    println!("Every raw report is written to {path}.\n");
+
+    let mut presses = Vec::new();
+
+    for label in WALKTHROUGH {
+        println!("  press {label}");
+
+        let Some(press) = press_once(&mut reader, device.product) else {
+            println!("    nothing arrived in time. Stopping here.");
+
+            break;
+        };
+
+        presses.push((*label, press));
+    }
+
+    finish_walkthrough(path, device.product, device.report_len, presses)
+}
+
+#[cfg(unix)]
+pub fn record_hidraw(node: &str, out: &str) -> ExitCode {
+    use std::io::Read;
+
+    use poe_wayfinder_core::controller::sony_pad::{
+        is_known, parse_report, product_name, WALKTHROUGH,
+    };
+
+    let Some((vendor, product)) = hidraw_ids(node) else {
+        eprintln!("poe-wayfinder: could not read the vendor and product of {node}.");
+        eprintln!("               Try: ls /dev/hidraw*");
+
+        return ExitCode::FAILURE;
+    };
+
+    if !is_known(vendor, product) {
+        eprintln!(
+            "poe-wayfinder: {node} is {vendor:#06x}:{product:#06x}, not a pad this build reads."
+        );
+
+        return ExitCode::FAILURE;
+    }
+
+    let mut file = match std::fs::File::open(node) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("poe-wayfinder: opening {node}: {err}");
+            eprintln!("               hidraw usually needs sudo or a udev rule.");
+
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!(
+        "Recording a {} from {node}. Press each button once, alone.",
+        product_name(product)
+    );
+    println!("This reads the pad directly and shares none of the windows code.\n");
+
+    let mut buffer = [0u8; 128];
+    let mut presses = Vec::new();
+    let mut report_len = 0;
+
+    for label in WALKTHROUGH {
+        println!("  press {label}");
+
+        let mut held: Option<PadPress> = None;
+
+        while let Ok(got) = file.read(&mut buffer) {
+            if got == 0 {
+                break;
+            }
+
+            report_len = report_len.max(got);
+
+            let report = buffer[..got].to_vec();
+
+            let Some(mask) = parse_report(product, &report) else {
+                continue;
+            };
+
+            match (mask, &held) {
+                (0, Some(_)) => break,
+                (0, None) => {}
+                (mask, _) => {
+                    held = Some(PadPress {
+                        mask,
+                        descriptor: None,
+                        report,
+                    })
+                }
+            }
+        }
+
+        let Some(press) = held else {
+            println!("    nothing arrived. Stopping here.");
+
+            break;
+        };
+
+        presses.push((*label, press));
+    }
+
+    finish_walkthrough(out, product, report_len, presses)
+}
+
+#[cfg(unix)]
+fn hidraw_ids(node: &str) -> Option<(u16, u16)> {
+    let name = std::path::Path::new(node).file_name()?.to_str()?;
+    let uevent = format!("/sys/class/hidraw/{name}/device/uevent");
+    let body = std::fs::read_to_string(uevent).ok()?;
+
+    for line in body.lines() {
+        let Some(ids) = line.strip_prefix("HID_ID=") else {
+            continue;
+        };
+
+        let mut parts = ids.split(':').skip(1);
+        let vendor = u32::from_str_radix(parts.next()?.trim(), 16).ok()?;
+        let product = u32::from_str_radix(parts.next()?.trim(), 16).ok()?;
+
+        return Some((vendor as u16, product as u16));
+    }
+
+    None
+}
+
+#[cfg(not(unix))]
+pub fn record_hidraw(_node: &str, _out: &str) -> ExitCode {
+    eprintln!("poe-wayfinder: --record-hidraw only works on linux.");
+
+    ExitCode::FAILURE
+}
+
+pub struct PadPress {
+    pub mask: u16,
+    pub descriptor: Option<u16>,
+    pub report: Vec<u8>,
+}
+
+fn finish_walkthrough(
+    path: &str,
+    product: u16,
+    report_len: usize,
+    presses: Vec<(&'static str, PadPress)>,
+) -> ExitCode {
+    use poe_wayfinder_core::controller::gamepad_match::{describe_for, PadFamily};
+    use poe_wayfinder_core::controller::sony_pad::{expected_bit, WALKTHROUGH};
+
+    let mut captured = format!("# product {product:#06x}\n# report_len {report_len}\n");
+
+    println!("\n  label      expected  read      descriptor  verdict");
+
+    let mut failed = 0;
+    let mut disagreed = 0;
+    let mut asked = 0;
+
+    for (label, press) in &presses {
+        let wanted = expected_bit(label);
+        let ok = wanted == press.mask;
+
+        captured.push_str(&format!("{label} {}\n", hex_line(&press.report)));
+
+        if !ok {
+            failed += 1;
+        }
+
+        let oracle = match press.descriptor {
+            Some(mask) => {
+                asked += 1;
+
+                if mask != press.mask {
+                    disagreed += 1;
+                }
+
+                format!("{mask:#06x}")
+            }
+            None => "not read".to_string(),
+        };
+
+        println!(
+            "  {label:<10} {wanted:#06x}    {:#06x}    {oracle:<10}  {}",
+            press.mask,
+            match ok {
+                true => "PASS".to_string(),
+                false => format!(
+                    "FAIL, read {}",
+                    describe_for(PadFamily::PlayStation, press.mask)
+                ),
+            }
+        );
+    }
+
+    println!(
+        "\n{} of {} buttons decode as this build expects.",
+        presses.len() - failed,
+        presses.len()
+    );
+
+    println!(
+        "{asked} of {} checked against the pad's own report descriptor, {disagreed} disagreed.",
+        presses.len()
+    );
+
+    captured.push_str(&format!(
+        "# descriptor_checked {asked}\n# descriptor_disagreed {disagreed}\n"
+    ));
+
+    if disagreed > 0 {
+        println!(
+            "A disagreement means our hardcoded offsets and what the pad says \n\
+             about itself do not match. Trust the descriptor."
+        );
+    }
+
+    if let Err(err) = std::fs::write(path, &captured) {
+        eprintln!("poe-wayfinder: writing {path}: {err}");
+    }
+
+    match failed == 0 && disagreed == 0 && presses.len() == WALKTHROUGH.len() {
+        true => ExitCode::SUCCESS,
+        false => ExitCode::FAILURE,
+    }
+}
+
+fn press_once(
+    reader: &mut crate::adapter::gamepad_adapter::hid::HidReader,
+    product: u16,
+) -> Option<PadPress> {
+    use poe_wayfinder_core::controller::sony_pad::parse_report;
+
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut held: Option<PadPress> = None;
+
+    while std::time::Instant::now() < until {
+        if let Some(report) = reader.newest() {
+            let Some(mask) = parse_report(product, &report) else {
+                continue;
+            };
+
+            match (mask, &held) {
+                (0, Some(_)) => return held,
+                (0, None) => {}
+                (mask, _) => {
+                    held = Some(PadPress {
+                        mask,
+                        descriptor: reader.decode_by_descriptor(&report),
+                        report,
+                    })
+                }
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+
+    None
+}
+
 pub fn run_subcommand(args: &[String]) -> Option<ExitCode> {
+    if args.iter().any(|a| a == "--list-gamepads") {
+        return Some(list_gamepads());
+    }
+
+    if args.first().map(String::as_str) == Some("--watch-pad") {
+        let seconds = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);
+
+        return Some(watch_pad(seconds));
+    }
+
+    if args.first().map(String::as_str) == Some("--record-hidraw") {
+        let (Some(node), Some(out)) = (args.get(1), args.get(2)) else {
+            eprintln!("usage: --record-hidraw /dev/hidrawN <file to write>");
+
+            return Some(ExitCode::FAILURE);
+        };
+
+        return Some(record_hidraw(node, out));
+    }
+
+    if args.first().map(String::as_str) == Some("--pad-walkthrough") {
+        let Some(path) = args.get(1) else {
+            eprintln!("usage: --pad-walkthrough <file to write the raw reports to>");
+
+            return Some(ExitCode::FAILURE);
+        };
+
+        return Some(pad_walkthrough(path));
+    }
+
     if args.iter().any(|a| a == "--list-windows") {
         return Some(list_windows());
     }
@@ -778,10 +1175,57 @@ pub fn move_mouse(_x: i32, _y: i32) -> ExitCode {
 
 #[cfg(windows)]
 pub fn attach_console() {
-    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    use windows::Win32::System::Console::{
+        AttachConsole, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
 
-    unsafe {
-        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    if handle_is_set(STD_OUTPUT_HANDLE) {
+        return;
+    }
+
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) }.is_err() {
+        return;
+    }
+
+    bind_to_console(STD_OUTPUT_HANDLE);
+    bind_to_console(STD_ERROR_HANDLE);
+}
+
+#[cfg(windows)]
+fn handle_is_set(which: windows::Win32::System::Console::STD_HANDLE) -> bool {
+    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows::Win32::System::Console::GetStdHandle;
+
+    match unsafe { GetStdHandle(which) } {
+        Ok(handle) => !handle.is_invalid() && handle != INVALID_HANDLE_VALUE,
+        Err(_) => false,
+    }
+}
+
+#[cfg(windows)]
+fn bind_to_console(which: windows::Win32::System::Console::STD_HANDLE) {
+    use windows::core::w;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows::Win32::System::Console::SetStdHandle;
+
+    const GENERIC_READ_WRITE: u32 = 0xC000_0000;
+
+    let opened = unsafe {
+        CreateFileW(
+            w!("CONOUT$"),
+            GENERIC_READ_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    };
+
+    if let Ok(handle) = opened {
+        let _ = unsafe { SetStdHandle(which, handle) };
     }
 }
 

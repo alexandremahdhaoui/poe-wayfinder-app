@@ -174,6 +174,8 @@ pub struct PoeWayfinderConfig {
     pub overlay_hotkey: String,
     /// A second binding for the locked check, easier to reach one handed. Empty turns it off.
     pub price_check_locked_alt_hotkey: String,
+    /// Controller buttons that fire the locked price check, joined by plus, for example "LB+RB+Y" or "L1+R1+Triangle". Write it in whichever names are printed on your pad. Xbox names are LB, RB, LT, RT, L3, R3, BACK, START, UP, DOWN, LEFT, RIGHT, A, B, X and Y. PlayStation names are L1, R1, L2, R2, L3, R3, CREATE, SHARE, OPTIONS, UP, DOWN, LEFT, RIGHT, CROSS, CIRCLE, SQUARE and TRIANGLE. The two sets name the same buttons, so LB and L1 are one chord. Empty turns it off, which is the default. Windows offers no way to hide a pad button from the game, so the game acts on every button in the chord as well. Pick buttons the game does nothing with. Xbox pads are read through XInput and a DualSense or a DualShock 4 is read as a plain HID gamepad, so neither needs extra software. Steam Input takes a pad for itself, so a pad it has claimed is read through the virtual Xbox pad it publishes rather than directly.
+    pub gamepad_chord: String,
     /// Put the old clipboard back after reading the item. The app must copy to read the item, which destroys whatever the user had.
     pub restore_clipboard: bool,
     /// One of debug, info, warn, error.
@@ -204,6 +206,7 @@ impl PoeWayfinderConfig {
         known.insert("stash-searches", false);
         known.insert("overlay-hotkey", false);
         known.insert("price-check-locked-alt-hotkey", false);
+        known.insert("gamepad-chord", false);
         known.insert("restore-clipboard", true);
         known.insert("log-level", false);
 
@@ -349,6 +352,13 @@ impl PoeWayfinderConfig {
             Some(v) => v,
             None => "Ctrl+Shift+D".to_string(),
         };
+        let raw_gamepad_chord: Option<String> = None
+            .or_else(|| flags.get("gamepad-chord").cloned())
+            .or_else(|| env::var("POE_GAMEPAD_CHORD").ok());
+        let raw_gamepad_chord = match raw_gamepad_chord {
+            Some(v) => v,
+            None => "".to_string(),
+        };
         let raw_restore_clipboard: Option<String> = None
             .or_else(|| flags.get("restore-clipboard").cloned())
             .or_else(|| env::var("POE_RESTORE_CLIPBOARD").ok());
@@ -390,6 +400,7 @@ impl PoeWayfinderConfig {
             stash_searches: raw_stash_searches,
             overlay_hotkey: raw_overlay_hotkey,
             price_check_locked_alt_hotkey: raw_price_check_locked_alt_hotkey,
+            gamepad_chord: raw_gamepad_chord,
             restore_clipboard: parse_bool(&raw_restore_clipboard)?,
             log_level: raw_log_level,
         })
@@ -490,6 +501,11 @@ impl PoeWayfinderConfig {
             "{}:\"{}\"",
             "\"price_check_locked_alt_hotkey\"",
             json_escape(&self.price_check_locked_alt_hotkey)
+        ));
+        pairs.push(format!(
+            "{}:\"{}\"",
+            "\"gamepad_chord\"",
+            json_escape(&self.gamepad_chord)
         ));
         pairs.push(format!(
             "{}:{}",

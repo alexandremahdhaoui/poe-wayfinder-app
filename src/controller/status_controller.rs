@@ -45,6 +45,7 @@ pub struct Status {
     pub network: bool,
     pub limits: Vec<LimiterLine>,
     pub note: Option<String>,
+    pub controller: String,
 }
 
 pub fn health(status: &Status) -> Health {
@@ -171,6 +172,7 @@ pub fn rows(status: &Status, now: SystemTime) -> Vec<(&'static str, String)> {
         ("League", league_caption(status)),
         ("Data", data_caption(status)),
         ("Refreshed", refresh_caption(status.last_refresh, now)),
+        ("Controller", status.controller.clone()),
     ]
 }
 
@@ -189,6 +191,7 @@ mod tests {
             items: 3573,
             augments: 253,
             network: true,
+            controller: "off. Set a chord to price check from a pad.".to_string(),
             ..Status::default()
         }
     }
@@ -397,7 +400,14 @@ mod tests {
     fn the_rows_cover_everything_a_user_would_check_first() {
         let labels: Vec<&str> = rows(&ready(), at(0)).into_iter().map(|(l, _)| l).collect();
 
-        for wanted in ["Game", "Hotkey", "League", "Data", "Refreshed"] {
+        for wanted in [
+            "Game",
+            "Hotkey",
+            "League",
+            "Data",
+            "Refreshed",
+            "Controller",
+        ] {
             assert!(labels.contains(&wanted), "{wanted} is missing");
         }
     }

@@ -87,6 +87,16 @@ test:
       command: cargo
       args: ["test", "-p", "poe-wayfinder-app"]
 
+  # The target is Windows. Half the adapters are behind cfg(windows), so the
+  # stage above compiles them and runs their stubs. This one runs the real
+  # ones: WSL interop executes the Windows test binary from here.
+  - name: unit-windows
+    runner: go://generic-test-runner
+    spec:
+      command: cargo
+      args:
+        ["test", "-p", "poe-wayfinder-app", "--target", "x86_64-pc-windows-gnu"]
+
   # The only end to end harness gate that is safe to automate. It is hermetic:
   # no Windows host, no network, about a second. It checks every log message a
   # harness greps for still exists in the Rust, so a renamed line fails here
@@ -95,6 +105,16 @@ test:
   #
   # No other harness belongs in forge. They need a Windows desktop and six of
   # them hit GGG, and the rate limiter is not optional.
+  # The exe as a person runs it: copied to C: and typed into PowerShell. Every
+  # other stage runs it from WSL, where the interop proxy supplies a console,
+  # which hid the fact that a windows subsystem exe printed nothing at all from
+  # a Windows shell. Hermetic: no overlay, no window, no key press, no network.
+  - name: windows-smoke
+    runner: go://generic-test-runner
+    spec:
+      command: bash
+      args: ["hack/windows-smoke.sh"]
+
   - name: harness-lint
     runner: go://generic-test-runner
     spec:

@@ -131,13 +131,11 @@ fn run_overlay(
     http: HttpAdapter,
     log: Logger,
 ) -> ExitCode {
-    use poe_wayfinder_app::adapter::clock_adapter::SystemClock;
     use poe_wayfinder_app::adapter::input_state_adapter::{hold_key_for, SystemInput};
     use poe_wayfinder_app::adapter::window_probe_adapter::SystemWindowProbe;
     use poe_wayfinder_app::controller::input_controller::InputController;
 
     use poe_wayfinder_app::controller::panel_health_controller::PanelHealthController;
-    use poe_wayfinder_app::controller::price_check_controller::PriceCheckController;
     use poe_wayfinder_app::driver::overlay_loop::{wiring, OverlayLoopDriver};
 
     let (window, game) = wiring::build_game_state(cfg, pinned, &log);
@@ -150,15 +148,7 @@ fn run_overlay(
 
     wiring::choose_league_at_start(&mut settings, cfg, config_dir, &http, game, &log);
 
-    let prices = PriceCheckController::new(
-        http,
-        SystemClock::new(),
-        &cfg.trade_base_url,
-        game,
-        &settings.league,
-    )
-    .with_session(&cfg.poesessid)
-    .with_latency(settings.latency);
+    let prices = wiring::build_prices(cfg, &settings, game, http);
 
     let health = PanelHealthController::new(SystemWindowProbe::new());
     let hold = hold_key_for(hotkey.modifiers());
@@ -186,6 +176,7 @@ fn run_overlay(
         input,
         logs,
         remembered,
+        wiring::build_gamepad(cfg, &log),
         hold,
         refresh,
         Logger::new(&cfg.log_level, "poe-wayfinder"),

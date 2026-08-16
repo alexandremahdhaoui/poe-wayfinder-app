@@ -10,6 +10,7 @@ use super::{OverlayLoopError, OverlaySettings};
 use crate::controller::copy_controller::Copier;
 use crate::controller::frame_watch_controller::{FrameWatch, Verdict};
 use crate::controller::game_state_controller::GameState;
+use crate::controller::gamepad_controller::PadInput;
 use crate::controller::input_controller::InputState;
 use crate::controller::log_watch_controller::LogSource;
 use crate::controller::overlay_controller::{Frame, OverlayModel};
@@ -36,6 +37,7 @@ use poe_wayfinder_core::controller::hotkey_match::Binding;
 
 use poe_wayfinder_core::adapter::data_adapter::GameData;
 use poe_wayfinder_core::controller::game_detect;
+use poe_wayfinder_core::controller::gamepad_match::{self, ControllerStatus};
 use poe_wayfinder_core::controller::league_list::LeagueFrom;
 use poe_wayfinder_core::controller::overlay_lifecycle::{
     Input, Lifecycle, Point, Rect as LifeRect,
@@ -53,7 +55,7 @@ const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
 const SPLASH_HOLD: Duration = Duration::from_millis(2000);
 const SPLASH_FADE: Duration = Duration::from_millis(400);
 
-pub struct OverlayLoopDriver<W, C, P, H, D, I, L, R>
+pub struct OverlayLoopDriver<W, C, P, H, D, I, L, R, G>
 where
     W: GameState + 'static,
     I: InputState + 'static,
@@ -63,6 +65,7 @@ where
     D: GameData + 'static,
     L: LogSource + 'static,
     R: RememberedSettings + 'static,
+    G: PadInput + 'static,
 {
     window: W,
     copier: C,
@@ -70,6 +73,7 @@ where
     input: I,
     logs: L,
     remembered: R,
+    gamepad: G,
     session: Session,
     life: Lifecycle,
     last_tick: Instant,
@@ -107,7 +111,7 @@ where
     ticked_at: Arc<AtomicU64>,
 }
 
-impl<W, C, P, H, D, I, L, R> OverlayLoopDriver<W, C, P, H, D, I, L, R>
+impl<W, C, P, H, D, I, L, R, G> OverlayLoopDriver<W, C, P, H, D, I, L, R, G>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -117,6 +121,7 @@ where
     I: InputState + 'static,
     L: LogSource + 'static,
     R: RememberedSettings + 'static,
+    G: PadInput + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -132,6 +137,7 @@ where
         input: I,
         logs: L,
         remembered: R,
+        gamepad: G,
         hold: poe_wayfinder_core::controller::overlay_lifecycle::HoldKey,
         refresh: super::wiring::RefreshPlan,
         log: Logger,
@@ -182,6 +188,7 @@ where
             input,
             logs,
             remembered,
+            gamepad,
             session: Session::from_config(&settings.league),
             life: Lifecycle::new(hold),
             last_tick: Instant::now(),
@@ -264,6 +271,10 @@ where
             Some(Press::StashSearch { index }) => self.send_stash_search(index),
             Some(Press::OpenLink { site }) => self.open_link(site),
             None => {}
+        }
+
+        if self.read_gamepad() {
+            self.run_price_check(true);
         }
 
         self.follow_game();
@@ -763,6 +774,11 @@ where
             network: self.settings.network,
             limits: self.prices.limiter_report(),
             note: self.prices.pacing_note(),
+            controller: gamepad_match::controller_caption(&ControllerStatus {
+                chord: self.gamepad.chord(),
+                connected: self.gamepad.connected(),
+                family: self.gamepad.family(),
+            }),
         }
     }
 
@@ -973,6 +989,39 @@ where
         }
 
         Some(press)
+    }
+
+    fn read_gamepad(&mut self) -> bool {
+        if !self.gamepad.fired() {
+            return false;
+        }
+
+        if !accepts_hotkey(&self.tray_state) {
+            self.log.info(
+                "controller chord ignored",
+                &[
+                    ("paused", Value::Bool(self.tray_state.paused)),
+                    ("game_found", Value::Bool(self.tray_state.game_found)),
+                ],
+            );
+
+            return false;
+        }
+
+        self.last_press = Some(Instant::now());
+
+        self.log.info(
+            "controller chord held",
+            &[(
+                "chord",
+                Value::Str(match self.gamepad.chord() {
+                    Some(chord) => gamepad_match::describe_for(self.gamepad.family(), chord.mask),
+                    None => String::new(),
+                }),
+            )],
+        );
+
+        true
     }
 
     fn send_command(&mut self, index: usize) {
@@ -1640,7 +1689,7 @@ where
     }
 }
 
-impl<W, C, P, H, D, I, L, R> Drop for OverlayLoopDriver<W, C, P, H, D, I, L, R>
+impl<W, C, P, H, D, I, L, R, G> Drop for OverlayLoopDriver<W, C, P, H, D, I, L, R, G>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -1650,6 +1699,7 @@ where
     I: InputState + 'static,
     L: LogSource + 'static,
     R: RememberedSettings + 'static,
+    G: PadInput + 'static,
 {
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {
@@ -1677,7 +1727,7 @@ fn report_window<W: GameState>(window: &W, log: &Logger) {
     }
 }
 
-impl<W, C, P, H, D, I, L, R> eframe::App for OverlayLoopDriver<W, C, P, H, D, I, L, R>
+impl<W, C, P, H, D, I, L, R, G> eframe::App for OverlayLoopDriver<W, C, P, H, D, I, L, R, G>
 where
     W: GameState + 'static,
     C: Copier + 'static,
@@ -1687,6 +1737,7 @@ where
     I: InputState + 'static,
     L: LogSource + 'static,
     R: RememberedSettings + 'static,
+    G: PadInput + 'static,
 {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame(ctx);

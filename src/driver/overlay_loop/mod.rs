@@ -34,6 +34,7 @@ pub struct OverlaySettings {
     pub log_level: String,
     pub latency: u32,
     pub restore_clipboard: bool,
+    pub gamepad_chord: String,
     pub data_origin: String,
     pub network: bool,
 }
