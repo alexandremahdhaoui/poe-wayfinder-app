@@ -66,7 +66,9 @@ pub struct Widgets {
     pub verdicts: Vec<(String, String)>,
     pub background: Background,
     pub starred: Starred,
-    hidden: Vec<Tab>,
+    pub capture: poe_wayfinder_core::controller::bind_capture::Capture,
+    pub bound_hotkey: String,
+    pub bound_chord: String,
 }
 
 pub const LOG_LINES_KEPT: usize = 200;
@@ -80,40 +82,7 @@ fn trimmed(amount: f64) -> String {
 
 impl Widgets {
     pub fn show(&mut self, tab: Tab) {
-        if self.is_enabled(tab) {
-            self.tab = tab;
-        }
-    }
-
-    pub fn find_widget(&self, title: &str) -> Option<Tab> {
-        Tab::every().into_iter().find(|tab| tab.title() == title)
-    }
-
-    pub fn is_enabled(&self, tab: Tab) -> bool {
-        !self.hidden.contains(&tab)
-    }
-
-    pub fn enable_widget(&mut self, tab: Tab) {
-        self.hidden.retain(|hidden| *hidden != tab);
-    }
-
-    pub fn disable_widget(&mut self, tab: Tab) {
-        if tab == Tab::Status || self.hidden.contains(&tab) {
-            return;
-        }
-
-        self.hidden.push(tab);
-
-        if self.tab == tab {
-            self.tab = Tab::Status;
-        }
-    }
-
-    pub fn enabled(&self) -> Vec<Tab> {
-        Tab::every()
-            .into_iter()
-            .filter(|tab| self.is_enabled(*tab))
-            .collect()
+        self.tab = tab;
     }
 
     pub fn record(&mut self, entry: Logged) {
@@ -297,57 +266,6 @@ mod tests {
         w.show(Tab::Maps);
 
         assert_eq!(w.tab, Tab::Maps);
-    }
-
-    #[test]
-    fn a_widget_can_be_turned_off_and_back_on() {
-        let mut w = Widgets::default();
-
-        w.disable_widget(Tab::Notes);
-
-        assert!(!w.is_enabled(Tab::Notes));
-        assert!(!w.enabled().contains(&Tab::Notes));
-
-        w.enable_widget(Tab::Notes);
-
-        assert!(w.is_enabled(Tab::Notes));
-    }
-
-    #[test]
-    fn turning_off_the_tab_you_are_on_sends_you_back_to_status() {
-        let mut w = Widgets::default();
-
-        w.show(Tab::Maps);
-        w.disable_widget(Tab::Maps);
-
-        assert_eq!(w.tab, Tab::Status);
-    }
-
-    #[test]
-    fn status_cannot_be_turned_off_because_there_would_be_nothing_left() {
-        let mut w = Widgets::default();
-
-        w.disable_widget(Tab::Status);
-
-        assert!(w.is_enabled(Tab::Status));
-    }
-
-    #[test]
-    fn a_disabled_tab_cannot_be_opened() {
-        let mut w = Widgets::default();
-
-        w.disable_widget(Tab::Notes);
-        w.show(Tab::Notes);
-
-        assert_eq!(w.tab, Tab::Status);
-    }
-
-    #[test]
-    fn a_widget_is_found_by_the_name_it_shows() {
-        let w = Widgets::default();
-
-        assert_eq!(w.find_widget("Maps"), Some(Tab::Maps));
-        assert_eq!(w.find_widget("Nothing"), None);
     }
 
     #[test]

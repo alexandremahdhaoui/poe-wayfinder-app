@@ -128,33 +128,39 @@ impl Clipboard for SystemClipboard {
 }
 
 #[cfg(windows)]
-pub struct KeyboardCopyTrigger;
+pub struct KeyboardCopyTrigger {
+    also_hold: Vec<String>,
+}
 
 #[cfg(windows)]
 impl KeyboardCopyTrigger {
-    pub fn new() -> Self {
-        Self
+    pub fn new(also_hold: Vec<String>) -> Self {
+        Self { also_hold }
     }
 }
 
 #[cfg(windows)]
 impl Default for KeyboardCopyTrigger {
     fn default() -> Self {
-        Self::new()
+        Self::new(Vec::new())
     }
 }
 
 #[cfg(windows)]
 impl CopyTrigger for KeyboardCopyTrigger {
     fn trigger_copy(&self) -> Result<(), ClipboardError> {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, VK_C, VK_CONTROL};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, VK_C, VK_CONTROL, VK_MENU, VK_SHIFT,
+        };
 
-        let events: Vec<INPUT> = copy_key_sequence()
+        let events: Vec<INPUT> = copy_key_sequence(&self.also_hold)
             .iter()
             .filter_map(|stroke| {
                 let key = match stroke.key.as_str() {
                     "Ctrl" => VK_CONTROL,
                     "C" => VK_C,
+                    "Alt" => VK_MENU,
+                    "Shift" => VK_SHIFT,
                     _ => return None,
                 };
 

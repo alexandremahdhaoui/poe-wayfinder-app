@@ -46,6 +46,9 @@ pub struct Status {
     pub limits: Vec<LimiterLine>,
     pub note: Option<String>,
     pub controller: String,
+    pub client_log_found: bool,
+    pub pad_held: u16,
+    pub pad_family: poe_wayfinder_core::controller::gamepad_match::PadFamily,
 }
 
 pub fn health(status: &Status) -> Health {

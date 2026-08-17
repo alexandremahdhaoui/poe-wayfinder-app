@@ -38,6 +38,7 @@ use poe_wayfinder_core::controller::hotkey_match::Binding;
 use poe_wayfinder_core::adapter::data_adapter::GameData;
 use poe_wayfinder_core::controller::game_detect;
 use poe_wayfinder_core::controller::gamepad_match::{self, ControllerStatus};
+use poe_wayfinder_core::controller::bind_capture::{Binding as BoundRow, Row};
 use poe_wayfinder_core::controller::gamepad_nav;
 use poe_wayfinder_core::controller::league_list::LeagueFrom;
 use poe_wayfinder_core::controller::overlay_lifecycle::{
@@ -134,7 +135,7 @@ where
         game: GameVersion,
         data: GamePair<D>,
         stats: usize,
-        roles: crate::controller::startup_controller::Validated,
+        mut roles: crate::controller::startup_controller::Validated,
         window: W,
         copier: C,
         prices: P,
@@ -142,12 +143,33 @@ where
         input: I,
         logs: L,
         remembered: R,
-        gamepad: G,
+        mut gamepad: G,
         hold: poe_wayfinder_core::controller::overlay_lifecycle::HoldKey,
         refresh: super::wiring::RefreshPlan,
         log: Logger,
     ) -> Result<Self, OverlayLoopError> {
         report_window(&window, &log);
+
+        if let Some(bound) = remembered.bound_hotkey().and_then(|held| Hotkey::parse(&held).ok()) {
+            log.info(
+                "a price check key you bound is used instead of the configured one",
+                &[
+                    ("bound", Value::Str(bound.to_string())),
+                    ("configured", Value::Str(roles.hotkey.to_string())),
+                ],
+            );
+
+            roles.hotkey = bound;
+        }
+
+        if let Some(bound) = remembered.bound_chord() {
+            log.info(
+                "a pad chord you bound is used instead of the configured one",
+                &[("bound", Value::Str(bound.clone()))],
+            );
+
+            gamepad.rebind(gamepad_match::parse_chord(&bound));
+        }
 
         let hotkeys_wanted = roles.every_hotkey();
 
@@ -182,7 +204,14 @@ where
             "Ready. Press {hotkey} with the cursor over an item."
         ));
 
-        let widgets = opened_widgets(&remembered);
+        let mut widgets = opened_widgets(&remembered);
+
+        widgets.bound_hotkey = remembered
+            .bound_hotkey()
+            .unwrap_or_else(|| hotkey.to_string());
+        widgets.bound_chord = remembered
+            .bound_chord()
+            .unwrap_or_else(|| settings.gamepad_chord.clone());
         let window_was_found = window.window().is_some();
         let ticked_at = watch_for_a_stall(&settings.log_level);
 
@@ -576,6 +605,7 @@ where
             );
 
             match event {
+                UiEvent::SearchStash(text) => self.search_the_stash_for(&text),
                 UiEvent::OpenInBrowser => asked.push(TrayAction::OpenInBrowser),
                 UiEvent::Research => asked.push(TrayAction::Research),
                 UiEvent::Dismiss => {
@@ -793,6 +823,9 @@ where
             network: self.settings.network,
             limits: self.prices.limiter_report(),
             note: self.prices.pacing_note(),
+            client_log_found: self.settings.client_log_found,
+            pad_held: self.gamepad.held(),
+            pad_family: self.gamepad.family(),
             controller: gamepad_match::controller_caption(&ControllerStatus {
                 chord: self.gamepad.chord(),
                 connected: self.gamepad.connected(),
@@ -829,6 +862,18 @@ where
                 StatusEvent::Quit => {
                     self.log.info("quit chosen from the status window", &[]);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                StatusEvent::Bound(bound) => self.apply_binding(bound),
+                StatusEvent::CopyCsv(csv) => {
+                    let put = self.copier.put(&csv).is_ok();
+
+                    self.log.info(
+                        "the priced items were copied as csv",
+                        &[
+                            ("rows", Value::Int(csv.lines().count() as i64)),
+                            ("on_the_clipboard", Value::Bool(put)),
+                        ],
+                    );
                 }
                 StatusEvent::RefreshNow => self.rebuild_data(),
                 StatusEvent::TogglePaused => {
@@ -1142,6 +1187,70 @@ where
         self.pending.push(event);
     }
 
+    fn apply_binding(&mut self, bound: BoundRow) {
+        match bound.row {
+            Row::Keyboard => self.rebind_key(&bound.text),
+            Row::Pad => self.rebind_pad(&bound.text),
+        }
+    }
+
+    fn rebind_key(&mut self, text: &str) {
+        let Ok(hotkey) = Hotkey::parse(text) else {
+            self.log
+                .warn("that key cannot be bound", &[("key", Value::Str(text.to_string()))]);
+
+            return;
+        };
+
+        let previous = self.roles.hotkey.clone();
+
+        self.roles.hotkey = hotkey.clone();
+
+        let Some(fresh) = start_hook(&self.roles.every_hotkey(), &self.log) else {
+            self.roles.hotkey = previous;
+
+            self.log.error(
+                "the new key could not be hooked, so the old one is kept and nothing changed",
+                &[("key", Value::Str(text.to_string()))],
+            );
+
+            return;
+        };
+
+        if let Some(old) = self.hook.replace(fresh) {
+            old.stop();
+        }
+
+        if let Some(registered) = start_registration(&hotkey, &self.log) {
+            self.hotkeys = Some(registered);
+        }
+
+        self.hotkey_text = hotkey.to_string();
+        self.widgets.bound_hotkey = text.to_string();
+        self.remembered.remember_hotkey(text);
+
+        self.log.info(
+            "the price check key was rebound and is live",
+            &[
+                ("was", Value::Str(previous.to_string())),
+                ("now", Value::Str(hotkey.to_string())),
+            ],
+        );
+    }
+
+    fn rebind_pad(&mut self, text: &str) {
+        let chord = gamepad_match::parse_chord(text);
+
+        self.gamepad.rebind(chord);
+        self.widgets.bound_chord = text.to_string();
+        self.remembered.remember_chord(text);
+
+        self.log.info(
+            "the pad chord was rebound and is live",
+            &[("chord", Value::Str(text.to_string()))],
+        );
+    }
+
     fn close_from_pad(&mut self) {
         self.model.hide();
         self.life.dismiss();
@@ -1249,7 +1358,7 @@ where
             }
         };
 
-        let reference = price_check(&text, self.data.get(self.game), self.options)
+        let reference = price_check(&text, self.data.get(self.game), &self.options)
             .ok()
             .map(|checked| checked.item.info.reference_name.clone())
             .unwrap_or_default();
@@ -1280,7 +1389,11 @@ where
             return;
         };
 
-        let action = poe_wayfinder_core::controller::chat::stash_search(&preset.text);
+        self.search_the_stash_for(&preset.text);
+    }
+
+    fn search_the_stash_for(&mut self, text: &str) {
+        let action = poe_wayfinder_core::controller::chat::stash_search(text);
         let copier = &mut self.copier;
 
         let sent = super::wiring::send_chat(&action, |text| copier.put(text).is_ok());
@@ -1290,7 +1403,7 @@ where
                 true => "searched the stash",
                 false => "the stash search could not be sent",
             },
-            &[("text", Value::Str(preset.text.clone()))],
+            &[("text", Value::Str(text.to_string()))],
         );
 
         self.drain_hotkeys();
@@ -1357,7 +1470,7 @@ where
             ..
         } = self;
 
-        let options = *options;
+        let options = options.clone();
         let tables = data.get(*game);
 
         let stage = price_check_loop::prepare(
@@ -1371,7 +1484,7 @@ where
                 copied
             },
             |text| {
-                let parsed = price_check(text, tables, options).map_err(|e| render(&e));
+                let parsed = price_check(text, tables, &options).map_err(|e| render(&e));
 
                 log_parsed(log, &parsed);
 
@@ -1427,6 +1540,7 @@ where
         );
 
         self.log_request(&checked);
+        self.log_quality_scaling(&checked);
 
         let found = self.search_for(&checked);
 
@@ -1461,6 +1575,37 @@ where
         );
 
         self.drain_hotkeys();
+    }
+
+    fn log_quality_scaling(&self, checked: &PriceCheck) {
+        let item = &checked.item;
+        let quality = f64::from(item.quality.unwrap_or(0));
+        let equipment = &checked.query.filters.equipment_filters;
+
+        for (label, printed, asked) in [
+            ("armour", item.armour.ar, equipment.ar.min),
+            ("evasion", item.armour.ev, equipment.ev.min),
+            ("energy_shield", item.armour.es, equipment.es.min),
+            ("physical_dps", item.weapon.physical, equipment.pdps.min),
+        ] {
+            let Some(printed) = printed.filter(|value| *value > 0.0) else {
+                continue;
+            };
+
+            let Some(asked) = asked else {
+                continue;
+            };
+
+            self.log.info(
+                "a property is searched at the value it would have at twenty quality",
+                &[
+                    ("property", Value::Str(label.to_string())),
+                    ("printed", Value::Str(format!("{printed:.0}"))),
+                    ("quality", Value::Str(format!("{quality:.0}"))),
+                    ("searched", Value::Str(format!("{asked:.0}"))),
+                ],
+            );
+        }
     }
 
     fn log_request(&self, checked: &PriceCheck) {

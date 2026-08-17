@@ -24,6 +24,18 @@ pub trait RememberedSettings {
         false
     }
 
+    fn bound_hotkey(&self) -> Option<String> {
+        None
+    }
+
+    fn remember_hotkey(&mut self, _hotkey: &str) {}
+
+    fn bound_chord(&self) -> Option<String> {
+        None
+    }
+
+    fn remember_chord(&mut self, _chord: &str) {}
+
     fn pin_league(&mut self, _game: GameVersion, _pinned: bool) {}
 }
 
@@ -43,6 +55,26 @@ impl<S: SettingsStore> SettingsController<S> {
 impl<S: SettingsStore> RememberedSettings for SettingsController<S> {
     fn notes(&self) -> String {
         self.settings.notes.clone()
+    }
+
+    fn bound_hotkey(&self) -> Option<String> {
+        Some(self.settings.bound_hotkey.clone()).filter(|held| !held.trim().is_empty())
+    }
+
+    fn remember_hotkey(&mut self, hotkey: &str) {
+        self.settings.bound_hotkey = hotkey.to_string();
+
+        let _ = self.store.save(&self.settings);
+    }
+
+    fn bound_chord(&self) -> Option<String> {
+        Some(self.settings.bound_chord.clone()).filter(|held| !held.trim().is_empty())
+    }
+
+    fn remember_chord(&mut self, chord: &str) {
+        self.settings.bound_chord = chord.to_string();
+
+        let _ = self.store.save(&self.settings);
     }
 
     fn map_verdicts(&self) -> Vec<(String, String)> {

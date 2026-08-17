@@ -14,11 +14,14 @@ pub enum StatusEvent {
     TogglePaused,
     ChooseLeague(LeagueChoice),
     ChooseGame(GameChoice),
+    Bound(poe_wayfinder_core::controller::bind_capture::Binding),
+    CopyCsv(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiEvent {
     Dismiss,
+    SearchStash(String),
     OpenInBrowser,
     Research,
     ToggleRow(RowKey),
@@ -199,6 +202,9 @@ mod win {
         gauge_edit, influence_labels, tier_label, FilterView, FlagRow, Row,
     };
     use poe_wayfinder_core::controller::item_editor::AugmentOption;
+    use poe_wayfinder_core::controller::gamepad_match::PadFamily;
+    use poe_wayfinder_core::controller::help;
+    use poe_wayfinder_core::types::GameVersion;
     use poe_wayfinder_core::controller::pad_focus;
     use poe_wayfinder_core::controller::price_summary::{
         online_count, price_headline, price_spread, stack_value, Estimate, Quote,
@@ -971,9 +977,12 @@ mod win {
 
     fn listing_row(ui: &mut egui::Ui, listing: &Quote) {
         ui.horizontal(|ui| {
-            let (dot, hint) = match listing.online {
-                true => (ONLINE_DOT, "online"),
-                false => (OFFLINE_DOT, "offline"),
+            use poe_wayfinder_core::controller::bulk::{seller_status, SellerStatus};
+
+            let (dot, hint) = match seller_status(listing.online, listing.away) {
+                SellerStatus::Online => (ONLINE_DOT, "online"),
+                SellerStatus::Afk => (WARNING, "online but away, so may not answer"),
+                SellerStatus::Offline => (OFFLINE_DOT, "offline"),
             };
 
             let (rect, response) =
@@ -1003,7 +1012,76 @@ mod win {
                     .truncate(),
                 );
             });
-        });
+        })
+        .response
+        .on_hover_ui(|ui| listed_item_tooltip(ui, &listing.details));
+    }
+
+    fn listed_item_tooltip(
+        ui: &mut egui::Ui,
+        details: &poe_wayfinder_core::controller::listing::DisplayItem,
+    ) {
+        use poe_wayfinder_core::controller::listing::{tier_of, DisplayLine, LineKind};
+
+        if details.title.is_empty() && details.explicit_mods.is_empty() {
+            ui.label(egui::RichText::new("no detail was returned").small().color(MUTED));
+
+            return;
+        }
+
+        for line in &details.title {
+            ui.label(egui::RichText::new(line).strong());
+        }
+
+        for property in &details.properties {
+            ui.label(
+                egui::RichText::new(format!("{}: {}", property.label, property.value))
+                    .small()
+                    .color(MUTED),
+            );
+        }
+
+        let blocks = [
+            &details.enchant_mods,
+            &details.rune_mods,
+            &details.implicit_mods,
+            &details.fractured_mods,
+            &details.explicit_mods,
+            &details.crafted_mods,
+            &details.desecrated_mods,
+            &details.mutated_mods,
+        ];
+
+        for block in blocks {
+            let tiers: Vec<Option<String>> = block.iter().map(|line| line.tier.clone()).collect();
+
+            if let Some(worst) = tier_of(&tiers) {
+                ui.label(
+                    egui::RichText::new(format!("tiers {worst}"))
+                        .small()
+                        .color(ACCENT),
+                );
+            }
+
+            for line in block {
+                ui.label(mod_colour(line));
+            }
+        }
+
+        for tag in &details.tags {
+            ui.label(mod_colour(tag));
+        }
+
+        fn mod_colour(line: &DisplayLine) -> egui::RichText {
+            let colour = match line.kind {
+                LineKind::Enchant | LineKind::Augmented => ACCENT,
+                LineKind::Fractured | LineKind::Desecrated | LineKind::Mutated => WARNING,
+                LineKind::Unmet => egui::Color32::from_rgb(226, 96, 96),
+                _ => egui::Color32::from_rgb(214, 214, 222),
+            };
+
+            egui::RichText::new(&line.text).small().color(colour)
+        }
     }
 
     fn footer(
@@ -1042,6 +1120,8 @@ mod win {
             {
                 events.push(UiEvent::OpenInBrowser);
             }
+
+            events.extend(stash_search_buttons(ui, model));
 
             let online_only = model
                 .result()
@@ -1283,7 +1363,17 @@ mod win {
                             .auto_shrink([false, false])
                             .show(ui, |ui| match widgets.tab {
                                 Tab::Status => status_body(ui, status, now),
-                                _ => widget_body(ui, widgets, names, bindings, now_ms),
+                                _ => widget_body(
+                                    ui,
+                                    widgets,
+                                    names,
+                                    bindings,
+                                    now_ms,
+                                    status.client_log_found,
+                                    status.game == Some(GameVersion::Poe2),
+                                    status.pad_held,
+                                    status.pad_family,
+                                ),
                             })
                             .inner
                     });
@@ -1313,14 +1403,164 @@ mod win {
         ui.add_space(8.0);
     }
 
+    fn binding_rows(
+        ui: &mut egui::Ui,
+        widgets: &mut Widgets,
+        pad_held: u16,
+        pad_family: PadFamily,
+    ) -> Vec<StatusEvent> {
+        use poe_wayfinder_core::controller::bind_capture::{caption, prompt, shown, Row};
+
+        let mut events = Vec::new();
+
+        ui.label(egui::RichText::new("Price check").size(13.0).color(ACCENT));
+
+        for (row, text) in [
+            (Row::Keyboard, widgets.bound_hotkey.clone()),
+            (Row::Pad, widgets.bound_chord.clone()),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(caption(row)).small().color(MUTED));
+                ui.label(egui::RichText::new(shown(row, &text, pad_family)).size(13.0));
+
+                let listening = widgets.capture.listening_to();
+
+                if ui
+                    .button(egui::RichText::new(prompt(listening, row)).small())
+                    .clicked()
+                {
+                    match listening == Some(row) {
+                        true => widgets.capture.stop(),
+                        false => widgets.capture.listen(row),
+                    }
+                }
+            });
+        }
+
+        if let Some(bound) = capture_now(ui.ctx(), widgets, pad_held, pad_family) {
+            events.push(StatusEvent::Bound(bound));
+        }
+
+        events
+    }
+
+    fn capture_now(
+        ctx: &egui::Context,
+        widgets: &mut Widgets,
+        pad_held: u16,
+        pad_family: PadFamily,
+    ) -> Option<poe_wayfinder_core::controller::bind_capture::Binding> {
+        use poe_wayfinder_core::controller::bind_capture::Row;
+
+        match widgets.capture.listening_to()? {
+            Row::Pad => widgets.capture.from_pad(pad_held, pad_family),
+            Row::Keyboard => {
+                let pressed = ctx.input(|input| {
+                    input.events.iter().find_map(|event| match event {
+                        egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } => Some((key.name().to_string(), *modifiers)),
+                        _ => None,
+                    })
+                })?;
+
+                widgets.capture.from_key(
+                    &pressed.0,
+                    pressed.1.ctrl,
+                    pressed.1.shift,
+                    pressed.1.alt,
+                )
+            }
+        }
+    }
+
+    fn stash_search_buttons(ui: &mut egui::Ui, model: &dyn PanelSource) -> Vec<UiEvent> {
+        use poe_wayfinder_core::controller::item_links::{same_priced_from_note, similar_items};
+
+        let mut events = Vec::new();
+
+        let Some(check) = model.result() else {
+            return events;
+        };
+
+        if let Some(text) = similar_items(&check.item.info.name) {
+            if ui
+                .button(egui::RichText::new("similar").small())
+                .on_hover_text("search your own stash for this item by name")
+                .clicked()
+            {
+                events.push(UiEvent::SearchStash(text));
+            }
+        }
+
+        if let Some(text) = check.item.note.as_deref().and_then(same_priced_from_note) {
+            if ui
+                .button(egui::RichText::new("same price").small())
+                .on_hover_text("search your own stash for everything priced the same")
+                .clicked()
+            {
+                events.push(UiEvent::SearchStash(text));
+            }
+        }
+
+        events
+    }
+
+    fn base_percentile_note(ui: &mut egui::Ui, model: &dyn PanelSource) {
+        use poe_wayfinder_core::controller::filter::item_property::base_percentile_filter;
+
+        let Some(check) = model.result() else {
+            return;
+        };
+
+        let Some(base) = base_percentile_filter(check.item.base_percentile) else {
+            return;
+        };
+
+        let colour = match base.enabled {
+            true => ACCENT,
+            false => MUTED,
+        };
+
+        ui.label(
+            egui::RichText::new(format!("base {:.0}%", base.value))
+                .small()
+                .color(colour),
+        )
+        .on_hover_text(
+            "how good this item's base roll is out of the range it could have had. \
+             The trade site cannot search on it, so this is information only.",
+        );
+    }
+
+    fn missing_note(ui: &mut egui::Ui, missing: &help::Missing) {
+        ui.label(egui::RichText::new(missing.what).size(13.0).color(ACCENT));
+        ui.label(egui::RichText::new(missing.why).small().color(MUTED));
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(missing.how).small());
+    }
+
     pub fn widget_body(
         ui: &mut egui::Ui,
         widgets: &mut Widgets,
         names: &[String],
         bindings: &[(String, String)],
         now_ms: u64,
+        client_log_found: bool,
+        poe2: bool,
+        pad_held: u16,
+        pad_family: PadFamily,
     ) -> Vec<StatusEvent> {
         let mut events = Vec::new();
+
+        if !client_log_found && matches!(widgets.tab, Tab::Log | Tab::Leveling) {
+            missing_note(ui, &help::client_log_is_missing(poe2));
+
+            return events;
+        }
 
         match widgets.tab {
             Tab::Status => {}
@@ -1340,6 +1580,22 @@ mod win {
 
                 for line in logged {
                     ui.label(line);
+                }
+
+                if !widgets.library.is_empty() {
+                    ui.add_space(6.0);
+
+                    if ui
+                        .button(egui::RichText::new("copy as csv").small())
+                        .on_hover_text("puts the whole session on the clipboard")
+                        .clicked()
+                    {
+                        events.push(StatusEvent::CopyCsv(
+                            poe_wayfinder_core::controller::library::to_csv(
+                                widgets.library.entries(),
+                            ),
+                        ));
+                    }
                 }
             }
 
@@ -1499,6 +1755,10 @@ mod win {
             }
 
             Tab::Settings => {
+                events.extend(binding_rows(ui, widgets, pad_held, pad_family));
+
+                ui.separator();
+
                 ui.label(
                     egui::RichText::new(
                         "These live in settings.json beside the app, and in the spec.",

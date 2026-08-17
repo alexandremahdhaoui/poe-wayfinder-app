@@ -193,6 +193,7 @@ fn filters_to_json(filters: &Filters, game: GameVersion) -> Map<String, Value> {
     insert_range(&mut misc, "unidentified_tier", x.unidentified_tier);
     insert_flag(&mut misc, "veiled", x.veiled);
     insert_flag(&mut misc, "fractured_item", x.fractured_item);
+    insert_option_number(&mut misc, "has_empty_modifier", x.has_empty_modifier);
     insert_group(&mut out, "misc_filters", misc);
 
     let tr = &filters.trade_filters;
@@ -240,6 +241,12 @@ fn range_to_json(range: Range) -> Option<Value> {
 fn insert_option(out: &mut Map<String, Value>, name: &str, value: Option<&str>) {
     if let Some(value) = value {
         out.insert(name.into(), json!({ "option": value }));
+    }
+}
+
+fn insert_option_number(out: &mut Map<String, Value>, name: &str, value: Option<f64>) {
+    if let Some(value) = value {
+        out.insert(name.into(), json!({ "option": format!("{value:.0}") }));
     }
 }
 
@@ -442,6 +449,26 @@ mod tests {
 
         assert_eq!(tier["min"], 16);
         assert_eq!(tier["max"], 16);
+    }
+
+    #[test]
+    fn an_empty_modifier_travels_under_misc_filters_never_under_stats() {
+        let mut query = TradeQuery::default();
+        query.filters.misc_filters.has_empty_modifier = Some(1.0);
+
+        let got = body(&query);
+
+        assert_eq!(
+            got["query"]["filters"]["misc_filters"]["filters"]["has_empty_modifier"]["option"],
+            "1",
+            "an item.* id inside stats is refused with Unsupported stat domain"
+        );
+        assert!(
+            got["query"]["stats"]
+                .as_array()
+                .is_none_or(|groups| groups.is_empty()),
+            "it must not appear as a stat"
+        );
     }
 
     #[test]

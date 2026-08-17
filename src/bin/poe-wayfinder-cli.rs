@@ -103,7 +103,7 @@ fn main() -> ExitCode {
         ],
     );
 
-    let checked = match price_check(&text, &data, PriceCheckOptions::new(game)) {
+    let checked = match price_check(&text, &data, &PriceCheckOptions::new(game)) {
         Ok(checked) => checked,
         Err(err) => {
             log.error(

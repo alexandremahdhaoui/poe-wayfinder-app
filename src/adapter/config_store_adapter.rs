@@ -88,6 +88,8 @@ pub struct Settings {
     pub filter_item_level: bool,
     pub notes: String,
     pub map_verdicts: Vec<(String, String)>,
+    pub bound_hotkey: String,
+    pub bound_chord: String,
 }
 
 impl Default for Settings {
@@ -104,6 +106,8 @@ impl Default for Settings {
             filter_item_level: false,
             notes: String::new(),
             map_verdicts: Vec::new(),
+            bound_hotkey: String::new(),
+            bound_chord: String::new(),
         }
     }
 }

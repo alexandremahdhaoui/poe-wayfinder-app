@@ -36,20 +36,6 @@ pub enum LogEvent {
     },
 }
 
-pub const PARSE_VERSION: u32 = 1;
-
-pub fn parse_version() -> u32 {
-    PARSE_VERSION
-}
-
-pub fn older_than(version: u32, wanted: u32) -> bool {
-    version < wanted
-}
-
-pub fn parse_log_text(text: &str) -> Vec<LogEvent> {
-    text.lines().filter_map(parse_log_line).collect()
-}
-
 pub fn parse_log_line(line: &str) -> Option<LogEvent> {
     if let Some(rest) = line.split_once("] : You have entered ") {
         let name = rest.1.trim().trim_end_matches('.');
@@ -505,23 +491,14 @@ mod tests {
     fn a_whole_log_is_parsed_line_by_line() {
         let text = format!("{AREA}\nnot a log line\n{LEVEL}\n");
 
-        assert_eq!(
-            parse_log_text(&text).len(),
-            2,
-            "the noise between is skipped"
-        );
+        let found = text.lines().filter_map(parse_log_line).count();
+
+        assert_eq!(found, 2, "the noise between is skipped");
     }
 
     #[test]
-    fn an_empty_log_parses_to_nothing() {
-        assert!(parse_log_text("").is_empty());
-    }
-
-    #[test]
-    fn a_parse_version_older_than_what_is_wanted_is_told_apart() {
-        assert!(older_than(0, PARSE_VERSION));
-        assert!(!older_than(PARSE_VERSION, PARSE_VERSION));
-        assert_eq!(parse_version(), PARSE_VERSION);
+    fn an_empty_line_parses_to_nothing() {
+        assert!(parse_log_line("").is_none());
     }
 
     #[test]

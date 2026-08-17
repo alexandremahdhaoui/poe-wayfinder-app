@@ -18,6 +18,34 @@ enum Status {
 
 const WAIVED: &[(&str, &str)] = &[
     (
+        "isStashArea",
+        "the cursor-over-the-grid test for stash scroll, which is Ctrl plus the wheel to flip stash tabs. Dropped for now on 2026-08-17 because it needs a mouse wheel hook and we hook only the keyboard. FOLLOWUP holds it as deferred work.",
+    ),
+    (
+        "findWidget",
+        "finds a widget by name so a setting can hide it. We never hide a tab: a tab whose setting is missing explains what is missing and how to set it, which the user chose on 2026-08-17.",
+    ),
+    (
+        "enableWidget",
+        "shows a widget a setting had hidden, part of the hiding we do not do",
+    ),
+    (
+        "disableWidget",
+        "hides a widget whose setting is off, part of the hiding we do not do",
+    ),
+    (
+        "parseClientLogText",
+        "parses a whole log file at once. Our watcher streams lines and tracks a byte offset, so a whole text parse would have to throw that offset away.",
+    ),
+    (
+        "getClientLogParseVersion",
+        "stamps a cached parse of the client log. We keep no such cache: the watcher re-reads from an offset every poll.",
+    ),
+    (
+        "lessThanVersion",
+        "invalidates that cached parse, part of the same cache we do not keep",
+    ),
+    (
         "checkForUpdates",
         "Electron's autoUpdater. This ships one unsigned exe with no update channel, and its game data refreshes itself instead.",
     ),
@@ -186,9 +214,6 @@ const WAIVED: &[(&str, &str)] = &[
 
 const ALIASES: &[(&str, &str)] = &[
     ("fmtTime", "clock"),
-    ("findWidget", "find_widget"),
-    ("enableWidget", "enable_widget"),
-    ("disableWidget", "disable_widget"),
     ("decisionCreate", "set_verdict"),
     ("decisionHasColor", "is_coloured"),
     ("nextDecision", "next"),
@@ -220,15 +245,11 @@ const ALIASES: &[(&str, &str)] = &[
     ("getOverIdeal", "effective_difference"),
     ("isPrivateLeague", "is_private_league"),
     ("randomTip", "tip"),
-    ("parseClientLogText", "parse_log_text"),
     ("parseLogVersion0", "parse_log_line"),
-    ("lessThanVersion", "older_than"),
-    ("getClientLogParseVersion", "parse_version"),
     ("useRemovable", "dismiss"),
     ("toggle", "set_enabled"),
     ("isPoeItem", "clipboard_kind"),
-    ("isPointInsideRect", "point_in_rect"),
-    ("isStashArea", "is_stash_area"),
+    ("isPointInsideRect", "contains"),
     ("eventToString", "event_to_hotkey"),
     ("pressKeysToCopyItemText", "keys_to_hold_for_copy"),
     ("typeInChat", "type_in_chat"),
@@ -259,7 +280,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("tradeIdToQuery", "stat_filter_to_json"),
     ("parseMods", "mod_block"),
     ("applyEleAugment", "apply_elemental_rune"),
-    ("recalculateItemProperties", "rescale"),
+    ("recalculateItemProperties", "recalculated"),
     ("refEffectsPseudos", "affects_pseudo"),
     ("translatedEffectsPseudos", "signs_match"),
     ("shortRollToFilter", "short_roll_to_filter"),
@@ -339,11 +360,11 @@ const ALIASES: &[(&str, &str)] = &[
     ("explicitModifierCount", "explicit_modifier_count"),
     ("itemBaseMaxModifiersOfType", "max_modifiers_of_type"),
     ("itemMaxModifiersBySlot", "max_modifiers_of_type"),
-    ("showHasEmptyModifier", "empty_slot"),
     ("likelyFinishedItem", "likely_finished"),
     ("applyClusterJewelRules", "passive_bound"),
     ("applyFlaskRules", "flask_enchant_is_useful"),
     ("hideAllAugments", "is_hidden_by_default"),
+    ("showHasEmptyModifier", "empty_slot"),
     ("hasCraftingValue", "empty_slot"),
     ("isItemMissingItemClass", "is_missing_item_class"),
     ("floorToBracket", "floor_to_bracket"),

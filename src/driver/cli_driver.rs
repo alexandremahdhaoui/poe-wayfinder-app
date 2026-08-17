@@ -564,7 +564,7 @@ pub fn check_clipboard_now(game: GameVersion, data: &GameTables, log: &Logger) -
         return ExitCode::FAILURE;
     }
 
-    match price_check(&text, data, PriceCheckOptions::new(game)) {
+    match price_check(&text, data, &PriceCheckOptions::new(game)) {
         Ok(checked) => {
             log.info(
                 "priced the clipboard item",

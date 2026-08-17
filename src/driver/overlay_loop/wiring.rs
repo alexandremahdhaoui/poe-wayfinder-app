@@ -334,6 +334,7 @@ pub fn build_settings_for(
         latency: cfg.api_latency_seconds.max(0) as u32,
         restore_clipboard: cfg.restore_clipboard,
         gamepad_chord: cfg.gamepad_chord.clone(),
+        client_log_found: false,
         data_origin: origin.get(game).as_str().to_string(),
         network: cfg.network_enabled,
     }
@@ -660,6 +661,7 @@ fn read_chord(
 #[cfg(windows)]
 pub fn build_copier(
     restore: bool,
+    game: GameVersion,
     log: &Logger,
 ) -> Option<
     crate::controller::copy_controller::CopyController<
@@ -684,10 +686,34 @@ pub fn build_copier(
 
     Some(CopyController::new(
         clipboard,
-        KeyboardCopyTrigger::new(),
+        KeyboardCopyTrigger::new(keys_held_for_copy(game, log)),
         CopyTiming::default(),
         restore,
     ))
+}
+
+#[cfg(windows)]
+fn keys_held_for_copy(game: GameVersion, log: &Logger) -> Vec<String> {
+    use poe_wayfinder_core::controller::overlay::keys_to_hold_for_copy;
+
+    let config = crate::adapter::game_config_adapter::read(
+        std::path::Path::new(&crate::driver::cli_driver::documents_dir()),
+        game,
+        crate::adapter::game_config_adapter::load_from_disk,
+    );
+
+    let held = keys_to_hold_for_copy(&config.show_mods_key, &["Ctrl".to_string()]);
+
+    log.info(
+        "the copy holds the game's advanced item descriptions key, so the roll ranges come with it",
+        &[
+            ("show_mods_key", Value::Str(config.show_mods_key.clone())),
+            ("holding", Value::Str(held.join("+"))),
+            ("read_from_the_game", Value::Bool(config.read)),
+        ],
+    );
+
+    held
 }
 
 #[cfg(windows)]

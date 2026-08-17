@@ -119,7 +119,7 @@ impl<H: HttpClient, C: Clock> PriceCheckController<H, C> {
         data: &dyn GameData,
         options: PriceCheckOptions,
     ) -> Result<(PriceCheck, SearchResult), PriceCheckError> {
-        let checked = price_check(clipboard, data, options).map_err(PriceCheckError::Parse)?;
+        let checked = price_check(clipboard, data, &options).map_err(PriceCheckError::Parse)?;
         let (result, _) = self.run_search(&checked).await?;
 
         Ok((checked, result))
@@ -399,17 +399,145 @@ fn read_listing(entry: &serde_json::Value) -> Option<Listing> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    let online = listing
-        .get("account")
-        .and_then(|a| a.get("online"))
-        .is_some_and(|o| !o.is_null());
+    let presence = listing.get("account").and_then(|a| a.get("online"));
+
+    let online = presence.is_some_and(|o| !o.is_null());
+    let away = presence
+        .and_then(|o| o.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| status == "afk");
 
     Some(Listing {
         amount,
         currency: currency.to_string(),
         account: account.to_string(),
         online,
+        away,
+        details: read_display_item(entry.get("item")),
     })
+}
+
+fn strings_at(item: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    item.and_then(|item| item.get(key))
+        .and_then(serde_json::Value::as_array)
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tiers_and_hashes(
+    item: Option<&serde_json::Value>,
+    key: &str,
+) -> (Vec<Option<String>>, Vec<Vec<usize>>) {
+    let mods = item
+        .and_then(|item| item.get("extended"))
+        .and_then(|x| x.get("mods"))
+        .and_then(|m| m.get(key))
+        .and_then(serde_json::Value::as_array);
+
+    let Some(mods) = mods else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let tiers = mods
+        .iter()
+        .map(|entry| {
+            entry
+                .get("tier")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+
+    let hashes = mods
+        .iter()
+        .map(|entry| {
+            entry
+                .get("magnitudes")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| (0..list.len()).collect())
+                .unwrap_or_default()
+        })
+        .collect();
+
+    (tiers, hashes)
+}
+
+pub fn read_display_item(
+    item: Option<&serde_json::Value>,
+) -> poe_wayfinder_core::controller::listing::DisplayItem {
+    use poe_wayfinder_core::controller::listing::{
+        item_properties, item_tags, mod_block, title, ItemFlags, LineKind,
+    };
+
+    let Some(raw) = item else {
+        return Default::default();
+    };
+
+    let text = |key: &str| raw.get(key).and_then(serde_json::Value::as_str);
+    let flag = |key: &str| raw.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+
+    let requirements: Vec<(String, String)> = raw
+        .get("requirements")
+        .and_then(serde_json::Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|entry| {
+                    let name = entry.get("name").and_then(serde_json::Value::as_str)?;
+                    let value = entry
+                        .get("values")
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|v| v.first())
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|v| v.first())
+                        .and_then(serde_json::Value::as_str)?;
+
+                    Some((name.to_string(), value.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let block = |key: &str, kind: LineKind, extended: &str| {
+        let (tiers, hashes) = tiers_and_hashes(item, extended);
+
+        mod_block(&strings_at(item, key), kind, &tiers, &hashes)
+    };
+
+    poe_wayfinder_core::controller::listing::DisplayItem {
+        title: title(text("name"), text("typeLine")),
+        properties: item_properties(
+            raw.get("ilvl").and_then(serde_json::Value::as_u64).map(|v| v as u32),
+            &requirements,
+        ),
+        granted_skills: Vec::new(),
+        enchant_mods: block("enchantMods", LineKind::Enchant, "enchant"),
+        rune_mods: block("runeMods", LineKind::Augmented, "rune"),
+        implicit_mods: block("implicitMods", LineKind::Augmented, "implicit"),
+        fractured_mods: block("fracturedMods", LineKind::Fractured, "fractured"),
+        explicit_mods: block("explicitMods", LineKind::Normal, "explicit"),
+        crafted_mods: block("craftedMods", LineKind::Augmented, "crafted"),
+        desecrated_mods: block("desecratedMods", LineKind::Desecrated, "desecrated"),
+        mutated_mods: block("mutatedMods", LineKind::Mutated, "mutated"),
+        pseudo_mods: Vec::new(),
+        veiled_mods: Vec::new(),
+        tags: item_tags(&ItemFlags {
+            identified: raw
+                .get("identified")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            unidentified_tier: None,
+            corrupted: flag("corrupted"),
+            double_corrupted: false,
+            mirrored: flag("duplicated"),
+            sanctified: flag("sanctified"),
+        }),
+    }
 }
 
 pub fn read_exchange_listings(response: &HttpResponse) -> Result<Vec<Listing>, PriceCheckError> {
@@ -452,10 +580,13 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    let online = listing
-        .get("account")
-        .and_then(|a| a.get("online"))
-        .is_some_and(|o| !o.is_null());
+    let presence = listing.get("account").and_then(|a| a.get("online"));
+
+    let online = presence.is_some_and(|o| !o.is_null());
+    let away = presence
+        .and_then(|o| o.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| status == "afk");
 
     let bulk = poe_wayfinder_core::controller::bulk::BulkListing {
         id: String::new(),
@@ -465,10 +596,7 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
         is_mine: false,
         account_name: account.to_string(),
         character_name: String::new(),
-        status: match online {
-            true => poe_wayfinder_core::controller::bulk::SellerStatus::Online,
-            false => poe_wayfinder_core::controller::bulk::SellerStatus::Offline,
-        },
+        status: poe_wayfinder_core::controller::bulk::seller_status(online, away),
     };
 
     Some(Listing {
@@ -476,6 +604,8 @@ fn read_exchange_listing(entry: &serde_json::Value) -> Option<Listing> {
         currency: currency.to_string(),
         account: bulk.account_name,
         online,
+        away,
+        details: Default::default(),
     })
 }
 
@@ -1125,12 +1255,104 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_seller_who_is_online_but_away_is_told_apart_from_one_who_is_there() {
+        let afk = "{\"listing\":{\"price\":{\"amount\":5,\"currency\":\"divine\"},\"account\":{\"name\":\"afker\",\"online\":{\"status\":\"afk\"}}}}";
+
+        let got = read_listings(&fetch_body(afk)).expect("listings");
+
+        assert!(got[0].online, "afk still counts as online to the site");
+        assert!(got[0].away, "but away, and away sellers rarely answer");
+    }
+
+    #[test]
+    fn a_seller_with_no_status_is_online_and_not_away() {
+        let there = "{\"listing\":{\"price\":{\"amount\":5,\"currency\":\"divine\"},\"account\":{\"name\":\"there\",\"online\":{\"league\":\"Standard\"}}}}";
+
+        let got = read_listings(&fetch_body(there)).expect("listings");
+
+        assert!(got[0].online && !got[0].away);
+    }
+
+    #[test]
+    fn an_offline_seller_is_neither_online_nor_away() {
+        let got = read_listings(&fetch_body(&listing(5.0, "divine", false))).expect("listings");
+
+        assert!(!got[0].online && !got[0].away);
+    }
+
+    #[test]
+    fn a_listed_item_is_read_with_its_mods_and_tiers() {
+        let entry = serde_json::json!({
+            "listing": {
+                "price": { "amount": 5, "currency": "divine" },
+                "account": { "name": "Kaom", "online": {} }
+            },
+            "item": {
+                "name": "Doom Grip",
+                "typeLine": "Iron Ring",
+                "ilvl": 82,
+                "identified": true,
+                "corrupted": true,
+                "explicitMods": ["+80 to maximum Life", "12% increased Rarity"],
+                "implicitMods": ["+15 to Fire Damage"],
+                "requirements": [
+                    { "name": "Level", "values": [["65", 0]] }
+                ],
+                "extended": {
+                    "mods": {
+                        "explicit": [
+                            { "tier": "P2", "magnitudes": [{}] },
+                            { "tier": "S3", "magnitudes": [{}] }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let got = read_listing(&entry).expect("a listing");
+
+        assert_eq!(got.details.title.len(), 2, "name and base");
+        assert_eq!(got.details.explicit_mods.len(), 2);
+        assert_eq!(got.details.implicit_mods.len(), 1);
+        assert_eq!(
+            got.details.explicit_mods[0].tier.as_deref(),
+            Some("P2"),
+            "the tier comes off extended.mods"
+        );
+        assert!(
+            got.details.properties.iter().any(|p| p.label == "Item Level"),
+            "the item level is shown"
+        );
+        assert!(
+            got.details.tags.iter().any(|t| t.text.contains("Corrupted")),
+            "corrupted is a tag"
+        );
+    }
+
+    #[test]
+    fn a_listing_with_no_item_block_still_reads_its_price() {
+        let entry = serde_json::json!({
+            "listing": {
+                "price": { "amount": 5, "currency": "divine" },
+                "account": { "name": "Kaom", "online": {} }
+            }
+        });
+
+        let got = read_listing(&entry).expect("a listing");
+
+        assert_eq!(got.amount, 5.0);
+        assert!(got.details.title.is_empty(), "no detail, and no panic");
+    }
+
     fn priced(amount: f64, currency: &str) -> Listing {
         Listing {
             amount,
             currency: currency.to_string(),
             account: "Kaom".to_string(),
             online: true,
+            away: false,
+            details: Default::default(),
         }
     }
 

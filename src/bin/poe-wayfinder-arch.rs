@@ -210,8 +210,32 @@ fn calls_in(text: &str, name: &str) -> usize {
             !trimmed.starts_with(&format!("pub fn {name}"))
                 && !trimmed.starts_with(&format!("fn {name}"))
         })
+        .map(outside_quotes)
         .filter(|line| mentions(line, name))
         .count()
+}
+
+fn outside_quotes(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut quoted = false;
+    let mut escaped = false;
+
+    for character in line.chars() {
+        if escaped {
+            escaped = false;
+
+            continue;
+        }
+
+        match character {
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            _ => out.push(character),
+        }
+    }
+
+    out
 }
 
 fn mentions(line: &str, name: &str) -> bool {
@@ -239,7 +263,10 @@ fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-const NOT_A_CALLER: &str = "src/bin/poe-wayfinder-uiparity.rs";
+const NOT_A_CALLER: &[&str] = &[
+    "src/bin/poe-wayfinder-uiparity.rs",
+    "src/bin/poe-wayfinder-parity.rs",
+];
 
 pub struct Wiring {
     pub wired: usize,
@@ -270,7 +297,7 @@ fn wiring(everything: &[Source]) -> Wiring {
             let calls: usize = everything
                 .iter()
                 .filter(|other| !is_generated(&other.relative))
-                .filter(|other| other.relative != NOT_A_CALLER)
+                .filter(|other| !NOT_A_CALLER.contains(&other.relative.as_str()))
                 .map(|other| calls_in(&other.text, &name))
                 .sum();
 
@@ -316,7 +343,7 @@ fn no_unwired_public_functions(everything: &[Source]) -> Vec<Violation> {
             let calls: usize = everything
                 .iter()
                 .filter(|other| !is_generated(&other.relative))
-                .filter(|other| other.relative != NOT_A_CALLER)
+                .filter(|other| !NOT_A_CALLER.contains(&other.relative.as_str()))
                 .map(|other| calls_in(&other.text, &name))
                 .sum();
 
@@ -893,12 +920,37 @@ mod tests {
     }
 
     #[test]
-    fn the_capability_catalogue_is_not_treated_as_a_caller() {
-        assert_eq!(
-            NOT_A_CALLER, "src/bin/poe-wayfinder-uiparity.rs",
-            "the catalogue names every symbol it measures, so counting it would \
-             make every measured function look alive"
+    fn a_table_of_names_is_not_treated_as_a_caller() {
+        assert!(
+            NOT_A_CALLER.contains(&"src/bin/poe-wayfinder-uiparity.rs"),
+            "the capability catalogue names every symbol it measures"
         );
+        assert!(
+            NOT_A_CALLER.contains(&"src/bin/poe-wayfinder-parity.rs"),
+            "the alias table pairs an upstream name with ours, and counting it \
+             hid fifty one dead functions behind a claim of 100 percent"
+        );
+    }
+
+    #[test]
+    fn a_name_inside_a_log_message_is_not_a_call() {
+        let logged = r#"log.info("watching the hotkeys", &[("watching", value)]);"#;
+
+        assert_eq!(calls_in(logged, "watching"), 0);
+    }
+
+    #[test]
+    fn a_real_call_beside_a_string_is_still_a_call() {
+        let line = r#"log.info("watching", &[]); watching();"#;
+
+        assert_eq!(calls_in(line, "watching"), 1);
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_swallow_the_rest_of_the_line() {
+        let line = r#"println!("say \"hi\""); wired();"#;
+
+        assert_eq!(calls_in(line, "wired"), 1);
     }
 
     #[test]

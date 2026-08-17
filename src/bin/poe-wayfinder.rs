@@ -142,7 +142,7 @@ fn run_overlay(
 
     let mut settings = wiring::build_settings_for(cfg, game, pinned, &origin);
 
-    let Some(copier) = wiring::build_copier(cfg.restore_clipboard, &log) else {
+    let Some(copier) = wiring::build_copier(cfg.restore_clipboard, game, &log) else {
         return ExitCode::FAILURE;
     };
 
@@ -155,6 +155,8 @@ fn run_overlay(
     let input = InputController::new(SystemInput::new(), hold);
 
     let client_log = wiring::resolve_client_log(&cfg.client_log_path, game, &log);
+
+    settings.client_log_found = !client_log.trim().is_empty();
     let refresh = wiring::RefreshPlan::new(cfg, config_dir);
 
     refresh.start(refresh.due_now(), &log);

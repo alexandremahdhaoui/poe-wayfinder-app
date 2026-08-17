@@ -535,6 +535,48 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["self.window.hand_back_the_foreground()"],
     },
     Capability {
+        component: "ItemInfo.vue",
+        name: "the stash is searched for the same item, and for everything priced the same",
+        domain: &["fn same_priced_from_note"],
+        ui: &["fn stash_search_buttons"],
+    },
+    Capability {
+        component: "pseudo/item-property.ts",
+        name: "how good the item's base roll is, shown but never searched",
+        domain: &["fn base_percentile_filter"],
+        ui: &["fn base_percentile_note"],
+    },
+    Capability {
+        component: "TradeItem.vue",
+        name: "a listing shows the listed item itself, with its mods and their tiers",
+        domain: &["fn item_properties", "fn mod_block"],
+        ui: &["fn listed_item_tooltip"],
+    },
+    Capability {
+        component: "WidgetLibrary.vue",
+        name: "a session of priced items is copied out as csv",
+        domain: &["fn to_csv"],
+        ui: &["StatusEvent::CopyCsv"],
+    },
+    Capability {
+        component: "ItemEditor.vue",
+        name: "socketing a rune raises the item properties the search asks for",
+        domain: &["fn recalculated"],
+        ui: &["fn augment_picker"],
+    },
+    Capability {
+        component: "settings/hotkeys.vue",
+        name: "a hotkey is bound by pressing it, for the keyboard and for a pad",
+        domain: &["fn from_key", "fn from_pad"],
+        ui: &["binding_rows("],
+    },
+    Capability {
+        component: "settings/hotkeys.vue",
+        name: "a rebound key or chord takes effect at once and survives a restart",
+        domain: &["fn rebind"],
+        ui: &["self.rebind_key(", "self.rebind_pad("],
+    },
+    Capability {
         component: "main/src/host-files/GameConfig.ts",
         name: "the diagnostics list every pad found and decode each button as it is pressed",
         domain: &["fn expected_bit"],

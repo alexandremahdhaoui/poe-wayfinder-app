@@ -13,6 +13,8 @@ pub trait PadInput {
     fn family(&self) -> PadFamily;
 
     fn held(&self) -> u16;
+
+    fn rebind(&mut self, chord: Option<Chord>);
 }
 
 pub struct GamepadController {
@@ -93,6 +95,11 @@ impl PadInput for GamepadController {
 
     fn held(&self) -> u16 {
         self.held
+    }
+
+    fn rebind(&mut self, chord: Option<Chord>) {
+        self.chord = chord;
+        self.watcher = Watcher::new(chord.into_iter().collect());
     }
 }
 
@@ -263,6 +270,35 @@ mod tests {
             controller.held(),
             poe_wayfinder_core::controller::gamepad_match::DPAD_DOWN
         );
+    }
+
+    #[test]
+    fn a_rebound_chord_takes_effect_without_a_restart() {
+        let old = parse_chord("L1+R1+Triangle");
+        let fresh = parse_chord("Create+Options").expect("a chord");
+        let sources = vec![source(PadFamily::PlayStation, vec![Some(fresh.mask)])];
+        let mut controller = GamepadController::new(sources, old);
+
+        controller.rebind(Some(fresh));
+
+        assert_eq!(controller.chord(), Some(fresh));
+        assert!(controller.fired(), "the new chord fires straight away");
+    }
+
+    #[test]
+    fn rebinding_to_nothing_turns_the_pad_off() {
+        let mut pads = MockGamepad::new();
+
+        pads.expect_buttons().never();
+        pads.expect_family().return_const(PadFamily::Xbox);
+        pads.expect_direction().return_const(0u16);
+
+        let mut controller = GamepadController::new(vec![Box::new(pads)], chord());
+
+        controller.rebind(None);
+
+        assert!(!controller.fired());
+        assert_eq!(controller.chord(), None);
     }
 
     #[test]
