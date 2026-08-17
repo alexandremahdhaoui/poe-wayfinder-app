@@ -193,7 +193,6 @@ fn filters_to_json(filters: &Filters, game: GameVersion) -> Map<String, Value> {
     insert_range(&mut misc, "unidentified_tier", x.unidentified_tier);
     insert_flag(&mut misc, "veiled", x.veiled);
     insert_flag(&mut misc, "fractured_item", x.fractured_item);
-    insert_option_number(&mut misc, "has_empty_modifier", x.has_empty_modifier);
     insert_group(&mut out, "misc_filters", misc);
 
     let tr = &filters.trade_filters;
@@ -241,12 +240,6 @@ fn range_to_json(range: Range) -> Option<Value> {
 fn insert_option(out: &mut Map<String, Value>, name: &str, value: Option<&str>) {
     if let Some(value) = value {
         out.insert(name.into(), json!({ "option": value }));
-    }
-}
-
-fn insert_option_number(out: &mut Map<String, Value>, name: &str, value: Option<f64>) {
-    if let Some(value) = value {
-        out.insert(name.into(), json!({ "option": format!("{value:.0}") }));
     }
 }
 
@@ -348,7 +341,9 @@ mod tests {
             }
         }
     }
-    use poe_wayfinder_core::types::query::TradeQuery;
+    use poe_wayfinder_core::types::query::{
+        Range, StatFilter, StatGroup, StatGroupKind, TradeQuery,
+    };
 
     fn body(query: &TradeQuery) -> Value {
         to_json(query, GameVersion::Poe2)
@@ -452,21 +447,34 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_modifier_travels_under_misc_filters_never_under_stats() {
+    fn an_empty_modifier_travels_as_a_count_group_of_the_pseudo_stat() {
         let mut query = TradeQuery::default();
-        query.filters.misc_filters.has_empty_modifier = Some(1.0);
+
+        query.stats.push(StatGroup {
+            kind: StatGroupKind::Count,
+            value: Range {
+                min: Some(1.0),
+                max: Some(1.0),
+            },
+            filters: vec![StatFilter::range(
+                "pseudo.pseudo_number_of_empty_affix_mods",
+                Range::at_least(1.0),
+            )],
+            disabled: false,
+        });
 
         let got = body(&query);
+        let group = &got["query"]["stats"][0];
 
+        assert_eq!(group["type"], "count");
+        assert_eq!(group["value"]["min"], 1);
         assert_eq!(
-            got["query"]["filters"]["misc_filters"]["filters"]["has_empty_modifier"]["option"], "1",
-            "an item.* id inside stats is refused with Unsupported stat domain"
+            group["filters"][0]["id"],
+            "pseudo.pseudo_number_of_empty_affix_mods"
         );
         assert!(
-            got["query"]["stats"]
-                .as_array()
-                .is_none_or(|groups| groups.is_empty()),
-            "it must not appear as a stat"
+            got["query"]["filters"]["misc_filters"]["filters"]["has_empty_modifier"].is_null(),
+            "the trade api refuses has_empty_modifier: it is an internal id, never sent"
         );
     }
 

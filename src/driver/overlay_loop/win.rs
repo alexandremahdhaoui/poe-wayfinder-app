@@ -57,7 +57,7 @@ use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
 const FRAME_INTERVAL: Duration = Duration::from_millis(100);
-const HEARTBEAT_FRAMES: i64 = 600;
+const HEARTBEAT_FRAMES: i64 = 20;
 const STALL_LOOK_EVERY: Duration = Duration::from_millis(1000);
 const GAME_CHECK_EVERY: Duration = Duration::from_millis(1000);
 const SPLASH_HOLD: Duration = Duration::from_millis(2000);

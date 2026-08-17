@@ -198,13 +198,19 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
 
-    let mut copy_watch = match HookDriver::start(vec![Binding {
-        code: 0x43,
-        modifiers: poe_wayfinder_core::controller::hotkey_match::Modifiers {
-            ctrl: true,
-            ..Default::default()
-        },
-    }]) {
+    let copy_bindings: Vec<Binding> = [false, true]
+        .into_iter()
+        .map(|alt| Binding {
+            code: 0x43,
+            modifiers: poe_wayfinder_core::controller::hotkey_match::Modifiers {
+                ctrl: true,
+                alt,
+                ..Default::default()
+            },
+        })
+        .collect();
+
+    let mut copy_watch = match HookDriver::start(copy_bindings) {
         Ok(watch) => watch,
         Err(err) => {
             eprintln!("fakegame: watching for Ctrl+C: {err}");
@@ -246,7 +252,9 @@ pub fn fake_game(title: &str, seconds: u64, item: &str) -> ExitCode {
 
         ExitCode::SUCCESS
     } else {
-        eprintln!("fakegame: the overlay never pressed Ctrl+C.");
+        eprintln!(
+            "fakegame: the overlay never pressed Ctrl+C, with or without the show mods key held."
+        );
 
         ExitCode::FAILURE
     }
