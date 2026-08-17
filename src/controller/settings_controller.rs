@@ -18,6 +18,8 @@ pub trait RememberedSettings {
 
     fn remember_verdict(&mut self, _matcher: &str, _decisions: &str) {}
 
+    fn forget_verdict(&mut self, _matcher: &str) {}
+
     fn remember_league(&mut self, game: GameVersion, league: &str);
 
     fn league_is_pinned(&self, _game: GameVersion) -> bool {
@@ -79,6 +81,14 @@ impl<S: SettingsStore> RememberedSettings for SettingsController<S> {
 
     fn map_verdicts(&self) -> Vec<(String, String)> {
         self.settings.map_verdicts.clone()
+    }
+
+    fn forget_verdict(&mut self, matcher: &str) {
+        self.settings
+            .map_verdicts
+            .retain(|(known, _)| known != matcher);
+
+        let _ = self.store.save(&self.settings);
     }
 
     fn remember_verdict(&mut self, matcher: &str, decisions: &str) {

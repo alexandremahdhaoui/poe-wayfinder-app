@@ -4,7 +4,7 @@ use poe_wayfinder_core::controller::item_search::{search, Hit, Starred};
 use poe_wayfinder_core::controller::leveling::{step_for, upcoming, Step};
 use poe_wayfinder_core::controller::library::{caption, Library, Logged};
 use poe_wayfinder_core::controller::map_check::{
-    headline, review, set_verdict, worst, Concern, Verdict, NO_DECISION,
+    headline, is_outdated, review, set_verdict, worst, Concern, Verdict, NO_DECISION,
 };
 use poe_wayfinder_core::controller::notepad::Notepad;
 use poe_wayfinder_core::controller::stopwatch::Stopwatch;
@@ -64,6 +64,7 @@ pub struct Widgets {
     pub log_lines: Vec<String>,
     pub concerns: Vec<Concern>,
     pub verdicts: Vec<(String, String)>,
+    outdated: Vec<String>,
     pub background: Background,
     pub starred: Starred,
     pub capture: poe_wayfinder_core::controller::bind_capture::Capture,
@@ -112,7 +113,7 @@ impl Widgets {
             .and_then(|concern| {
                 self.verdicts
                     .iter()
-                    .find(|(matcher, _)| *matcher == concern.text)
+                    .find(|(matcher, _)| *matcher == concern.reference)
                     .map(|(_, set)| set.clone())
             })
             .unwrap_or_else(|| NO_DECISION.to_string());
@@ -122,7 +123,7 @@ impl Widgets {
         concern.verdict = concern.verdict.next();
 
         let set = set_verdict(&known, 1, concern.verdict);
-        let matcher = concern.text.clone();
+        let matcher = concern.reference.clone();
 
         match self
             .verdicts
@@ -138,6 +139,28 @@ impl Widgets {
 
     pub fn remember_verdicts(&mut self, verdicts: Vec<(String, String)>) {
         self.verdicts = verdicts;
+    }
+
+    pub fn mark_outdated_verdicts(&mut self, profile: usize, still_known: impl Fn(&str) -> bool) {
+        self.outdated = self
+            .verdicts
+            .iter()
+            .filter(|(matcher, set)| is_outdated(set, profile, still_known(matcher)))
+            .map(|(matcher, _)| matcher.clone())
+            .collect();
+    }
+
+    pub fn outdated(&self) -> &[String] {
+        &self.outdated
+    }
+
+    pub fn forget_outdated(&mut self) -> Vec<String> {
+        let dropped = std::mem::take(&mut self.outdated);
+
+        self.verdicts
+            .retain(|(matcher, _)| !dropped.contains(matcher));
+
+        dropped
     }
 
     pub fn note_happening(&mut self, happening: &Happening) {
@@ -386,6 +409,7 @@ mod tests {
         let mut w = Widgets {
             concerns: vec![Concern {
                 text: "monsters deal extra fire damage".to_string(),
+                reference: "monsters deal extra fire damage".to_string(),
                 verdict: Verdict::Unset,
             }],
             ..Widgets::default()
@@ -411,6 +435,7 @@ mod tests {
         let mut w = Widgets {
             concerns: vec![Concern {
                 text: "x".to_string(),
+                reference: "x".to_string(),
                 verdict: Verdict::Good,
             }],
             ..Widgets::default()
@@ -438,6 +463,7 @@ mod tests {
         let mut w = Widgets {
             concerns: vec![Concern {
                 text: "x".to_string(),
+                reference: "x".to_string(),
                 verdict: Verdict::Deadly,
             }],
             ..Widgets::default()
@@ -502,5 +528,43 @@ mod tests {
         w.stopwatch.start(0);
 
         assert_eq!(w.elapsed(65_000), "01:05");
+    }
+
+    #[test]
+    fn a_marked_mod_the_data_no_longer_has_is_reported_as_outdated() {
+        let mut w = Widgets::default();
+        w.remember_verdicts(vec![
+            ("#% increased Pack Size".to_string(), "d--".to_string()),
+            ("Gone from the data".to_string(), "d--".to_string()),
+        ]);
+
+        w.mark_outdated_verdicts(1, |matcher| matcher == "#% increased Pack Size");
+
+        assert_eq!(w.outdated(), &["Gone from the data".to_string()]);
+    }
+
+    #[test]
+    fn an_unmarked_mod_the_data_no_longer_has_is_left_alone() {
+        let mut w = Widgets::default();
+        w.remember_verdicts(vec![("Gone from the data".to_string(), "---".to_string())]);
+
+        w.mark_outdated_verdicts(1, |_| false);
+
+        assert!(w.outdated().is_empty());
+    }
+
+    #[test]
+    fn forgetting_drops_the_outdated_decisions_and_names_them() {
+        let mut w = Widgets::default();
+        w.remember_verdicts(vec![
+            ("Gone from the data".to_string(), "d--".to_string()),
+            ("#% increased Pack Size".to_string(), "w--".to_string()),
+        ]);
+
+        w.mark_outdated_verdicts(1, |matcher| matcher == "#% increased Pack Size");
+
+        assert_eq!(w.forget_outdated(), vec!["Gone from the data".to_string()]);
+        assert_eq!(w.verdicts.len(), 1);
+        assert!(w.outdated().is_empty());
     }
 }

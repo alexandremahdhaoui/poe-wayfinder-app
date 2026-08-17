@@ -17,6 +17,7 @@ pub enum StatusEvent {
     Bound(poe_wayfinder_core::controller::bind_capture::Binding),
     CopyCsv(String),
     PriceByName(String),
+    ForgetOutdatedMaps,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1615,6 +1616,25 @@ mod win {
                         .small()
                         .color(MUTED),
                 );
+
+                if !widgets.outdated().is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} marked mods are not in the game data any more",
+                            widgets.outdated().len()
+                        ))
+                        .small()
+                        .color(WARNING),
+                    );
+
+                    if ui
+                        .small_button("Forget them")
+                        .on_hover_text("a mod the data no longer has can never be matched again")
+                        .clicked()
+                    {
+                        events.push(StatusEvent::ForgetOutdatedMaps);
+                    }
+                }
 
                 ui.add_space(4.0);
 

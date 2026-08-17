@@ -18,6 +18,10 @@ enum Status {
 
 const WAIVED: &[(&str, &str)] = &[
     (
+        "trySecondaryParseTranslation",
+        "falls back to the trade site's own stat text when the curated stat table has no matcher. Our stats table is generated from that same trade list, keyed by the text the trade site prints, so a text the trade site knows is already a matcher. Upstream needs the fallback because its table comes from the game bundles instead.",
+    ),
+    (
         "shortRollToFilter",
         "builds an editable roll with its own bounds and trade inversion. filter_view already gives the panel editable rows from a Range and a StatRoll, so this was a second model of the same thing with no caller.",
     ),
@@ -277,10 +281,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("buildMageBloodNotFilter", "duplicates_filter"),
     ("buildFilterWithValue", "duplicates_filter"),
     ("calcPropBounds", "prop_bounds"),
-    (
-        "trySecondaryParseTranslation",
-        "try_secondary_parse_translation",
-    ),
     ("createVirtualItem", "virtual_item"),
     ("applyContractRules", "contract_filters"),
     ("applyBlueprintRules", "blueprint_exclusion"),

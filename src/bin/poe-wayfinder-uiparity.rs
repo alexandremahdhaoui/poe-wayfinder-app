@@ -367,6 +367,12 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["StatusEvent::PriceByName"],
     },
     Capability {
+        component: "map-check/settings-maps.vue",
+        name: "a marked map mod the data no longer has is reported and can be forgotten",
+        domain: &["fn is_outdated"],
+        ui: &["StatusEvent::ForgetOutdatedMaps"],
+    },
+    Capability {
         component: "notepad/WidgetNotepad.vue",
         name: "notes are kept and survive a restart",
         domain: &["fn opened_with"],

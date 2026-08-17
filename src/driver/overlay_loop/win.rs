@@ -38,6 +38,7 @@ use poe_wayfinder_core::controller::hotkey_match::Binding;
 use poe_wayfinder_core::adapter::data_adapter::GameData;
 use poe_wayfinder_core::adapter::data_adapter::Namespace;
 use poe_wayfinder_core::controller::bind_capture::{Binding as BoundRow, Row};
+use poe_wayfinder_core::controller::filter::augments::augment_name;
 use poe_wayfinder_core::controller::game_detect;
 use poe_wayfinder_core::controller::gamepad_match::{self, ControllerStatus};
 use poe_wayfinder_core::controller::gamepad_nav;
@@ -708,7 +709,13 @@ where
                     if self.model.choose_augment(&reference, &augments) {
                         self.log.info(
                             "an augment was socketed into the item",
-                            &[("augment", Value::Str(reference))],
+                            &[
+                                (
+                                    "augment",
+                                    Value::Str(augment_name(&augments, &reference).to_string()),
+                                ),
+                                ("reference", Value::Str(reference)),
+                            ],
                         );
                     }
                 }
@@ -883,6 +890,18 @@ where
                     );
                 }
                 StatusEvent::PriceByName(name) => self.price_a_base_by_name(&name),
+                StatusEvent::ForgetOutdatedMaps => {
+                    let dropped = self.widgets.forget_outdated();
+
+                    for matcher in &dropped {
+                        self.remembered.forget_verdict(matcher);
+                    }
+
+                    self.log.info(
+                        "marked map mods the data no longer has were forgotten",
+                        &[("count", Value::Int(dropped.len() as i64))],
+                    );
+                }
                 StatusEvent::RefreshNow => self.rebuild_data(),
                 StatusEvent::TogglePaused => {
                     self.tray_state.paused = !self.tray_state.paused;
@@ -1421,6 +1440,18 @@ where
             });
 
         self.widgets.check_map(&result.item, 1);
+
+        let tables = self.data.get(self.game);
+
+        self.widgets
+            .mark_outdated_verdicts(1, |matcher| tables.stat_by_matcher(matcher).is_some());
+
+        if !self.widgets.outdated().is_empty() {
+            self.log.info(
+                "some marked map mods are not in the game data any more",
+                &[("count", Value::Int(self.widgets.outdated().len() as i64))],
+            );
+        }
     }
 
     fn open_link(&mut self, site: poe_wayfinder_core::controller::item_links::Site) {
