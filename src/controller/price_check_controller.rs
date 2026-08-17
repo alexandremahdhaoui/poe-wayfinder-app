@@ -512,7 +512,9 @@ pub fn read_display_item(
     poe_wayfinder_core::controller::listing::DisplayItem {
         title: title(text("name"), text("typeLine")),
         properties: item_properties(
-            raw.get("ilvl").and_then(serde_json::Value::as_u64).map(|v| v as u32),
+            raw.get("ilvl")
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as u32),
             &requirements,
         ),
         granted_skills: Vec::new(),
@@ -1321,11 +1323,17 @@ mod tests {
             "the tier comes off extended.mods"
         );
         assert!(
-            got.details.properties.iter().any(|p| p.label == "Item Level"),
+            got.details
+                .properties
+                .iter()
+                .any(|p| p.label == "Item Level"),
             "the item level is shown"
         );
         assert!(
-            got.details.tags.iter().any(|t| t.text.contains("Corrupted")),
+            got.details
+                .tags
+                .iter()
+                .any(|t| t.text.contains("Corrupted")),
             "corrupted is a tag"
         );
     }

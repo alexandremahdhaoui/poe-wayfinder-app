@@ -361,6 +361,12 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["Tab::Search"],
     },
     Capability {
+        component: "item-search/WidgetItemSearch.vue",
+        name: "a base found by name is priced with no item in hand",
+        domain: &["fn virtual_item"],
+        ui: &["StatusEvent::PriceByName"],
+    },
+    Capability {
         component: "notepad/WidgetNotepad.vue",
         name: "notes are kept and survive a restart",
         domain: &["fn opened_with"],

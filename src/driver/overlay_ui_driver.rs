@@ -16,6 +16,7 @@ pub enum StatusEvent {
     ChooseGame(GameChoice),
     Bound(poe_wayfinder_core::controller::bind_capture::Binding),
     CopyCsv(String),
+    PriceByName(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -201,15 +202,15 @@ mod win {
     use poe_wayfinder_core::controller::filter_view::{
         gauge_edit, influence_labels, tier_label, FilterView, FlagRow, Row,
     };
-    use poe_wayfinder_core::controller::item_editor::AugmentOption;
     use poe_wayfinder_core::controller::gamepad_match::PadFamily;
     use poe_wayfinder_core::controller::help;
-    use poe_wayfinder_core::types::GameVersion;
+    use poe_wayfinder_core::controller::item_editor::AugmentOption;
     use poe_wayfinder_core::controller::pad_focus;
     use poe_wayfinder_core::controller::price_summary::{
         online_count, price_headline, price_spread, stack_value, Estimate, Quote,
     };
     use poe_wayfinder_core::controller::rate_limit::LimiterLine;
+    use poe_wayfinder_core::types::GameVersion;
 
     use std::time::SystemTime;
 
@@ -1024,7 +1025,11 @@ mod win {
         use poe_wayfinder_core::controller::listing::{tier_of, DisplayLine, LineKind};
 
         if details.title.is_empty() && details.explicit_mods.is_empty() {
-            ui.label(egui::RichText::new("no detail was returned").small().color(MUTED));
+            ui.label(
+                egui::RichText::new("no detail was returned")
+                    .small()
+                    .color(MUTED),
+            );
 
             return;
         }
@@ -1467,12 +1472,9 @@ mod win {
                     })
                 })?;
 
-                widgets.capture.from_key(
-                    &pressed.0,
-                    pressed.1.ctrl,
-                    pressed.1.shift,
-                    pressed.1.alt,
-                )
+                widgets
+                    .capture
+                    .from_key(&pressed.0, pressed.1.ctrl, pressed.1.shift, pressed.1.alt)
             }
         }
     }
@@ -1654,21 +1656,36 @@ mod win {
                 ui.add_space(4.0);
 
                 let mut clicked = None;
+                let mut priced = None;
 
                 for hit in widgets.hits(names) {
                     let starred = widgets.starred.is_starred(&hit.name);
 
-                    if ui
-                        .selectable_label(starred, &hit.name)
-                        .on_hover_text("click to keep it in the list")
-                        .clicked()
-                    {
-                        clicked = Some(hit.name.clone());
-                    }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(starred, &hit.name)
+                            .on_hover_text("click to keep it in the list")
+                            .clicked()
+                        {
+                            clicked = Some(hit.name.clone());
+                        }
+
+                        if ui
+                            .small_button("Price")
+                            .on_hover_text("price this base with no item in hand")
+                            .clicked()
+                        {
+                            priced = Some(hit.name.clone());
+                        }
+                    });
                 }
 
                 if let Some(name) = clicked {
                     widgets.starred.toggle_star(&name);
+                }
+
+                if let Some(name) = priced {
+                    events.push(StatusEvent::PriceByName(name));
                 }
 
                 if !widgets.starred.starred().is_empty() {

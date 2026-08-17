@@ -36,9 +36,10 @@ use crate::util::error_chain::render;
 use poe_wayfinder_core::controller::hotkey_match::Binding;
 
 use poe_wayfinder_core::adapter::data_adapter::GameData;
+use poe_wayfinder_core::adapter::data_adapter::Namespace;
+use poe_wayfinder_core::controller::bind_capture::{Binding as BoundRow, Row};
 use poe_wayfinder_core::controller::game_detect;
 use poe_wayfinder_core::controller::gamepad_match::{self, ControllerStatus};
-use poe_wayfinder_core::controller::bind_capture::{Binding as BoundRow, Row};
 use poe_wayfinder_core::controller::gamepad_nav;
 use poe_wayfinder_core::controller::league_list::LeagueFrom;
 use poe_wayfinder_core::controller::overlay_lifecycle::{
@@ -46,8 +47,11 @@ use poe_wayfinder_core::controller::overlay_lifecycle::{
 };
 use poe_wayfinder_core::controller::pad_focus::{self, AutoRepeat, Focus, PadEdit};
 use poe_wayfinder_core::controller::press_coalesce;
-use poe_wayfinder_core::controller::price_check::{price_check, PriceCheck, PriceCheckOptions};
+use poe_wayfinder_core::controller::price_check::{
+    price_check, price_check_item, PriceCheck, PriceCheckOptions,
+};
 use poe_wayfinder_core::controller::switching::{self, Chosen, GameChoice, LeagueChoice};
+use poe_wayfinder_core::types::item::{ItemRarity, ParsedItem};
 use poe_wayfinder_core::types::{GamePair, GameVersion};
 
 const PANEL_WINDOW_TITLE: &str = "poe-wayfinder";
@@ -150,7 +154,10 @@ where
     ) -> Result<Self, OverlayLoopError> {
         report_window(&window, &log);
 
-        if let Some(bound) = remembered.bound_hotkey().and_then(|held| Hotkey::parse(&held).ok()) {
+        if let Some(bound) = remembered
+            .bound_hotkey()
+            .and_then(|held| Hotkey::parse(&held).ok())
+        {
             log.info(
                 "a price check key you bound is used instead of the configured one",
                 &[
@@ -875,6 +882,7 @@ where
                         ],
                     );
                 }
+                StatusEvent::PriceByName(name) => self.price_a_base_by_name(&name),
                 StatusEvent::RefreshNow => self.rebuild_data(),
                 StatusEvent::TogglePaused => {
                     self.tray_state.paused = !self.tray_state.paused;
@@ -978,6 +986,76 @@ where
                 ),
             ],
         );
+    }
+
+    fn price_a_base_by_name(&mut self, name: &str) {
+        let cursor = self.window.cursor();
+        let Self {
+            model,
+            data,
+            game,
+            options,
+            log,
+            ..
+        } = self;
+
+        let options = options.clone();
+        let tables = data.get(*game);
+
+        let stage = price_check_loop::prepare(
+            model,
+            cursor,
+            || Ok(name.to_string()),
+            |text| {
+                let found = [Namespace::Unique, Namespace::Item, Namespace::Gem]
+                    .into_iter()
+                    .find_map(|namespace| {
+                        tables
+                            .items_by_name(text, namespace, *game)
+                            .into_iter()
+                            .next()
+                            .map(|info| (namespace, info))
+                    });
+
+                let Some((namespace, info)) = found else {
+                    return Err(format!("no base is named {text:?}"));
+                };
+
+                let mut item = ParsedItem::virtual_item(info);
+                item.rarity = Some(match namespace {
+                    Namespace::Unique => ItemRarity::Unique,
+                    _ => ItemRarity::Normal,
+                });
+
+                let parsed = Ok(price_check_item(item, tables, &options));
+
+                log_parsed(log, &parsed);
+
+                parsed
+            },
+        );
+
+        let price_check_loop::Stage::Ready(checked) = stage else {
+            self.log.warn(
+                "pricing a base by name stopped before it could search",
+                &[("name", Value::Str(name.to_string()))],
+            );
+
+            return;
+        };
+
+        self.log.info(
+            "a base is priced with no item in hand",
+            &[
+                ("name", Value::Str(name.to_string())),
+                (
+                    "stat_rows",
+                    Value::Int(self.model.filters().stats.len() as i64),
+                ),
+            ],
+        );
+
+        self.awaiting_search = Some(checked);
     }
 
     fn rebuild_data(&mut self) {
@@ -1196,8 +1274,10 @@ where
 
     fn rebind_key(&mut self, text: &str) {
         let Ok(hotkey) = Hotkey::parse(text) else {
-            self.log
-                .warn("that key cannot be bound", &[("key", Value::Str(text.to_string()))]);
+            self.log.warn(
+                "that key cannot be bound",
+                &[("key", Value::Str(text.to_string()))],
+            );
 
             return;
         };

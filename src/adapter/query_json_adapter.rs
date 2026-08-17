@@ -459,8 +459,7 @@ mod tests {
         let got = body(&query);
 
         assert_eq!(
-            got["query"]["filters"]["misc_filters"]["filters"]["has_empty_modifier"]["option"],
-            "1",
+            got["query"]["filters"]["misc_filters"]["filters"]["has_empty_modifier"]["option"], "1",
             "an item.* id inside stats is refused with Unsupported stat domain"
         );
         assert!(
