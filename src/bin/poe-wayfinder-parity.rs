@@ -18,6 +18,18 @@ enum Status {
 
 const WAIVED: &[(&str, &str)] = &[
     (
+        "shortRollToFilter",
+        "builds an editable roll with its own bounds and trade inversion. filter_view already gives the panel editable rows from a Range and a StatRoll, so this was a second model of the same thing with no caller.",
+    ),
+    (
+        "getMinMax",
+        "reads the bounds back out of that second model, same reason",
+    ),
+    (
+        "percentRollDelta",
+        "widens a delta rather than a value, only ever called by that second model",
+    ),
+    (
         "translateStatWithRoll",
         "picks the wording that fits a roll, because upstream renders every stat from a template. We keep the line the game printed, which needs no re-translation and is what the uiparity catalogue requires a filter row to show.",
     ),
@@ -286,9 +298,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("recalculateItemProperties", "recalculated"),
     ("refEffectsPseudos", "affects_pseudo"),
     ("translatedEffectsPseudos", "signs_match"),
-    ("shortRollToFilter", "short_roll_to_filter"),
-    ("filterAdjustmentForNegate", "negate"),
-    ("getMinMax", "for_trade"),
+    ("filterAdjustmentForNegate", "bound_for"),
     ("parseModifiersPoe2", "read_modifier_section_poe2"),
     ("mapProps", "map_filters"),
     ("filterBasePercentile", "base_percentile_filter"),
@@ -302,7 +312,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("decimalPlaces", "decimal_places"),
     ("roundRoll", "round_roll"),
     ("percentRoll", "percent_roll"),
-    ("percentRollDelta", "percent_roll_delta"),
     ("getItemEditorType", "editor_kind"),
     ("parseAffixStrings", "parse_affix_strings"),
     ("getTier", "tier_at"),
