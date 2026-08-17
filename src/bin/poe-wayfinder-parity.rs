@@ -18,6 +18,10 @@ enum Status {
 
 const WAIVED: &[(&str, &str)] = &[
     (
+        "translateStatWithRoll",
+        "picks the wording that fits a roll, because upstream renders every stat from a template. We keep the line the game printed, which needs no re-translation and is what the uiparity catalogue requires a filter row to show.",
+    ),
+    (
         "isStashArea",
         "the cursor-over-the-grid test for stash scroll, which is Ctrl plus the wheel to flip stash tabs. Dropped for now on 2026-08-17 because it needs a mouse wheel hook and we hook only the keyboard. FOLLOWUP holds it as deferred work.",
     ),
@@ -258,7 +262,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("readConfig", "parse_ini"),
     ("finalFilterTweaks", "final_filter_tweaks"),
     ("createNewStatFilter", "preview_filters"),
-    ("translateStatWithRoll", "wording_for"),
     ("buildMageBloodNotFilter", "duplicates_filter"),
     ("buildFilterWithValue", "duplicates_filter"),
     ("calcPropBounds", "prop_bounds"),
