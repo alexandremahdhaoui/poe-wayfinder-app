@@ -18,6 +18,10 @@ enum Status {
 
 const WAIVED: &[(&str, &str)] = &[
     (
+        "likelyFinishedItem",
+        "gates the second search preset, which hunts the exact base instead of the pseudo totals. We offer one search, so the function had nothing to decide. Port it back the day presets land. The user chose this on 2026-08-17.",
+    ),
+    (
         "trySecondaryParseTranslation",
         "falls back to the trade site's own stat text when the curated stat table has no matcher. Our stats table is generated from that same trade list, keyed by the text the trade site prints, so a text the trade site knows is already a matcher. Upstream needs the fallback because its table comes from the game bundles instead.",
     ),
@@ -372,7 +376,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("explicitModifierCount", "explicit_modifier_count"),
     ("itemBaseMaxModifiersOfType", "max_modifiers_of_type"),
     ("itemMaxModifiersBySlot", "max_modifiers_of_type"),
-    ("likelyFinishedItem", "likely_finished"),
     ("applyClusterJewelRules", "passive_bound"),
     ("applyFlaskRules", "flask_enchant_is_useful"),
     ("hideAllAugments", "is_hidden_by_default"),
