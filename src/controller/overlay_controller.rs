@@ -1,8 +1,10 @@
 use poe_wayfinder_core::controller::filter::augments::Augment;
 use poe_wayfinder_core::controller::filter_view::{self, FilterView, FlagKey, RowKey};
+use poe_wayfinder_core::controller::item_diff::{self, crafted_changes, Change};
 use poe_wayfinder_core::controller::item_editor::{
     augment_options, empty_sockets, AugmentOption, ItemEditor,
 };
+use poe_wayfinder_core::controller::parse::shared::modifiers::ParsedModifier;
 use poe_wayfinder_core::controller::price_check::PriceCheck;
 use poe_wayfinder_core::controller::price_summary::{estimate_from, Estimate, Quote};
 use poe_wayfinder_core::controller::rate_limit::LimiterLine;
@@ -26,6 +28,9 @@ pub struct OverlayModel {
     editor: ItemEditor,
     limits: Vec<LimiterLine>,
     note: Option<String>,
+    last_affixes: Vec<ParsedModifier>,
+    last_item_name: String,
+    change: Change,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +64,8 @@ pub trait PanelSource {
     fn limits(&self) -> &[LimiterLine];
 
     fn pacing_note(&self) -> Option<&str>;
+
+    fn change_note(&self) -> Option<String>;
 }
 
 impl PanelSource for OverlayModel {
@@ -108,6 +115,10 @@ impl PanelSource for OverlayModel {
 
     fn pacing_note(&self) -> Option<&str> {
         OverlayModel::pacing_note(self)
+    }
+
+    fn change_note(&self) -> Option<String> {
+        OverlayModel::change_since_the_last_check(self)
     }
 }
 
@@ -292,6 +303,12 @@ impl OverlayModel {
 
     pub fn finish(&mut self, result: PriceCheck, total: u64) {
         self.state = OverlayState::Showing;
+        self.change = match self.same_item_as_last(&result) {
+            true => crafted_changes(&self.last_affixes, &result.item.modifiers),
+            false => Change::default(),
+        };
+        self.last_affixes = result.item.modifiers.clone();
+        self.last_item_name = result.item.info.reference_name.clone();
         self.filters = filter_view::build(&result);
         self.result = Some(result);
         self.total = Some(total);
@@ -302,6 +319,17 @@ impl OverlayModel {
         self.augments = Vec::new();
         self.editor = ItemEditor::default();
         self.note = None;
+    }
+
+    fn same_item_as_last(&self, result: &PriceCheck) -> bool {
+        !self.last_item_name.is_empty() && self.last_item_name == result.item.info.reference_name
+    }
+
+    pub fn change_since_the_last_check(&self) -> Option<String> {
+        match self.change.is_empty() {
+            true => None,
+            false => Some(item_diff::caption(&self.change)),
+        }
     }
 
     pub fn fail(&mut self, message: &str) {
@@ -784,5 +812,75 @@ mod tests {
                 .max,
             Some(120.0)
         );
+    }
+
+    fn ring_with(references: &[&str]) -> PriceCheck {
+        use poe_wayfinder_core::controller::parse::shared::modifiers::ParsedModifier;
+        use poe_wayfinder_core::types::item::BaseInfo;
+        use poe_wayfinder_core::types::modifier::{Generation, ModifierInfo};
+        use poe_wayfinder_core::types::stat::ParsedStat;
+
+        PriceCheck {
+            item: poe_wayfinder_core::types::item::ParsedItem {
+                info: BaseInfo {
+                    reference_name: "Sapphire Ring".into(),
+                    ..BaseInfo::default()
+                },
+                modifiers: references
+                    .iter()
+                    .map(|reference| ParsedModifier {
+                        info: ModifierInfo {
+                            generation: Some(Generation::Prefix),
+                            ..ModifierInfo::default()
+                        },
+                        stats: vec![ParsedStat {
+                            reference: (*reference).to_string(),
+                            matched: (*reference).to_string(),
+                            roll: None,
+                        }],
+                    })
+                    .collect(),
+                ..poe_wayfinder_core::types::item::ParsedItem::default()
+            },
+            query: poe_wayfinder_core::types::query::TradeQuery::default(),
+            endpoint: poe_wayfinder_core::controller::bulk::Endpoint::Search,
+            trade_tag: None,
+            sources: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_first_check_of_an_item_reports_no_change() {
+        let mut model = OverlayModel::default();
+
+        model.finish(ring_with(&["+# to maximum Life"]), 1);
+
+        assert_eq!(model.change_since_the_last_check(), None);
+    }
+
+    #[test]
+    fn checking_the_same_base_again_reports_what_it_gained() {
+        let mut model = OverlayModel::default();
+
+        model.finish(ring_with(&["+# to maximum Life"]), 1);
+        model.finish(
+            ring_with(&["+# to maximum Life", "+#% to Fire Resistance"]),
+            1,
+        );
+
+        assert_eq!(
+            model.change_since_the_last_check().as_deref(),
+            Some("1 gained since the last check")
+        );
+    }
+
+    #[test]
+    fn an_unchanged_item_reports_nothing_rather_than_a_line_saying_so() {
+        let mut model = OverlayModel::default();
+
+        model.finish(ring_with(&["+# to maximum Life"]), 1);
+        model.finish(ring_with(&["+# to maximum Life"]), 1);
+
+        assert_eq!(model.change_since_the_last_check(), None);
     }
 }

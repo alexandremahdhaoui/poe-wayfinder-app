@@ -373,6 +373,12 @@ const CAPABILITIES: &[Capability] = &[
         ui: &["StatusEvent::ForgetOutdatedMaps"],
     },
     Capability {
+        component: "library/widget.ts",
+        name: "checking the same item again says what it gained and lost",
+        domain: &["fn crafted_changes"],
+        ui: &["model.change_note"],
+    },
+    Capability {
         component: "notepad/WidgetNotepad.vue",
         name: "notes are kept and survive a restart",
         domain: &["fn opened_with"],

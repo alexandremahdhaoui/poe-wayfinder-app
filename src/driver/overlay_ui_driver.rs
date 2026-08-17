@@ -489,6 +489,10 @@ mod win {
                 ui.label(egui::RichText::new(note).small().color(MUTED));
             }
 
+            if let Some(note) = model.change_note() {
+                ui.label(egui::RichText::new(note).small().color(WARNING));
+            }
+
             if let Some(stack) = model.result().and_then(|c| c.item.stack_size) {
                 if let Some(line) = stack_value(estimate, stack.value) {
                     ui.label(egui::RichText::new(line).small().color(MUTED));
