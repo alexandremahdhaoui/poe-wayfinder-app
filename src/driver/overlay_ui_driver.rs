@@ -220,26 +220,45 @@ mod win {
     use poe_wayfinder_core::controller::map_check::Verdict;
     use poe_wayfinder_core::controller::settings_view::{bounds_of, sliders, switches};
 
-    const PANEL_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(14, 14, 18);
-    const SECTION_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(24, 24, 30);
-    const ROW_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(34, 34, 42);
-    const GAUGE_TRACK: egui::Color32 = egui::Color32::from_rgb(52, 52, 62);
-    const GAUGE_FILL: egui::Color32 = egui::Color32::from_rgb(72, 132, 196);
-    const GAUGE_TICK: egui::Color32 = egui::Color32::from_rgb(236, 226, 190);
-    const ONLINE_DOT: egui::Color32 = egui::Color32::from_rgb(96, 190, 110);
-    const OFFLINE_DOT: egui::Color32 = egui::Color32::from_rgb(120, 120, 130);
-    const WARNING: egui::Color32 = egui::Color32::from_rgb(240, 180, 60);
-    const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 150, 162);
-    const ACCENT: egui::Color32 = egui::Color32::from_rgb(226, 200, 130);
+    const PANEL_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(16, 15, 19);
+    const SECTION_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(26, 24, 30);
+    const ROW_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(36, 34, 42);
+    const HOVER_FILL: egui::Color32 = egui::Color32::from_rgb(48, 45, 56);
+    const GAUGE_TRACK: egui::Color32 = egui::Color32::from_rgb(58, 54, 66);
+    const GAUGE_FILL: egui::Color32 = egui::Color32::from_rgb(86, 178, 176);
+    const GAUGE_TICK: egui::Color32 = egui::Color32::from_rgb(238, 228, 196);
+    const ONLINE_DOT: egui::Color32 = egui::Color32::from_rgb(110, 196, 128);
+    const OFFLINE_DOT: egui::Color32 = egui::Color32::from_rgb(118, 116, 128);
+    const WARNING: egui::Color32 = egui::Color32::from_rgb(240, 168, 56);
+    const DANGER: egui::Color32 = egui::Color32::from_rgb(228, 96, 96);
+    const EDITED: egui::Color32 = egui::Color32::from_rgb(226, 122, 72);
+    const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 146, 160);
+    const ACCENT: egui::Color32 = egui::Color32::from_rgb(238, 206, 142);
+    const TEXT: egui::Color32 = egui::Color32::from_rgb(226, 224, 232);
 
     const GAUGE_HIT_HEIGHT: f32 = 14.0;
     const GAUGE_BAR_HEIGHT: f32 = 6.0;
     const GAUGE_HANDLE_RADIUS: f32 = 4.0;
 
-    const MOD_ENABLED: egui::Color32 = egui::Color32::from_rgb(224, 224, 232);
-    const MOD_DISABLED: egui::Color32 = egui::Color32::from_rgb(112, 112, 124);
-    const MOD_UNDERLINE: egui::Color32 = egui::Color32::from_rgb(72, 132, 196);
-    const DISABLED_FADE: f32 = 0.45;
+    const MOD_ENABLED: egui::Color32 = TEXT;
+    const MOD_DISABLED: egui::Color32 = egui::Color32::from_rgb(112, 110, 124);
+    const MOD_UNDERLINE: egui::Color32 = GAUGE_FILL;
+    const DISABLED_FADE: f32 = 0.42;
+    const FOCUSED_FADE: f32 = 0.78;
+
+    const SMALL_TEXT: f32 = 11.0;
+    const BODY_TEXT: f32 = 13.0;
+    const HEADING_TEXT: f32 = 20.0;
+    const PRICE_TEXT: f32 = 22.0;
+    const TITLE_TEXT: f32 = 16.0;
+
+    const CONTROL_RADIUS: u8 = 5;
+    const SECTION_RADIUS: u8 = 7;
+    const RAIL_WIDTH: f32 = 3.0;
+    const VALUE_COLUMN: f32 = 150.0;
+    const LABEL_COLUMN: f32 = 82.0;
+    const RAIL_GUTTER: i8 = 8;
+    const FOCUS_BAND: egui::Color32 = egui::Color32::from_rgb(44, 41, 52);
 
     const LISTINGS_SHOWN: usize = 8;
     const FOOTER_HEIGHT: f32 = 30.0;
@@ -271,20 +290,80 @@ mod win {
     fn mark_for(pad: Option<&PadView>, index: usize) -> Option<PadView> {
         let pad = pad?;
 
-        match pad.focus.row == index {
+        match pad_focus::marks(pad.connected, pad.focus, index) {
             true => Some(*pad),
             false => None,
         }
     }
 
-    fn focus_frame(marked: Option<PadView>) -> egui::Frame {
-        match marked {
-            Some(_) => egui::Frame::new()
-                .stroke(egui::Stroke::new(1.0_f32, ACCENT))
-                .corner_radius(4.0)
-                .inner_margin(2.0),
-            None => egui::Frame::new().inner_margin(2.0),
+    fn rail_colour(model: &dyn PanelSource) -> egui::Color32 {
+        model
+            .result()
+            .and_then(|c| c.item.rarity)
+            .map(rarity_colour)
+            .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b))
+            .unwrap_or(ACCENT)
+    }
+
+    fn row_shell<R>(
+        ui: &mut egui::Ui,
+        marked: Option<PadView>,
+        rail: egui::Color32,
+        enabled: bool,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> R {
+        let surface = ui.painter().add(egui::Shape::Noop);
+        let bar = ui.painter().add(egui::Shape::Noop);
+
+        let inner = egui::Frame::new()
+            .inner_margin(egui::Margin {
+                left: RAIL_GUTTER,
+                right: 4,
+                top: 3,
+                bottom: 3,
+            })
+            .show(ui, |ui| {
+                if !enabled {
+                    ui.set_opacity(match marked.is_some() {
+                        true => FOCUSED_FADE,
+                        false => DISABLED_FADE,
+                    });
+                }
+
+                add(ui)
+            });
+
+        let rect = inner.response.rect;
+        let focused = marked.is_some();
+
+        let fill = match (focused, ui.rect_contains_pointer(rect)) {
+            (true, _) => Some(FOCUS_BAND),
+            (false, true) => Some(ROW_BACKGROUND),
+            (false, false) => None,
+        };
+
+        if let Some(colour) = fill {
+            ui.painter().set(
+                surface,
+                egui::Shape::rect_filled(rect, egui::CornerRadius::same(CONTROL_RADIUS), colour),
+            );
         }
+
+        if focused {
+            ui.painter().set(
+                bar,
+                egui::Shape::rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), rect.top() + 1.0),
+                        egui::pos2(rect.left() + RAIL_WIDTH, rect.bottom() - 1.0),
+                    ),
+                    egui::CornerRadius::same(2),
+                    rail,
+                ),
+            );
+        }
+
+        inner.inner
     }
 
     fn box_stroke(marked: Option<PadView>, column: pad_focus::Column) -> egui::Stroke {
@@ -316,8 +395,9 @@ mod win {
             .frame(
                 egui::Frame::new()
                     .fill(PANEL_BACKGROUND.gamma_multiply(0.96))
-                    .inner_margin(10.0)
-                    .corner_radius(8.0),
+                    .stroke(egui::Stroke::new(1.0_f32, GAUGE_TRACK))
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .corner_radius(10.0),
             )
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
@@ -332,7 +412,7 @@ mod win {
                     .show(ui, |ui| {
                         price_banner(ui, model);
                         augment_picker(ui, model, &mut events);
-                        filters(ui, model.filters(), &mut events, pad);
+                        filters(ui, model.filters(), &mut events, pad, rail_colour(model));
                         listing_rows(ui, model);
                     });
 
@@ -355,12 +435,58 @@ mod win {
     fn style(ctx: &egui::Context) {
         let mut style = (*ctx.style()).clone();
 
-        style.visuals.widgets.inactive.weak_bg_fill = ROW_BACKGROUND;
-        style.visuals.widgets.hovered.weak_bg_fill = GAUGE_TRACK;
-        style.visuals.widgets.active.weak_bg_fill = GAUGE_FILL;
-        style.visuals.override_text_color = Some(egui::Color32::from_rgb(214, 214, 222));
+        for (kind, size) in [
+            (egui::TextStyle::Small, SMALL_TEXT),
+            (egui::TextStyle::Body, BODY_TEXT),
+            (egui::TextStyle::Button, BODY_TEXT),
+            (egui::TextStyle::Heading, HEADING_TEXT),
+        ] {
+            style
+                .text_styles
+                .insert(kind, egui::FontId::proportional(size));
+        }
+
+        let radius = egui::CornerRadius::same(CONTROL_RADIUS);
+        let widgets = &mut style.visuals.widgets;
+
+        widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, GAUGE_TRACK);
+        widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, MUTED);
+        widgets.noninteractive.corner_radius = radius;
+
+        widgets.inactive.bg_fill = ROW_BACKGROUND;
+        widgets.inactive.weak_bg_fill = ROW_BACKGROUND;
+        widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, TEXT);
+        widgets.inactive.corner_radius = radius;
+
+        widgets.hovered.bg_fill = HOVER_FILL;
+        widgets.hovered.weak_bg_fill = HOVER_FILL;
+        widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, GAUGE_TRACK);
+        widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, TEXT);
+        widgets.hovered.corner_radius = radius;
+        widgets.hovered.expansion = 0.0;
+
+        widgets.active.bg_fill = GAUGE_FILL;
+        widgets.active.weak_bg_fill = GAUGE_FILL;
+        widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
+        widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, PANEL_BACKGROUND);
+        widgets.active.corner_radius = radius;
+        widgets.active.expansion = 0.0;
+
+        widgets.open.bg_fill = ROW_BACKGROUND;
+        widgets.open.weak_bg_fill = ROW_BACKGROUND;
+        widgets.open.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.55));
+        widgets.open.corner_radius = radius;
+
+        style.visuals.selection.bg_fill = GAUGE_FILL.gamma_multiply(0.42);
+        style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, TEXT);
+        style.visuals.override_text_color = Some(TEXT);
         style.visuals.panel_fill = PANEL_BACKGROUND;
-        style.spacing.button_padding = egui::vec2(6.0, 2.0);
+        style.visuals.window_fill = PANEL_BACKGROUND;
+        style.visuals.extreme_bg_color = SECTION_BACKGROUND;
+        style.visuals.window_stroke = egui::Stroke::new(1.0_f32, GAUGE_TRACK);
+        style.spacing.button_padding = egui::vec2(8.0, 4.0);
+        style.spacing.item_spacing = egui::vec2(6.0, 5.0);
 
         ctx.set_style(style);
     }
@@ -381,14 +507,18 @@ mod win {
 
             ui.label(
                 egui::RichText::new(&text.title)
-                    .size(15.0)
+                    .size(TITLE_TEXT)
                     .strong()
                     .color(colour),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let close = egui::Button::new(egui::RichText::new("Close").small().color(MUTED))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0_f32, GAUGE_TRACK));
+
                 if ui
-                    .button("Close")
+                    .add(close)
                     .on_hover_text("Circle on a pad, or Escape")
                     .clicked()
                 {
@@ -398,16 +528,30 @@ mod win {
         });
 
         ui.horizontal_wrapped(|ui| {
-            if let Some(subtitle) = &text.subtitle {
-                ui.label(egui::RichText::new(subtitle).small().color(MUTED));
-            }
+            let mut printed = false;
 
-            for line in &text.body {
+            for line in text.subtitle.iter().chain(text.body.iter()) {
+                if printed {
+                    ui.label(
+                        egui::RichText::new("\u{2022}")
+                            .small()
+                            .color(MUTED.gamma_multiply(0.5)),
+                    );
+                }
+
                 ui.label(egui::RichText::new(line).small().color(MUTED));
+
+                printed = true;
             }
         });
 
-        name_row(ui, model.filters(), events);
+        ui.horizontal(|ui| {
+            name_row(ui, model.filters(), events);
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                base_percentile_note(ui, model);
+            });
+        });
 
         for warning in &text.warnings {
             ui.label(egui::RichText::new(warning).small().color(WARNING));
@@ -439,7 +583,7 @@ mod win {
 
     fn name_row(ui: &mut egui::Ui, view: &FilterView, events: &mut Vec<UiEvent>) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("searching").small().color(MUTED));
+            ui.label(egui::RichText::new("Searching").small().color(MUTED));
 
             let button = egui::Button::new(
                 egui::RichText::new(view.name.caption())
@@ -467,7 +611,7 @@ mod win {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(price_headline(estimate))
-                        .size(17.0)
+                        .size(PRICE_TEXT)
                         .strong()
                         .color(ACCENT),
                 );
@@ -567,12 +711,15 @@ mod win {
             modifier_line(&option.text, Some(option.value), false)
         );
 
-        let button = egui::Button::new(egui::RichText::new(caption).small())
-            .fill(match picked {
-                true => GAUGE_FILL,
-                false => ROW_BACKGROUND,
-            })
-            .min_size(egui::vec2(ui.available_width(), 0.0));
+        let button = egui::Button::new(egui::RichText::new(caption).small().color(match picked {
+            true => PANEL_BACKGROUND,
+            false => TEXT,
+        }))
+        .fill(match picked {
+            true => GAUGE_FILL,
+            false => ROW_BACKGROUND,
+        })
+        .min_size(egui::vec2(ui.available_width(), 0.0));
 
         if ui.add(button).clicked() {
             events.push(UiEvent::ChooseAugment(option.reference_name.clone()));
@@ -584,12 +731,15 @@ mod win {
         view: &FilterView,
         events: &mut Vec<UiEvent>,
         pad: Option<&PadView>,
+        rail: egui::Color32,
     ) {
         if view.is_empty() {
             ui.label(
-                egui::RichText::new("Nothing to filter on.")
-                    .small()
-                    .color(MUTED),
+                egui::RichText::new(
+                    "Nothing on this item can be filtered. The search uses its name.",
+                )
+                .small()
+                .color(MUTED),
             );
 
             return;
@@ -604,9 +754,11 @@ mod win {
         }
 
         if !view.numerics.is_empty() {
+            ui.add_space(2.0);
+
             section(ui, |ui| {
                 for (index, row) in view.numerics.iter().enumerate() {
-                    numeric_row(ui, row, events, mark_for(pad, index));
+                    numeric_row(ui, row, events, mark_for(pad, index), rail);
                 }
             });
         }
@@ -615,16 +767,23 @@ mod win {
             return;
         }
 
+        ui.add_space(4.0);
+
         section(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Modifiers").small().color(MUTED));
+                ui.label(
+                    egui::RichText::new("Modifiers")
+                        .small()
+                        .strong()
+                        .color(MUTED),
+                );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let all = view.all_stats_on();
 
                     let caption = match all {
-                        true => "none",
-                        false => "all",
+                        true => "Turn all off",
+                        false => "Turn all on",
                     };
 
                     if ui
@@ -638,7 +797,13 @@ mod win {
             });
 
             for (index, row) in view.stats.iter().enumerate() {
-                stat_row(ui, row, events, mark_for(pad, view.numerics.len() + index));
+                stat_row(
+                    ui,
+                    row,
+                    events,
+                    mark_for(pad, view.numerics.len() + index),
+                    rail,
+                );
             }
         });
     }
@@ -646,8 +811,9 @@ mod win {
     fn section<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) {
         egui::Frame::new()
             .fill(SECTION_BACKGROUND)
-            .inner_margin(6.0)
-            .corner_radius(4.0)
+            .stroke(egui::Stroke::new(1.0_f32, GAUGE_TRACK.gamma_multiply(0.5)))
+            .inner_margin(egui::Margin::symmetric(8, 7))
+            .corner_radius(SECTION_RADIUS)
             .show(ui, add);
     }
 
@@ -657,12 +823,17 @@ mod win {
             _ => flag.label.clone(),
         };
 
-        let chip = egui::Button::new(egui::RichText::new(caption).small())
-            .fill(match flag.enabled {
-                true => GAUGE_FILL,
-                false => ROW_BACKGROUND,
-            })
-            .corner_radius(10.0);
+        let chip = egui::Button::new(egui::RichText::new(caption).small().color(
+            match flag.enabled {
+                true => PANEL_BACKGROUND,
+                false => MUTED,
+            },
+        ))
+        .fill(match flag.enabled {
+            true => GAUGE_FILL,
+            false => ROW_BACKGROUND,
+        })
+        .corner_radius(10.0);
 
         let response = ui.add(chip).on_hover_text("right click to invert");
 
@@ -680,8 +851,9 @@ mod win {
         row: &Row,
         events: &mut Vec<UiEvent>,
         marked: Option<PadView>,
+        rail: egui::Color32,
     ) {
-        focus_frame(marked).show(ui, |ui| {
+        row_shell(ui, marked, rail, row.enabled, |ui| {
             ui.horizontal(|ui| {
                 mod_line(ui, row, &row.label.clone(), events);
 
@@ -692,8 +864,14 @@ mod win {
         });
     }
 
-    fn stat_row(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>, marked: Option<PadView>) {
-        focus_frame(marked).show(ui, |ui| {
+    fn stat_row(
+        ui: &mut egui::Ui,
+        row: &Row,
+        events: &mut Vec<UiEvent>,
+        marked: Option<PadView>,
+        rail: egui::Color32,
+    ) {
+        row_shell(ui, marked, rail, row.enabled, |ui| {
             ui.horizontal(|ui| {
                 let label = modifier_line(&row.label, row.roll, row.decimals);
 
@@ -703,11 +881,7 @@ mod win {
                     bounds_inputs(ui, row, events, marked);
 
                     if let Some(tier) = tier_label(row.tier) {
-                        ui.label(
-                            egui::RichText::new(tier)
-                                .small()
-                                .color(dim(ACCENT, row.enabled)),
-                        );
+                        ui.label(egui::RichText::new(tier).small().color(ACCENT));
                     }
                 });
             });
@@ -732,13 +906,6 @@ mod win {
         }
     }
 
-    fn dim(colour: egui::Color32, enabled: bool) -> egui::Color32 {
-        match enabled {
-            true => colour,
-            false => colour.gamma_multiply(DISABLED_FADE),
-        }
-    }
-
     fn mod_line(ui: &mut egui::Ui, row: &Row, label: &str, events: &mut Vec<UiEvent>) {
         let text = egui::RichText::new(label).small().color(match row.enabled {
             true => MOD_ENABLED,
@@ -754,6 +921,8 @@ mod win {
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(toggle_hint(row));
 
+        leader(ui, response.rect);
+
         if row.enabled {
             ui.painter().rect_filled(
                 egui::Rect::from_min_max(
@@ -768,6 +937,21 @@ mod win {
         if response.clicked() {
             events.push(UiEvent::ToggleRow(row.key));
         }
+    }
+
+    fn leader(ui: &egui::Ui, label: egui::Rect) {
+        let stop = ui.max_rect().right() - VALUE_COLUMN;
+        let start = label.right() + 8.0;
+
+        if stop - start < 24.0 {
+            return;
+        }
+
+        ui.painter().hline(
+            start..=stop,
+            label.center().y,
+            egui::Stroke::new(1.0_f32, GAUGE_TRACK.gamma_multiply(0.45)),
+        );
     }
 
     fn contributor_line(ui: &mut egui::Ui, row: &Row) {
@@ -808,7 +992,9 @@ mod win {
         let max_frame = egui::Frame::new().stroke(box_stroke(marked, pad_focus::Column::Max));
 
         if max_frame
-            .show(ui, |ui| ui.add_sized([56.0, 18.0], max_widget))
+            .show(ui, |ui| {
+                unset_aware(ui, max_unset, [52.0, 18.0], max_widget)
+            })
             .inner
             .on_hover_text("highest value to match. Drag it, or click the bar below.")
             .changed()
@@ -834,7 +1020,9 @@ mod win {
         let min_frame = egui::Frame::new().stroke(box_stroke(marked, pad_focus::Column::Min));
 
         if min_frame
-            .show(ui, |ui| ui.add_sized([56.0, 18.0], min_widget))
+            .show(ui, |ui| {
+                unset_aware(ui, min_unset, [52.0, 18.0], min_widget)
+            })
             .inner
             .on_hover_text("lowest value to match. Drag it, or click the bar below.")
             .changed()
@@ -842,6 +1030,28 @@ mod win {
         {
             events.push(UiEvent::SetMin(row.key, finite(min)));
         }
+    }
+
+    fn unset_aware(
+        ui: &mut egui::Ui,
+        unset: bool,
+        size: [f32; 2],
+        widget: egui::DragValue<'_>,
+    ) -> egui::Response {
+        if !unset {
+            return ui.add_sized(size, widget);
+        }
+
+        ui.scope(|ui| {
+            let widgets = &mut ui.visuals_mut().widgets;
+
+            widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+            widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+            widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, MUTED.gamma_multiply(0.7));
+
+            ui.add_sized(size, widget)
+        })
+        .inner
     }
 
     fn drag_speed(row: &Row) -> f64 {
@@ -865,7 +1075,10 @@ mod win {
 
     fn gauge(ui: &mut egui::Ui, row: &Row, events: &mut Vec<UiEvent>) {
         let (hit, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), GAUGE_HIT_HEIGHT),
+            egui::vec2(
+                (ui.available_width() - VALUE_COLUMN).max(80.0),
+                GAUGE_HIT_HEIGHT,
+            ),
             egui::Sense::click_and_drag(),
         );
 
@@ -894,7 +1107,7 @@ mod win {
 
         let painter = ui.painter();
 
-        painter.rect_filled(rect, 3.0, dim(GAUGE_TRACK, row.enabled));
+        painter.rect_filled(rect, 3.0, GAUGE_TRACK);
 
         let Some((low, high)) = row.bounds else {
             return;
@@ -916,7 +1129,7 @@ mod win {
                     egui::pos2(right, rect.bottom()),
                 ),
                 3.0,
-                dim(GAUGE_FILL, row.enabled),
+                GAUGE_FILL,
             );
         }
 
@@ -925,11 +1138,11 @@ mod win {
 
             painter.rect_filled(
                 egui::Rect::from_min_max(
-                    egui::pos2(x - 1.0, rect.top() - 1.0),
-                    egui::pos2(x + 1.0, rect.bottom() + 1.0),
+                    egui::pos2(x - 1.0, rect.top() - 3.0),
+                    egui::pos2(x + 1.0, rect.bottom() + 3.0),
                 ),
-                0.0,
-                dim(GAUGE_TICK, row.enabled),
+                1.0,
+                GAUGE_TICK,
             );
         }
 
@@ -964,8 +1177,8 @@ mod win {
                     .color(MUTED),
             );
 
-            for listing in listings.iter().take(LISTINGS_SHOWN) {
-                listing_row(ui, listing);
+            for (index, listing) in listings.iter().take(LISTINGS_SHOWN).enumerate() {
+                listing_row(ui, listing, index % 2 == 1);
             }
 
             if listings.len() > LISTINGS_SHOWN {
@@ -981,8 +1194,10 @@ mod win {
         });
     }
 
-    fn listing_row(ui: &mut egui::Ui, listing: &Quote) {
-        ui.horizontal(|ui| {
+    fn listing_row(ui: &mut egui::Ui, listing: &Quote, striped: bool) {
+        let surface = ui.painter().add(egui::Shape::Noop);
+
+        let inner = ui.horizontal(|ui| {
             use poe_wayfinder_core::controller::bulk::{seller_status, SellerStatus};
 
             let (dot, hint) = match seller_status(listing.online, listing.away) {
@@ -998,14 +1213,24 @@ mod win {
 
             response.on_hover_text(hint);
 
+            ui.add_sized(
+                [58.0, 14.0],
+                egui::Label::new(
+                    egui::RichText::new(format_value(
+                        listing.amount,
+                        listing.amount.fract() != 0.0,
+                    ))
+                    .small()
+                    .strong()
+                    .color(ACCENT),
+                )
+                .halign(egui::Align::RIGHT),
+            );
+
             ui.label(
-                egui::RichText::new(format!(
-                    "{} {}",
-                    format_value(listing.amount, listing.amount.fract() != 0.0),
-                    listing.currency
-                ))
-                .small()
-                .strong(),
+                egui::RichText::new(listing.currency.clone())
+                    .small()
+                    .color(MUTED),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1018,9 +1243,22 @@ mod win {
                     .truncate(),
                 );
             });
-        })
-        .response
-        .on_hover_ui(|ui| listed_item_tooltip(ui, &listing.details));
+        });
+
+        if striped {
+            ui.painter().set(
+                surface,
+                egui::Shape::rect_filled(
+                    inner.response.rect.expand2(egui::vec2(4.0, 1.0)),
+                    egui::CornerRadius::same(3),
+                    ROW_BACKGROUND.gamma_multiply(0.5),
+                ),
+            );
+        }
+
+        inner
+            .response
+            .on_hover_ui(|ui| listed_item_tooltip(ui, &listing.details));
     }
 
     fn listed_item_tooltip(
@@ -1086,8 +1324,8 @@ mod win {
             let colour = match line.kind {
                 LineKind::Enchant | LineKind::Augmented => ACCENT,
                 LineKind::Fractured | LineKind::Desecrated | LineKind::Mutated => WARNING,
-                LineKind::Unmet => egui::Color32::from_rgb(226, 96, 96),
-                _ => egui::Color32::from_rgb(214, 214, 222),
+                LineKind::Unmet => DANGER,
+                _ => TEXT,
             };
 
             egui::RichText::new(&line.text).small().color(colour)
@@ -1113,19 +1351,27 @@ mod win {
         ui.horizontal(|ui| {
             let label = search_button_label(model.edited());
 
-            let search =
-                egui::Button::new(egui::RichText::new(label).small()).fill(match model.edited() {
-                    true => GAUGE_FILL,
-                    false => ROW_BACKGROUND,
-                });
+            let edited = model.edited();
+
+            let search = egui::Button::new(
+                egui::RichText::new(label)
+                    .small()
+                    .strong()
+                    .color(PANEL_BACKGROUND),
+            )
+            .fill(match edited {
+                true => EDITED,
+                false => ACCENT,
+            })
+            .corner_radius(CONTROL_RADIUS);
 
             if ui.add(search).clicked() {
                 events.push(UiEvent::Research);
             }
 
             if ui
-                .button(egui::RichText::new("browser").small())
-                .on_hover_text("open this search on the trade site")
+                .button(egui::RichText::new("Trade site").small())
+                .on_hover_text("open this search in your browser")
                 .clicked()
             {
                 events.push(UiEvent::OpenInBrowser);
@@ -1139,8 +1385,8 @@ mod win {
                 .unwrap_or(true);
 
             let caption = match online_only {
-                true => "online only",
-                false => "any seller",
+                true => "Online only",
+                false => "Any seller",
             };
 
             if ui
@@ -1150,7 +1396,9 @@ mod win {
             {
                 events.push(UiEvent::ToggleOnline);
             }
+        });
 
+        ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 rate_limit_line(ui, model.limits());
             });
@@ -1353,7 +1601,8 @@ mod win {
                 egui::TopBottomPanel::bottom("status-actions")
                     .frame(
                         egui::Frame::new()
-                            .fill(PANEL_BACKGROUND)
+                            .fill(SECTION_BACKGROUND)
+                            .stroke(egui::Stroke::new(1.0_f32, GAUGE_TRACK.gamma_multiply(0.7)))
                             .inner_margin(egui::Margin::symmetric(14, 10)),
                     )
                     .show(ctx, |ui| {
@@ -1402,15 +1651,51 @@ mod win {
     pub fn widget_tabs(ui: &mut egui::Ui, widgets: &mut Widgets) {
         ui.horizontal_wrapped(|ui| {
             for tab in Tab::every() {
-                let picked = widgets.tab == tab;
-
-                if ui.selectable_label(picked, tab.title()).clicked() {
+                if tab_button(ui, tab.title(), widgets.tab == tab) {
                     widgets.show(tab);
                 }
             }
         });
 
+        ui.add_space(4.0);
+
+        let line = ui.available_rect_before_wrap();
+
+        ui.painter().hline(
+            line.x_range(),
+            line.top(),
+            egui::Stroke::new(1.0_f32, GAUGE_TRACK.gamma_multiply(0.7)),
+        );
+
         ui.add_space(8.0);
+    }
+
+    fn tab_button(ui: &mut egui::Ui, title: &str, picked: bool) -> bool {
+        let colour = match picked {
+            true => ACCENT,
+            false => MUTED,
+        };
+
+        let response = ui.add(
+            egui::Button::new(egui::RichText::new(title).color(colour))
+                .fill(match picked {
+                    true => ROW_BACKGROUND,
+                    false => egui::Color32::TRANSPARENT,
+                })
+                .corner_radius(CONTROL_RADIUS),
+        );
+
+        if picked {
+            let rect = response.rect;
+
+            ui.painter().hline(
+                (rect.left() + 6.0)..=(rect.right() - 6.0),
+                rect.bottom() - 1.0,
+                egui::Stroke::new(2.0_f32, ACCENT),
+            );
+        }
+
+        response.clicked()
     }
 
     fn binding_rows(
@@ -1495,7 +1780,7 @@ mod win {
 
         if let Some(text) = similar_items(&check.item.info.name) {
             if ui
-                .button(egui::RichText::new("similar").small())
+                .button(egui::RichText::new("Find in stash").small())
                 .on_hover_text("search your own stash for this item by name")
                 .clicked()
             {
@@ -1505,7 +1790,7 @@ mod win {
 
         if let Some(text) = check.item.note.as_deref().and_then(same_priced_from_note) {
             if ui
-                .button(egui::RichText::new("same price").small())
+                .button(egui::RichText::new("Same price").small())
                 .on_hover_text("search your own stash for everything priced the same")
                 .clicked()
             {
@@ -1609,7 +1894,7 @@ mod win {
             Tab::Maps => {
                 ui.label(egui::RichText::new(widgets.map_headline()).color(
                     match widgets.map_verdict() {
-                        Verdict::Deadly => egui::Color32::from_rgb(226, 96, 96),
+                        Verdict::Deadly => DANGER,
                         Verdict::Warning => WARNING,
                         _ => MUTED,
                     },
@@ -1646,7 +1931,7 @@ mod win {
 
                 for (index, concern) in widgets.concerns.iter().enumerate() {
                     let colour = match concern.verdict {
-                        Verdict::Deadly => egui::Color32::from_rgb(226, 96, 96),
+                        Verdict::Deadly => DANGER,
                         Verdict::Warning => WARNING,
                         Verdict::Good => ONLINE_DOT,
                         _ => MUTED,
@@ -1912,8 +2197,16 @@ mod win {
             ui.label(egui::RichText::new(note).small().color(WARNING));
         }
 
-        ui.add_space(8.0);
-        rate_limit_line(ui, &status.limits);
+        ui.add_space(10.0);
+
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [LABEL_COLUMN, 18.0],
+                egui::Label::new(egui::RichText::new("Trade api").small().color(MUTED)),
+            );
+
+            rate_limit_line(ui, &status.limits);
+        });
 
         events
     }
@@ -1971,7 +2264,7 @@ mod win {
 
     fn switcher_label(ui: &mut egui::Ui, text: &str) {
         ui.add_sized(
-            [82.0, 18.0],
+            [LABEL_COLUMN, 18.0],
             egui::Label::new(egui::RichText::new(text).small().color(MUTED)),
         );
     }
@@ -2015,7 +2308,15 @@ mod win {
                 events.push(StatusEvent::HideToTray);
             }
 
-            if ui.button("Quit").clicked() {
+            let quit = egui::Button::new(egui::RichText::new("Quit").color(DANGER))
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::new(1.0_f32, DANGER.gamma_multiply(0.5)));
+
+            if ui
+                .add(quit)
+                .on_hover_text("closes the overlay. The tray icon will not bring it back.")
+                .clicked()
+            {
                 events.push(StatusEvent::Quit);
             }
         });
@@ -2026,7 +2327,7 @@ mod win {
     fn status_row(ui: &mut egui::Ui, label: &str, value: &str) {
         ui.horizontal(|ui| {
             ui.add_sized(
-                [82.0, 18.0],
+                [LABEL_COLUMN, 18.0],
                 egui::Label::new(egui::RichText::new(label).small().color(MUTED)),
             );
 
@@ -2043,11 +2344,12 @@ mod win {
         };
 
         egui::Frame::new()
-            .fill(ROW_BACKGROUND)
-            .inner_margin(egui::Margin::symmetric(8, 3))
+            .fill(colour.gamma_multiply(0.18))
+            .stroke(egui::Stroke::new(1.0_f32, colour.gamma_multiply(0.5)))
+            .inner_margin(egui::Margin::symmetric(9, 3))
             .corner_radius(9)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new(text).small().color(colour));
+                ui.label(egui::RichText::new(text).small().strong().color(colour));
             });
     }
 }

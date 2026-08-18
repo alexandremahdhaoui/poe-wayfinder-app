@@ -1,0 +1,14 @@
+# Opens the panel with the chord, walks down two rows and stops there, so the
+# focused row can be photographed. It never presses CIRCLE, because the panel
+# has to still be on screen when the capture happens.
+
+wait 40
+
+press L1+R1+Triangle
+
+wait 60
+
+press DOWN
+press DOWN
+
+wait 400

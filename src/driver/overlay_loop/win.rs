@@ -1170,6 +1170,7 @@ where
         }
 
         self.last_press = Some(Instant::now());
+        self.pad_held = self.gamepad.held();
 
         self.log.info(
             "controller chord held",

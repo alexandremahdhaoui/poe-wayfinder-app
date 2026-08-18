@@ -562,7 +562,7 @@ const CAPABILITIES: &[Capability] = &[
         component: "pseudo/item-property.ts",
         name: "how good the item's base roll is, shown but never searched",
         domain: &["fn base_percentile_filter"],
-        ui: &["fn base_percentile_note"],
+        ui: &["base_percentile_note(ui, model)"],
     },
     Capability {
         component: "TradeItem.vue",
