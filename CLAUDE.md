@@ -30,6 +30,33 @@ So for the 13 widget backlog the number to watch is not `parity`. It is:
 Add the capability to `uiparity` first, watch it fail, then port. That is the
 same discipline as widening the parity scan before porting a `.ts` module.
 
+## The panel has a design system, so do not hand pick colours
+
+`overlay_ui_driver` holds one token block and one `style()` pass. Everything on
+screen comes from those. Adding a colour to a call site is how the old panel
+ended up with the same cold blue meaning four unrelated things, and with
+`226, 96, 96` written out at three separate call sites.
+
+Each colour has one job:
+
+| Token | Means |
+|---|---|
+| `ACCENT` gold | identity, headings, and where the pad is |
+| `GAUGE_FILL` teal | a value the search is using |
+| `EDITED` ember | you changed it and have not searched yet |
+| `WARNING` / `DANGER` | needs care, and wrong |
+| `ONLINE_DOT` / `OFFLINE_DOT` | whether a seller is there |
+
+The focused row is the signature: a left rail in the **rarity colour of the item
+being priced**, over a raised band. Every row reserves the rail gutter whether
+focused or not, so the panel does not shift as the selection moves.
+
+**One rule fades a disabled row, not two.** `row_shell` sets the opacity for the
+whole row. The old code faded the label with a hard coded grey and the tier with
+a gamma multiply, and left the value boxes and the gauge at full strength, so a
+disabled row still looked live. A focused row fades less than an unfocused one,
+because you move to a row precisely to switch it on.
+
 ## egui and eframe traps, all paid for
 
 **`ctx.data_mut()` holds the context lock.** Calling `ctx.load_texture()` inside
