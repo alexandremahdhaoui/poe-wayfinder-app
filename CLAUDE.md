@@ -211,5 +211,6 @@ verify offsets nobody here can test.
 press, and writes the raw reports. The file goes in
 `poe-wayfinder-core/tests/fixtures/` and `pad_capture_replay.rs` replays it
 forever after. It passes with no fixtures, which is the same trap the empty gem
-table was: green while measuring nothing. Until a `.hex` file lands there, the
-parser has only ever been tested against reports this repo made up.
+table was: green while measuring nothing. `dualsense-usb.hex` landed on
+2026-08-17 with 16 real presses, so that path is now measured. Bluetooth and the
+DualShock 4 have no capture, so they are still reports this repo made up.
